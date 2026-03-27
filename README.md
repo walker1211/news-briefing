@@ -116,7 +116,7 @@ go test ./...
 
 ### License
 
-Licensed under Apache License 2.0. See [LICENSE](./LICENSE).
+Licensed under the MIT License. See [LICENSE](./LICENSE).
 
 ## 中文
 
@@ -354,4 +354,4 @@ go test ./...
 
 ## License
 
-本项目使用 Apache License 2.0，详见 [LICENSE](./LICENSE)。
+本项目使用 MIT License，详见 [LICENSE](./LICENSE)。
