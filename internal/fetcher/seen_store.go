@@ -30,7 +30,7 @@ func (s SeenStore) Load() ([]seenEntry, error) {
 		}
 		if _, legacyErr := os.Stat(s.LegacyPath); legacyErr == nil {
 			path = s.LegacyPath
-		} else if legacyErr != nil && !os.IsNotExist(legacyErr) {
+		} else if !os.IsNotExist(legacyErr) {
 			return nil, fmt.Errorf("stat legacy seen store: %w", legacyErr)
 		} else {
 			return nil, nil

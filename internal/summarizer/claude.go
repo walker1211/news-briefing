@@ -245,13 +245,6 @@ func (r *Runner) summarizeExtraFlags() []string {
 	return flags
 }
 
-func DeepDive(topic string, articles []model.Article) (string, error) {
-	defaultRunnerMu.RLock()
-	runner := defaultRunner
-	defaultRunnerMu.RUnlock()
-	return runner.DeepDive(topic, articles)
-}
-
 func shouldSanitizeCLIOutput() bool {
 	defaultRunnerMu.RLock()
 	runner := defaultRunner
@@ -278,13 +271,6 @@ const translatePrompt = `将以下新闻列表翻译成中文。要求：
 1. 按分类分组输出，格式为 "== 分类名 ==" 作为标题
 2. 每条新闻保持编号，只翻译标题和摘要，保留来源名称、时间和链接不变
 3. 直接输出翻译结果，不要加任何额外说明`
-
-func Translate(articles []model.Article) (string, error) {
-	defaultRunnerMu.RLock()
-	runner := defaultRunner
-	defaultRunnerMu.RUnlock()
-	return runner.Translate(articles)
-}
 
 func (r *Runner) Translate(articles []model.Article) (string, error) {
 	if len(articles) == 0 {

@@ -11,6 +11,7 @@ briefings, follow-up directions, and topic deep-dive packs.
 ## English
 
 A configurable news briefing tool for personal or self-hosted workflows.
+It runs LLMs through installed AI CLI tools, so you can use logged-in CLI sessions instead of managing API keys inside this project.
 
 ### What it does
 
@@ -34,10 +35,10 @@ A configurable news briefing tool for personal or self-hosted workflows.
 cp configs/config.example.yaml configs/config.yaml
 ```
 
-2. Put your email password in `.env`:
+2. Put your email smtp auth code in `.env`:
 
 ```dotenv
-EMAIL_PASSWORD=your_163_mail_app_password
+EMAIL_SMTP_AUTH_CODE=mail_smtp_password
 ```
 
 3. Configure your AI CLI in `configs/config.yaml`.
@@ -90,7 +91,7 @@ Plain `fetch` keeps printing the original article list and does not use the outp
 4. Build and run:
 
 ```bash
-go build -o ./news-briefing ./cmds/news-briefing
+./build.sh
 ./news-briefing help
 ./news-briefing run --no-email
 ```
@@ -110,7 +111,7 @@ go build -o ./news-briefing ./cmds/news-briefing
 
 ```bash
 go test ./...
-go build -o ./news-briefing ./cmds/news-briefing
+./build.sh
 ```
 
 ### License
@@ -130,7 +131,7 @@ Licensed under Apache License 2.0. See [LICENSE](./LICENSE).
 目前只需要放邮箱授权码：
 
 ```dotenv
-EMAIL_PASSWORD=你的163授权码
+EMAIL_SMTP_AUTH_CODE=邮箱授权码
 ```
 
 原则：
@@ -164,7 +165,7 @@ cp configs/config.example.yaml configs/config.yaml
 
 ### 3. AI CLI
 
-确保 `configs/config.yaml` 中配置的 AI CLI 可用并已登录。默认模板使用：
+确保 `configs/config.yaml` 中配置的 AI CLI 可用并已登录。项目通过本机已登录的 AI CLI 调用大模型，不依赖在本项目里额外配置 API Key。默认模板使用：
 
 ```yaml
 ai:
@@ -225,7 +226,7 @@ output:
 先构建：
 
 ```bash
-go build -o ./news-briefing ./cmds/news-briefing
+./build.sh
 ```
 
 常用命令：
@@ -348,7 +349,7 @@ launchctl unload ~/Library/LaunchAgents/com.news-briefing.briefing.plist
 
 ```bash
 go test ./...
-go build -o ./news-briefing ./cmds/news-briefing
+./build.sh
 ```
 
 ## License

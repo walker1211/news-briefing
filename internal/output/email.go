@@ -13,9 +13,9 @@ import (
 )
 
 func SendEmail(briefing *model.Briefing, cfg *config.Config, failed []fetcher.FailedSource) error {
-	password := os.Getenv("EMAIL_PASSWORD")
+	password := os.Getenv("EMAIL_SMTP_AUTH_CODE")
 	if password == "" {
-		return fmt.Errorf("EMAIL_PASSWORD not set in .env")
+		return fmt.Errorf("EMAIL_SMTP_AUTH_CODE not set in .env")
 	}
 
 	subject := briefingEmailSubject(briefing.Date, briefing.Period)
