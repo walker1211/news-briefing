@@ -1,0 +1,45 @@
+sources:
+  - name: Example AI Feed
+    url: https://example.com/ai.rss
+    type: rss
+    category: AI/科技
+  - name: Example World Feed
+    url: https://example.com/world.rss
+    type: rss
+    category: 国际政治
+
+keywords:
+  - AI
+  - OpenAI
+  - China
+  - OpenClaw
+
+email:
+  smtp_host: smtp.example.com
+  smtp_port: 465
+  from: from@example.com
+  to: to@example.com
+
+schedule:
+  - "0 6 * * *"
+  - "0 18 * * *"
+
+# Optional. Defaults to the machine's local timezone when omitted.
+# schedule_timezone: Asia/Shanghai
+
+output:
+  dir: output
+  mode: translated_only
+
+proxy:
+  http: http://127.0.0.1:7897
+  socks5: socks5://127.0.0.1:7897
+
+ai:
+  command: ccs
+  args:
+    - codex
+  extra_flags:
+    - --bare
+    - --disable-slash-commands
+  append_system_prompt: true
