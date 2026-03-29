@@ -20,7 +20,29 @@ func ArticleListView(articles []model.Article) string {
 	return sb.String()
 }
 
-func GroupedArticleListView(articles []model.Article) string {
+func OrderedCategories(articles []model.Article, categoryOrder []string) []string {
+	seen := make(map[string]struct{})
+	ordered := make([]string, 0, len(categoryOrder))
+	for _, cat := range categoryOrder {
+		cat = strings.TrimSpace(cat)
+		if _, ok := seen[cat]; ok {
+			continue
+		}
+		seen[cat] = struct{}{}
+		ordered = append(ordered, cat)
+	}
+	for _, article := range articles {
+		cat := strings.TrimSpace(article.Category)
+		if _, ok := seen[cat]; ok {
+			continue
+		}
+		seen[cat] = struct{}{}
+		ordered = append(ordered, cat)
+	}
+	return ordered
+}
+
+func GroupedArticleListView(articles []model.Article, categoryOrder []string) string {
 	grouped := make(map[string][]model.Article)
 	for _, a := range articles {
 		grouped[a.Category] = append(grouped[a.Category], a)
@@ -28,7 +50,7 @@ func GroupedArticleListView(articles []model.Article) string {
 
 	var sb strings.Builder
 	n := 1
-	for _, cat := range []string{"AI/科技", "国际政治"} {
+	for _, cat := range OrderedCategories(articles, categoryOrder) {
 		items := grouped[cat]
 		if len(items) == 0 {
 			continue

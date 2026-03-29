@@ -225,6 +225,20 @@ func TestParseArgsDeep(t *testing.T) {
 			t.Fatalf("deep topic = %q, want %q", deep.topic, "OpenAI API")
 		}
 	})
+
+	t.Run("supports ignore-seen", func(t *testing.T) {
+		cmd, err := parseArgs([]string{"deep", "claude", "--ignore-seen"})
+		if err != nil {
+			t.Fatalf("parseArgs() error = %v", err)
+		}
+		deep, ok := cmd.(deepCommand)
+		if !ok {
+			t.Fatalf("command type = %T", cmd)
+		}
+		if deep.topic != "claude" || !deep.ignoreSeen {
+			t.Fatalf("deep command = %#v", deep)
+		}
+	})
 }
 
 func TestParseArgsRegenRejects(t *testing.T) {

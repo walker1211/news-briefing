@@ -64,11 +64,9 @@ func FetchRSS(source config.Source, keywords []string, since time.Time) ([]model
 			continue
 		}
 
-		if source.Category != "国际政治" {
-			text := strings.ToLower(item.Title + " " + item.Description)
-			if !matchKeywords(text, keywords) {
-				continue
-			}
+		text := strings.ToLower(item.Title + " " + item.Description)
+		if !matchKeywords(text, keywords) {
+			continue
 		}
 
 		summary := item.Description

@@ -205,3 +205,75 @@ func TestMatchKeywordsMatchesHackerNewsOpenClawTitle(t *testing.T) {
 		t.Fatalf("len(articles) = %d, want 1", len(articles))
 	}
 }
+
+func TestFetchRSSFiltersInternationalCategoryWithoutKeywordMatch(t *testing.T) {
+	keywords := loadKeywordsForTest(t)
+	source := config.Source{
+		Name:     "Example RSS",
+		URL:      "https://example.com/feed.xml",
+		Type:     "rss",
+		Category: "国际政治",
+	}
+	since := time.Date(2026, 3, 22, 0, 0, 0, 0, time.UTC)
+	feed := `<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0">
+  <channel>
+    <title>Example RSS</title>
+    <item>
+      <title>Policy update with no configured keywords</title>
+      <link>https://example.com/post</link>
+      <description>Routine diplomacy note without tracked entities</description>
+      <pubDate>Sun, 23 Mar 2026 10:00:00 GMT</pubDate>
+    </item>
+  </channel>
+</rss>`
+
+	withSharedClient(t, &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Status:     "200 OK",
+			Body:       io.NopCloser(strings.NewReader(feed)),
+			Header:     make(http.Header),
+			Request:    req,
+		}, nil
+	})})
+
+	articles, err := FetchRSS(source, keywords, since)
+	if err != nil {
+		t.Fatalf("FetchRSS() error = %v", err)
+	}
+	if len(articles) != 0 {
+		t.Fatalf("len(articles) = %d, want 0", len(articles))
+	}
+}
+
+func TestFetchRedditFiltersInternationalCategoryWithoutKeywordMatch(t *testing.T) {
+	keywords := loadKeywordsForTest(t)
+	source := config.Source{
+		Name:     "Example Reddit",
+		URL:      "https://example.com/reddit.json",
+		Type:     "reddit",
+		Category: "国际政治",
+	}
+	since := time.Date(2026, 3, 22, 0, 0, 0, 0, time.UTC)
+	created := time.Date(2026, 3, 23, 10, 0, 0, 0, time.UTC).Unix()
+	listing := `{"data":{"children":[{"data":{"title":"Policy update with no configured keywords","url":"https://example.com/post","permalink":"/r/test/comments/1","score":42,"created_utc":` + strconv.FormatInt(created, 10) + `,"selftext":"Routine diplomacy note without tracked entities"}}]}}`
+
+	withSharedClient(t, &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Status:     "200 OK",
+			Body:       io.NopCloser(strings.NewReader(listing)),
+			Header:     make(http.Header),
+			Request:    req,
+		}, nil
+	})})
+
+	articles, err := FetchReddit(source, keywords, since)
+	if err != nil {
+		t.Fatalf("FetchReddit() error = %v", err)
+	}
+	if len(articles) != 0 {
+		t.Fatalf("len(articles) = %d, want 0", len(articles))
+	}
+}

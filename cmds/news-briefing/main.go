@@ -9,6 +9,7 @@ import (
 	"github.com/walker1211/news-briefing/internal/config"
 	"github.com/walker1211/news-briefing/internal/fetcher"
 	"github.com/walker1211/news-briefing/internal/model"
+	"github.com/walker1211/news-briefing/internal/output"
 )
 
 // isTTY 检测 stdout 是否为终端（非终端时不输出颜色码）
@@ -118,6 +119,9 @@ Flags (for regen):
 Flags (for fetch):
   --zh                   翻译成中文（调用已配置 AI CLI）
 
+Flags (for deep):
+  --ignore-seen          跳过已读状态文件（默认 <output.dir>/state/seen.json），仅做本批次内去重
+
 Examples:
   news-briefing run
   news-briefing run --raw
@@ -125,7 +129,8 @@ Examples:
   news-briefing regen --from "2026-03-18 08:00" --to "2026-03-18 14:00"
   news-briefing regen --from "2026-03-18 08:00" --to "2026-03-18 14:00" --period 1400 --ignore-seen --send-email
   news-briefing fetch
-  news-briefing deep "OpenAI"`
+  news-briefing deep "OpenAI"
+  news-briefing deep "Claude" --ignore-seen`
 }
 
 func currentPeriod() string {
@@ -175,11 +180,10 @@ func formatArticlePublishedAt(published time.Time, loc *time.Location) string {
 	return published.In(loc).Format("2006-01-02 15:04")
 }
 
-func printArticles(articles []model.Article, loc *time.Location) {
+func printArticles(articles []model.Article, categoryOrder []string, loc *time.Location) {
 	grouped := groupByCategory(articles)
-	categoryOrder := []string{"AI/科技", "国际政治"}
 	n := 1
-	for _, cat := range categoryOrder {
+	for _, cat := range output.OrderedCategories(articles, categoryOrder) {
 		items := grouped[cat]
 		if len(items) == 0 {
 			continue

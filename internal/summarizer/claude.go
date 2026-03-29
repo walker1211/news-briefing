@@ -14,13 +14,7 @@ import (
 
 const briefingPrompt = `你是一个国际新闻编辑。
 
-请将以下英文新闻条目整理成中文简报，格式要求：
-
-## AI/科技
-（此分类下的新闻）
-
-## 国际政治
-（此分类下的新闻）
+请将以下英文新闻条目整理成中文简报。按下面新闻条目里出现的分类顺序输出，每个分类使用 ## 分类名 作为标题。
 
 每条新闻格式：
 ### 标题（中文翻译）
@@ -47,7 +41,6 @@ const briefingPrompt = `你是一个国际新闻编辑。
 
 必须恰好输出 3 个方向，不要输出 2 个或 4 个。
 如果高质量独立方向不足，允许合并相近新闻形成更上位但仍然具体的方向；不要为了凑数输出重复方向。
-默认至少 2/3 方向来自 AI/科技；只有确实凑不满 3 个合格 AI/科技方向时，才允许最多 1 个国际政治方向作为补位。
 如果两个候选方向需要使用同一个 deep 关键词，默认应优先考虑合并，而不是拆成两个方向。
 深挖命令里的关键词默认优先使用英文实体或英文新闻短语，而不是中文概括题目。
 长度控制在 2-6 个词，优先包含公司名、产品名、人物名、法案/政策名、机构名等明确锚点。
@@ -219,19 +212,19 @@ func sanitizeCLIOutput(raw string) string {
 	return strings.TrimSpace(strings.Join(lines[idx:], "\n"))
 }
 
-func Summarize(articles []model.Article) (string, error) {
+func Summarize(articles []model.Article, categoryOrder []string) (string, error) {
 	defaultRunnerMu.RLock()
 	runner := defaultRunner
 	defaultRunnerMu.RUnlock()
-	return runner.Summarize(articles)
+	return runner.Summarize(articles, categoryOrder)
 }
 
-func (r *Runner) Summarize(articles []model.Article) (string, error) {
+func (r *Runner) Summarize(articles []model.Article, categoryOrder []string) (string, error) {
 	if len(articles) == 0 {
 		return "今日暂无符合筛选条件的新闻。", nil
 	}
 
-	input := output.ArticleListView(articles)
+	input := output.GroupedArticleListView(articles, categoryOrder)
 	prompt := briefingPrompt + "\n\n---\n以下是今日新闻条目：\n\n" + input
 
 	return r.callClaude(prompt, r.summarizeExtraFlags()...)
@@ -272,11 +265,11 @@ const translatePrompt = `将以下新闻列表翻译成中文。要求：
 2. 每条新闻保持编号，只翻译标题和摘要，保留来源名称、时间和链接不变
 3. 直接输出翻译结果，不要加任何额外说明`
 
-func (r *Runner) Translate(articles []model.Article) (string, error) {
+func (r *Runner) Translate(articles []model.Article, categoryOrder []string) (string, error) {
 	if len(articles) == 0 {
 		return "暂无新闻。", nil
 	}
-	input := output.GroupedArticleListView(articles)
+	input := output.GroupedArticleListView(articles, categoryOrder)
 	prompt := translatePrompt + "\n\n" + input
 	return r.callClaude(prompt, r.translateExtraFlags()...)
 }

@@ -5,6 +5,7 @@ import (
 	"os"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/walker1211/news-briefing/internal/config"
 	"github.com/walker1211/news-briefing/internal/fetcher"
@@ -21,8 +22,8 @@ type app struct {
 	waitForever   func()
 	fetchAll      func(*config.Config, bool) ([]model.Article, []fetcher.FailedSource, error)
 	fetchWindow   func(*config.Config, time.Time, time.Time, bool, bool) ([]model.Article, []fetcher.FailedSource, error)
-	summarize     func([]model.Article) (string, error)
-	translate     func([]model.Article) (string, error)
+	summarize     func([]model.Article, []string) (string, error)
+	translate     func([]model.Article, []string) (string, error)
 	deepDive      func(string, []model.Article) (string, error)
 	composeBody   func(string, model.OutputMode, model.OutputContent) (string, error)
 	printText     func(string)
@@ -56,13 +57,27 @@ func newApp(cfg *config.Config) *app {
 			if loc == nil {
 				loc = time.Local
 			}
-			printArticles(articles, loc)
+			printArticles(articles, categoryOrderFromSources(cfg.Sources), loc)
 		},
 		printCLI:      output.PrintCLI,
 		writeMarkdown: output.WriteMarkdown,
 		sendEmail:     output.SendEmail,
 		writeDeepDive: output.WriteDeepDive,
 	}
+}
+
+func categoryOrderFromSources(sources []config.Source) []string {
+	seen := make(map[string]struct{}, len(sources))
+	ordered := make([]string, 0, len(sources))
+	for _, source := range sources {
+		category := strings.TrimSpace(source.Category)
+		if _, ok := seen[category]; ok {
+			continue
+		}
+		seen[category] = struct{}{}
+		ordered = append(ordered, category)
+	}
+	return ordered
 }
 
 func execute(app *app, cmd command) error {
@@ -87,7 +102,7 @@ func execute(app *app, cmd command) error {
 		}
 		return nil
 	case deepCommand:
-		return app.runDeepDive(c.topic)
+		return app.runDeepDive(c.topic, c.ignoreSeen)
 	case helpCommand:
 		printUsage()
 		return nil
@@ -124,12 +139,13 @@ func (app *app) runFetch(cmd fetchCommand) error {
 		return nil
 	}
 
+	categoryOrder := categoryOrderFromSources(app.cfg.Sources)
 	content := model.OutputContent{
-		Original: output.GroupedArticleListView(articles),
+		Original: output.GroupedArticleListView(articles, categoryOrder),
 	}
 	if outputNeedsTranslatedContent(app.cfg.Output.Mode) {
 		fmt.Println("Translating with AI CLI...")
-		translated, err := app.translate(articles)
+		translated, err := app.translate(articles, categoryOrder)
 		if err != nil {
 			return err
 		}
@@ -210,14 +226,15 @@ func (app *app) renderBriefing(commandPath string, date string, period string, a
 		fmt.Println()
 	}
 
+	categoryOrder := categoryOrderFromSources(app.cfg.Sources)
 	content := model.OutputContent{
-		Original: output.ArticleListView(articles),
+		Original: output.GroupedArticleListView(articles, categoryOrder),
 	}
 	summary := ""
 	if outputNeedsTranslatedContent(app.cfg.Output.Mode) {
 		fmt.Println("Generating summary with AI CLI...")
 		var err error
-		summary, err = app.summarize(articles)
+		summary, err = app.summarize(articles, categoryOrder)
 		if err != nil {
 			return err
 		}
@@ -257,10 +274,21 @@ func (app *app) renderBriefing(commandPath string, date string, period string, a
 	return nil
 }
 
-func (app *app) runDeepDive(topic string) error {
+func (app *app) runDeepDive(topic string, ignoreSeen bool) error {
 	fmt.Printf("Deep diving into: %s\n", topic)
 
-	articles, failed, err := app.fetchAll(app.cfg, true)
+	var (
+		articles []model.Article
+		failed   []fetcher.FailedSource
+		err      error
+	)
+	if ignoreSeen {
+		to := app.currentTime()
+		from := to.Add(-12 * time.Hour)
+		articles, failed, err = app.fetchWindow(app.cfg, from, to, true, true)
+	} else {
+		articles, failed, err = app.fetchAll(app.cfg, true)
+	}
 	if err != nil {
 		return err
 	}
@@ -312,11 +340,14 @@ func (app *app) runDeepDive(topic string) error {
 }
 
 func selectDeepDiveArticles(topic string, articles []model.Article) ([]model.Article, error) {
-	topicLower := strings.ToLower(strings.TrimSpace(topic))
+	normalizedTopic := normalizeDeepDiveText(topic)
+	if normalizedTopic == "" || allDeepDiveTopicTermsAreWeak(normalizedTopic) {
+		return nil, fmt.Errorf("no sufficiently relevant articles found for topic %q; try a more specific keyword", topic)
+	}
 	var exact []model.Article
 	for _, article := range articles {
-		text := strings.ToLower(article.Title + " " + article.Summary)
-		if strings.Contains(text, topicLower) {
+		text := normalizeDeepDiveText(article.Title + " " + article.Summary)
+		if strings.Contains(text, normalizedTopic) {
 			exact = append(exact, article)
 		}
 	}
@@ -328,7 +359,7 @@ func selectDeepDiveArticles(topic string, articles []model.Article) ([]model.Art
 	bestScore := 0
 	var scored []model.Article
 	for _, article := range articles {
-		text := strings.ToLower(article.Title + " " + article.Summary)
+		text := normalizeDeepDiveText(article.Title + " " + article.Summary)
 		score := 0
 		for _, keyword := range keywords {
 			if strings.Contains(text, keyword) {
@@ -351,22 +382,76 @@ func selectDeepDiveArticles(topic string, articles []model.Article) ([]model.Art
 }
 
 func deepDiveKeywords(topic string) []string {
-	fields := strings.Fields(strings.ToLower(topic))
+	fields := strings.Fields(normalizeDeepDiveText(topic))
 	keywords := make([]string, 0, len(fields)*3)
 	seen := make(map[string]struct{})
 	for _, field := range fields {
-		if len([]rune(field)) < 2 {
+		if shouldSkipDeepDiveKeyword(field) {
 			continue
 		}
 		for _, keyword := range deepDiveKeywordAliases(field) {
-			if _, ok := seen[keyword]; ok {
+			normalized := normalizeDeepDiveText(keyword)
+			if normalized == "" {
 				continue
 			}
-			seen[keyword] = struct{}{}
-			keywords = append(keywords, keyword)
+			if _, ok := seen[normalized]; ok {
+				continue
+			}
+			seen[normalized] = struct{}{}
+			keywords = append(keywords, normalized)
 		}
 	}
 	return keywords
+}
+
+func normalizeDeepDiveText(value string) string {
+	var b strings.Builder
+	b.Grow(len(value))
+	lastSpace := true
+	for _, r := range strings.ToLower(strings.TrimSpace(value)) {
+		if unicode.IsLetter(r) || unicode.IsDigit(r) {
+			b.WriteRune(r)
+			lastSpace = false
+			continue
+		}
+		if !lastSpace {
+			b.WriteByte(' ')
+			lastSpace = true
+		}
+	}
+	return strings.TrimSpace(b.String())
+}
+
+func allDeepDiveTopicTermsAreWeak(topic string) bool {
+	for _, field := range strings.Fields(topic) {
+		if !shouldSkipDeepDiveKeyword(field) {
+			return false
+		}
+	}
+	return true
+}
+
+func shouldSkipDeepDiveKeyword(field string) bool {
+	if len([]rune(field)) < 2 {
+		return true
+	}
+	_, ok := deepDiveEnglishStopwords[field]
+	return ok
+}
+
+var deepDiveEnglishStopwords = map[string]struct{}{
+	"a":    {},
+	"an":   {},
+	"and":  {},
+	"for":  {},
+	"from": {},
+	"in":   {},
+	"is":   {},
+	"of":   {},
+	"on":   {},
+	"the":  {},
+	"to":   {},
+	"with": {},
 }
 
 func deepDiveKeywordAliases(field string) []string {
@@ -410,4 +495,3 @@ func (app *app) currentTime() time.Time {
 	}
 	return time.Now()
 }
-

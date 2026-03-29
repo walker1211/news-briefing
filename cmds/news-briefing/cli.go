@@ -23,7 +23,10 @@ type regenCommand struct {
 
 type fetchCommand struct{ zh bool }
 type serveCommand struct{}
-type deepCommand struct{ topic string }
+type deepCommand struct {
+	topic      string
+	ignoreSeen bool
+}
 type helpCommand struct{}
 
 func (runCommand) isCommand()   {}
@@ -80,7 +83,7 @@ func parseArgs(args []string) (command, error) {
 		if topic == "" {
 			return nil, fmt.Errorf("missing deep topic")
 		}
-		return deepCommand{topic: topic}, nil
+		return deepCommand{topic: topic, ignoreSeen: hasFlagIn(args[1:], "--ignore-seen")}, nil
 	case "help":
 		return helpCommand{}, nil
 	default:
@@ -182,7 +185,7 @@ func commandValidationRules(cmd string) (map[string]struct{}, map[string]struct{
 	case "serve", "help":
 		return nil, nil, false
 	case "deep":
-		return nil, nil, true
+		return map[string]struct{}{"--ignore-seen": {}}, nil, true
 	case "regen":
 		return map[string]struct{}{"--ignore-seen": {}, "--send-email": {}, "--raw": {}}, map[string]struct{}{"--from": {}, "--to": {}, "--period": {}}, false
 	default:

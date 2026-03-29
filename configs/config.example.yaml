@@ -3,6 +3,14 @@ sources:
     url: https://example.com/ai.rss
     type: rss
     category: AI/科技
+  - name: Example Open Source Feed
+    url: https://example.com/open-source.rss
+    type: rss
+    category: 开源工具
+  - name: Example Startup Feed
+    url: https://example.com/startups.rss
+    type: rss
+    category: 商业/公司
   - name: Example World Feed
     url: https://example.com/world.rss
     type: rss

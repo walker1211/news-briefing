@@ -2,10 +2,10 @@
 
 [中文](#中文) | [English](#english)
 
-自动抓取 AI/科技 与 国际政治新闻，通过已配置的 AI CLI 生成中文简报、今日最值得追的 3 个方向与话题深挖包，支持终端输出、Markdown
+自动抓取你配置的多个新闻分类，通过已配置的 AI CLI 生成中文简报、今日最值得追的 3 个方向与话题深挖包，支持终端输出、Markdown
 落盘和邮件发送。
 
-Fetch AI/tech and world-politics news, then use a configurable AI CLI (such as `ccs` or `claude`) to generate Chinese
+Fetch news from multiple configured categories, then use a configurable AI CLI (such as `ccs` or `claude`) to generate Chinese
 briefings, follow-up directions, and topic deep-dive packs.
 
 ## English
@@ -42,6 +42,30 @@ EMAIL_SMTP_AUTH_CODE=mail_smtp_password
 ```
 
 3. Configure your AI CLI in `configs/config.yaml`.
+
+Example source categories:
+
+```yaml
+sources:
+  - name: Example AI Feed
+    url: https://example.com/ai.rss
+    type: rss
+    category: AI/科技
+  - name: Example Open Source Feed
+    url: https://example.com/open-source.rss
+    type: rss
+    category: 开源工具
+  - name: Example Startup Feed
+    url: https://example.com/startups.rss
+    type: rss
+    category: 商业/公司
+  - name: Example World Feed
+    url: https://example.com/world.rss
+    type: rss
+    category: 国际政治
+```
+
+Categories are arbitrary strings. Grouped output follows the first-appearance order of `sources`, and any runtime category not present in config is appended after configured categories.
 
 Default `ccs` example:
 
@@ -104,6 +128,7 @@ Plain `fetch` keeps printing the original article list and does not use the outp
 ./news-briefing regen --from "2026-03-18 08:00" --to "2026-03-18 14:00" --ignore-seen
 ./news-briefing fetch --zh
 ./news-briefing deep "OpenAI"
+./news-briefing deep "Claude" --ignore-seen
 ./news-briefing serve
 ```
 
@@ -160,6 +185,34 @@ cp configs/config.example.yaml configs/config.yaml
 - 输出目录 `output.dir`
 - 代理配置
 - AI CLI 命令与批处理 flags（默认 `ccs codex` + 非交互 flags）
+
+分类示例：
+
+```yaml
+sources:
+  - name: Example AI Feed
+    url: https://example.com/ai.rss
+    type: rss
+    category: AI/科技
+  - name: Example Open Source Feed
+    url: https://example.com/open-source.rss
+    type: rss
+    category: 开源工具
+  - name: Example Startup Feed
+    url: https://example.com/startups.rss
+    type: rss
+    category: 商业/公司
+  - name: Example World Feed
+    url: https://example.com/world.rss
+    type: rss
+    category: 国际政治
+```
+
+说明：
+
+- `category` 可以自定义，不限于内置枚举
+- 分组展示顺序按 `sources` 中首次出现顺序决定
+- 如果运行时出现了配置里没有的分类，会追加到已配置分类之后
 
 程序默认只读取 `configs/config.yaml`。
 
@@ -241,6 +294,7 @@ output:
 ./news-briefing fetch
 ./news-briefing fetch --zh
 ./news-briefing deep "OpenAI"
+./news-briefing deep "Claude" --ignore-seen
 ./news-briefing serve
 ```
 
@@ -293,7 +347,12 @@ output:
 
 ```bash
 ./news-briefing deep "OpenAI"
+./news-briefing deep "Claude" --ignore-seen
 ```
+
+规则：
+
+- `--ignore-seen` 会跳过持久化已读状态，仅做当前批次内去重
 
 ### `serve`
 

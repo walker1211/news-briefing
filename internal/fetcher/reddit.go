@@ -59,10 +59,8 @@ func FetchReddit(source config.Source, keywords []string, since time.Time) ([]mo
 			continue
 		}
 
-		if source.Category != "国际政治" {
-			if !matchKeywords(post.Title+" "+post.Selftext, keywords) {
-				continue
-			}
+		if !matchKeywords(post.Title+" "+post.Selftext, keywords) {
+			continue
 		}
 
 		link := post.URL
