@@ -1,26 +1,72 @@
 sources:
-  - name: Example AI Feed
-    url: https://example.com/ai.rss
+  - name: TechCrunch AI
+    url: https://techcrunch.com/category/artificial-intelligence/feed/
     type: rss
     category: AI/科技
-  - name: Example Open Source Feed
-    url: https://example.com/open-source.rss
+  - name: The Verge
+    url: https://www.theverge.com/rss/index.xml
     type: rss
-    category: 开源工具
-  - name: Example Startup Feed
-    url: https://example.com/startups.rss
+    category: AI/科技
+  - name: Ars Technica
+    url: https://feeds.arstechnica.com/arstechnica/technology-lab
     type: rss
-    category: 商业/公司
-  - name: Example World Feed
-    url: https://example.com/world.rss
+    category: AI/科技
+  - name: Hacker News
+    url: https://hacker-news.firebaseio.com/v0
+    type: hackernews
+    category: AI/科技
+  - name: NPR World
+    url: https://feeds.npr.org/1004/rss.xml
+    type: rss
+    category: 国际政治
+  - name: BBC News World
+    url: https://feeds.bbci.co.uk/news/world/rss.xml
+    type: rss
+    category: 国际政治
+  - name: Al Jazeera
+    url: https://www.aljazeera.com/xml/rss/all.xml
+    type: rss
+    category: 国际政治
+  - name: Reddit Singularity
+    url: https://www.reddit.com/r/singularity/.rss
+    type: rss
+    category: AI/科技
+  - name: Reddit WorldNews
+    url: https://www.reddit.com/r/worldnews/.rss
+    type: rss
+    category: 国际政治
+  - name: WSJ World
+    url: https://feeds.a.dj.com/rss/RSSWorldNews.xml
     type: rss
     category: 国际政治
 
 keywords:
   - AI
+  - Anthropic
   - OpenAI
-  - China
   - OpenClaw
+  - Google
+  - DeepSeek
+  - GPT
+  - Claude
+  - chip
+  - semiconductor
+  - China
+  - trade
+  - tariff
+  - geopolitics
+  - Trump
+  - military
+  - sanction
+  - Iran
+  - Israel
+  - war
+  - attack
+  - killed
+  - strike
+  - nuclear
+  - Russia
+  - Ukraine
 
 email:
   smtp_host: smtp.example.com
