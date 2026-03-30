@@ -32,6 +32,7 @@ type app struct {
 	printCLI      func(*model.Briefing)
 	writeMarkdown func(*model.Briefing, string) (string, error)
 	sendEmail     func(*model.Briefing, *config.Config, []fetcher.FailedSource) error
+	sendDeepEmail func(string, *model.Briefing, *config.Config, []fetcher.FailedSource) error
 	writeDeepDive func(string, string, string, string) (string, error)
 }
 
@@ -62,6 +63,7 @@ func newApp(cfg *config.Config) *app {
 		printCLI:      output.PrintCLI,
 		writeMarkdown: output.WriteMarkdown,
 		sendEmail:     output.SendEmail,
+		sendDeepEmail: output.SendDeepEmail,
 		writeDeepDive: output.WriteDeepDive,
 	}
 }
@@ -285,9 +287,10 @@ func (app *app) runDeepDive(cmd deepCommand) error {
 	fmt.Printf("Deep diving into: %s\n", cmd.topic)
 
 	var (
-		articles []model.Article
-		failed   []fetcher.FailedSource
-		err      error
+		articles     []model.Article
+		failed       []fetcher.FailedSource
+		err          error
+		briefingDate = app.currentTime().In(app.displayLocation()).Format("06.01.02")
 	)
 	if cmd.fromRaw != "" || cmd.toRaw != "" {
 		loc := time.Local
@@ -305,13 +308,14 @@ func (app *app) runDeepDive(cmd deepCommand) error {
 		if to.Before(from) {
 			return fmt.Errorf("--to must be after or equal to --from")
 		}
-		articles, failed, err = app.fetchWindow(app.cfg, from, to, true, cmd.ignoreSeen)
+		briefingDate = to.In(app.displayLocation()).Format("06.01.02")
+		articles, failed, err = app.fetchWindow(app.cfg, from, to, false, cmd.ignoreSeen)
 	} else if cmd.ignoreSeen {
 		to := app.currentTime()
 		from := to.Add(-12 * time.Hour)
-		articles, failed, err = app.fetchWindow(app.cfg, from, to, true, true)
+		articles, failed, err = app.fetchWindow(app.cfg, from, to, false, true)
 	} else {
-		articles, failed, err = app.fetchAll(app.cfg, true)
+		articles, failed, err = app.fetchAll(app.cfg, false)
 	}
 	if err != nil {
 		return err
@@ -351,11 +355,28 @@ func (app *app) runDeepDive(cmd deepCommand) error {
 		return err
 	}
 
-	path, err := app.writeDeepDive(cmd.topic, body, app.cfg.Output.Dir, app.currentTime().Format("06.01.02"))
+	briefing := &model.Briefing{
+		Date:       briefingDate,
+		Articles:   relevant,
+		RawContent: body,
+	}
+
+	path, err := app.writeDeepDive(cmd.topic, body, app.cfg.Output.Dir, briefing.Date)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error writing deep dive: %v\n", err)
 	} else {
 		fmt.Printf("Deep dive saved: %s\n", path)
+	}
+
+	if cmd.sendEmail {
+		if app.sendDeepEmail == nil {
+			app.sendDeepEmail = output.SendDeepEmail
+		}
+		if err := app.sendDeepEmail(cmd.topic, briefing, app.cfg, failed); err != nil {
+			fmt.Fprintf(os.Stderr, "Error sending email: %v\n", err)
+		} else {
+			fmt.Printf("Email sent to %s\n", app.cfg.Email.To)
+		}
 	}
 
 	fmt.Println()

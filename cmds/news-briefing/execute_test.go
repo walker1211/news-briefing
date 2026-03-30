@@ -399,6 +399,9 @@ func TestRunDeepDiveOriginalOnlySkipsDeepDiveAndKeepsOriginalBlock(t *testing.T)
 	app := &app{
 		cfg: &config.Config{Sources: []config.Source{{Category: "AI/科技"}}, Output: config.OutputCfg{Dir: t.TempDir(), Mode: model.OutputModeOriginalOnly}},
 		fetchAll: func(cfg *config.Config, markSeen bool) ([]model.Article, []fetcher.FailedSource, error) {
+			if markSeen {
+				t.Fatalf("fetchAll() markSeen=%v, want false", markSeen)
+			}
 			return relevant, nil, nil
 		},
 		printFailed: func([]fetcher.FailedSource) {},
@@ -551,6 +554,65 @@ func TestRunDeepDiveUsesOutputModeComposedBody(t *testing.T) {
 	}
 }
 
+func TestRunDeepDiveSendEmailUsesDeepSender(t *testing.T) {
+	relevant := sampleExecuteArticles()
+	failed := []fetcher.FailedSource{{Name: "HN", Err: errors.New("timeout")}}
+	var emailedTopic string
+	var emailedBriefing *model.Briefing
+	var emailedCfg *config.Config
+	var emailedFailed []fetcher.FailedSource
+
+	app := &app{
+		cfg: &config.Config{
+			Email:  config.Email{To: "test@example.com"},
+			Output: config.OutputCfg{Dir: t.TempDir(), Mode: model.OutputModeTranslatedOnly},
+		},
+		fetchAll: func(cfg *config.Config, markSeen bool) ([]model.Article, []fetcher.FailedSource, error) {
+			return relevant, failed, nil
+		},
+		printFailed: func([]fetcher.FailedSource) {},
+		deepDive: func(string, []model.Article, *time.Location) (string, error) {
+			return "DEEP TRANSLATED", nil
+		},
+		composeBody: func(path string, mode model.OutputMode, content model.OutputContent) (string, error) {
+			return "COMPOSED DEEP", nil
+		},
+		writeDeepDive: func(topic, content, outputDir, date string) (string, error) {
+			return "", nil
+		},
+		sendDeepEmail: func(topic string, briefing *model.Briefing, cfg *config.Config, gotFailed []fetcher.FailedSource) error {
+			emailedTopic = topic
+			emailedBriefing = briefing
+			emailedCfg = cfg
+			emailedFailed = gotFailed
+			return nil
+		},
+		printText: func(string) {},
+	}
+
+	if err := app.runDeepDive(deepCommand{topic: "OpenAI", sendEmail: true}); err != nil {
+		t.Fatalf("runDeepDive() error = %v", err)
+	}
+	if emailedTopic != "OpenAI" {
+		t.Fatalf("sendDeepEmail() topic = %q, want %q", emailedTopic, "OpenAI")
+	}
+	if emailedBriefing == nil {
+		t.Fatal("sendDeepEmail() briefing = nil")
+	}
+	if emailedBriefing.RawContent != "COMPOSED DEEP" {
+		t.Fatalf("sendDeepEmail() RawContent = %q, want %q", emailedBriefing.RawContent, "COMPOSED DEEP")
+	}
+	if emailedCfg != app.cfg {
+		t.Fatal("sendDeepEmail() cfg mismatch")
+	}
+	if len(emailedFailed) != 1 || emailedFailed[0].Name != "HN" {
+		t.Fatalf("sendDeepEmail() failed = %#v", emailedFailed)
+	}
+	if emailedBriefing.Date == "" {
+		t.Fatal("sendDeepEmail() briefing date is empty")
+	}
+}
+
 func TestRunDeepDiveRejectsInteractiveFollowUpOutput(t *testing.T) {
 	wrote := false
 	app := &app{
@@ -577,6 +639,65 @@ func TestRunDeepDiveRejectsInteractiveFollowUpOutput(t *testing.T) {
 	}
 	if wrote {
 		t.Fatalf("runDeepDive() unexpectedly wrote interactive output to file")
+	}
+}
+
+func TestRunDeepDiveSendEmailDoesNotUseRegularSender(t *testing.T) {
+	app := &app{
+		cfg: &config.Config{Output: config.OutputCfg{Dir: t.TempDir(), Mode: model.OutputModeOriginalOnly}},
+		fetchAll: func(cfg *config.Config, markSeen bool) ([]model.Article, []fetcher.FailedSource, error) {
+			return []model.Article{{Title: "Claude ships feature", Summary: "Claude update"}}, nil, nil
+		},
+		printFailed: func([]fetcher.FailedSource) {},
+		composeBody: func(path string, mode model.OutputMode, content model.OutputContent) (string, error) {
+			return "ORIGINAL ONLY", nil
+		},
+		writeDeepDive: func(topic, content, outputDir, date string) (string, error) {
+			return "", nil
+		},
+		sendEmail: func(*model.Briefing, *config.Config, []fetcher.FailedSource) error {
+			t.Fatal("sendEmail() should not be used for deep")
+			return nil
+		},
+		sendDeepEmail: func(topic string, briefing *model.Briefing, cfg *config.Config, gotFailed []fetcher.FailedSource) error {
+			return nil
+		},
+		printText: func(string) {},
+	}
+
+	if err := app.runDeepDive(deepCommand{topic: "Claude", sendEmail: true}); err != nil {
+		t.Fatalf("runDeepDive() error = %v", err)
+	}
+}
+
+func TestRunDeepDiveSendEmailFailureDoesNotFailCommand(t *testing.T) {
+	var printed string
+	app := &app{
+		cfg: &config.Config{
+			Email:  config.Email{To: "test@example.com"},
+			Output: config.OutputCfg{Dir: t.TempDir(), Mode: model.OutputModeOriginalOnly},
+		},
+		fetchAll: func(cfg *config.Config, markSeen bool) ([]model.Article, []fetcher.FailedSource, error) {
+			return []model.Article{{Title: "Claude ships feature", Summary: "Claude update"}}, nil, nil
+		},
+		printFailed: func([]fetcher.FailedSource) {},
+		composeBody: func(path string, mode model.OutputMode, content model.OutputContent) (string, error) {
+			return "ORIGINAL ONLY", nil
+		},
+		writeDeepDive: func(topic, content, outputDir, date string) (string, error) {
+			return "", nil
+		},
+		sendDeepEmail: func(topic string, briefing *model.Briefing, cfg *config.Config, gotFailed []fetcher.FailedSource) error {
+			return errors.New("smtp down")
+		},
+		printText: func(s string) { printed = s },
+	}
+
+	if err := app.runDeepDive(deepCommand{topic: "Claude", sendEmail: true}); err != nil {
+		t.Fatalf("runDeepDive() error = %v, want nil when email send fails", err)
+	}
+	if printed != "ORIGINAL ONLY" {
+		t.Fatalf("printText() got = %q, want %q", printed, "ORIGINAL ONLY")
 	}
 }
 
@@ -718,8 +839,8 @@ func TestRunDeepDiveIgnoreSeenUsesFetchWindow(t *testing.T) {
 		},
 		fetchWindow: func(cfg *config.Config, from, to time.Time, markSeen, ignoreSeen bool) ([]model.Article, []fetcher.FailedSource, error) {
 			windowCalled = true
-			if !markSeen || !ignoreSeen {
-				t.Fatalf("fetchWindow() markSeen=%v ignoreSeen=%v, want true true", markSeen, ignoreSeen)
+			if markSeen || !ignoreSeen {
+				t.Fatalf("fetchWindow() markSeen=%v ignoreSeen=%v, want false true", markSeen, ignoreSeen)
 			}
 			if !from.Equal(now.Add(-12*time.Hour)) || !to.Equal(now) {
 				t.Fatalf("fetchWindow() window = %v ~ %v, want %v ~ %v", from, to, now.Add(-12*time.Hour), now)
@@ -773,8 +894,8 @@ func TestRunDeepDiveExplicitWindowUsesFetchWindow(t *testing.T) {
 			if !from.Equal(wantFrom) || !to.Equal(wantTo) {
 				t.Fatalf("fetchWindow() window = %v ~ %v, want %v ~ %v", from, to, wantFrom, wantTo)
 			}
-			if !markSeen || ignoreSeen {
-				t.Fatalf("fetchWindow() markSeen=%v ignoreSeen=%v, want true false", markSeen, ignoreSeen)
+			if markSeen || ignoreSeen {
+				t.Fatalf("fetchWindow() markSeen=%v ignoreSeen=%v, want false false", markSeen, ignoreSeen)
 			}
 			return []model.Article{{Title: "Claude ships feature", Summary: "Claude update"}}, nil, nil
 		},
@@ -805,14 +926,15 @@ func TestRunDeepDiveExplicitWindowUsesFetchWindow(t *testing.T) {
 
 func TestRunDeepDiveExplicitWindowWithIgnoreSeenPassesIgnoreSeen(t *testing.T) {
 	loc := time.FixedZone("PDT", -7*3600)
+	emailed := false
 	app := &app{
 		cfg: &config.Config{
 			ScheduleLocation: loc,
 			Output:           config.OutputCfg{Dir: t.TempDir(), Mode: model.OutputModeOriginalOnly},
 		},
 		fetchWindow: func(cfg *config.Config, from, to time.Time, markSeen, ignoreSeen bool) ([]model.Article, []fetcher.FailedSource, error) {
-			if !markSeen || !ignoreSeen {
-				t.Fatalf("fetchWindow() markSeen=%v ignoreSeen=%v, want true true", markSeen, ignoreSeen)
+			if markSeen || !ignoreSeen {
+				t.Fatalf("fetchWindow() markSeen=%v ignoreSeen=%v, want false true", markSeen, ignoreSeen)
 			}
 			return []model.Article{{Title: "Claude ships feature", Summary: "Claude update"}}, nil, nil
 		},
@@ -823,11 +945,18 @@ func TestRunDeepDiveExplicitWindowWithIgnoreSeenPassesIgnoreSeen(t *testing.T) {
 		writeDeepDive: func(topic, content, outputDir, date string) (string, error) {
 			return "", nil
 		},
+		sendDeepEmail: func(topic string, briefing *model.Briefing, cfg *config.Config, gotFailed []fetcher.FailedSource) error {
+			emailed = true
+			return nil
+		},
 		printText: func(string) {},
 	}
 
-	if err := app.runDeepDive(deepCommand{topic: "Claude", fromRaw: "2026-03-28 00:00", toRaw: "2026-03-29 23:59", ignoreSeen: true}); err != nil {
+	if err := app.runDeepDive(deepCommand{topic: "Claude", fromRaw: "2026-03-28 00:00", toRaw: "2026-03-29 23:59", ignoreSeen: true, sendEmail: true}); err != nil {
 		t.Fatalf("runDeepDive() error = %v", err)
+	}
+	if !emailed {
+		t.Fatal("sendDeepEmail() was not called with explicit window + ignoreSeen")
 	}
 }
 
@@ -894,5 +1023,87 @@ func TestRunDeepDiveDisplayedTimeMatchesConfiguredWindowTimezone(t *testing.T) {
 	}
 	if !windowCalled {
 		t.Fatal("fetchWindow() was not called for explicit window")
+	}
+}
+
+func TestRunDeepDiveUsesConfiguredTimezoneForBriefingDate(t *testing.T) {
+	loc := time.FixedZone("PDT", -7*3600)
+	now := time.Date(2026, 3, 19, 6, 30, 0, 0, time.UTC)
+	var wroteDate string
+	var emailedDate string
+
+	app := &app{
+		cfg: &config.Config{
+			ScheduleLocation: loc,
+			Output:           config.OutputCfg{Dir: t.TempDir(), Mode: model.OutputModeOriginalOnly},
+		},
+		now: func() time.Time { return now },
+		fetchAll: func(cfg *config.Config, markSeen bool) ([]model.Article, []fetcher.FailedSource, error) {
+			return []model.Article{{Title: "Claude ships feature", Summary: "Claude update"}}, nil, nil
+		},
+		printFailed: func([]fetcher.FailedSource) {},
+		composeBody: func(path string, mode model.OutputMode, content model.OutputContent) (string, error) {
+			return "ORIGINAL ONLY", nil
+		},
+		writeDeepDive: func(topic, content, outputDir, date string) (string, error) {
+			wroteDate = date
+			return "", nil
+		},
+		sendDeepEmail: func(topic string, briefing *model.Briefing, cfg *config.Config, gotFailed []fetcher.FailedSource) error {
+			emailedDate = briefing.Date
+			return nil
+		},
+		printText: func(string) {},
+	}
+
+	if err := app.runDeepDive(deepCommand{topic: "Claude", sendEmail: true}); err != nil {
+		t.Fatalf("runDeepDive() error = %v", err)
+	}
+	if wroteDate != "26.03.18" {
+		t.Fatalf("writeDeepDive() date = %q, want %q", wroteDate, "26.03.18")
+	}
+	if emailedDate != "26.03.18" {
+		t.Fatalf("sendDeepEmail() briefing.Date = %q, want %q", emailedDate, "26.03.18")
+	}
+}
+
+func TestRunDeepDiveExplicitWindowUsesWindowDateForOutput(t *testing.T) {
+	loc := time.FixedZone("PDT", -7*3600)
+	now := time.Date(2026, 3, 30, 12, 0, 0, 0, time.UTC)
+	var wroteDate string
+	var emailedDate string
+
+	app := &app{
+		cfg: &config.Config{
+			ScheduleLocation: loc,
+			Output:           config.OutputCfg{Dir: t.TempDir(), Mode: model.OutputModeOriginalOnly},
+		},
+		now: func() time.Time { return now },
+		fetchWindow: func(cfg *config.Config, from, to time.Time, markSeen, ignoreSeen bool) ([]model.Article, []fetcher.FailedSource, error) {
+			return []model.Article{{Title: "Claude ships feature", Summary: "Claude update"}}, nil, nil
+		},
+		printFailed: func([]fetcher.FailedSource) {},
+		composeBody: func(path string, mode model.OutputMode, content model.OutputContent) (string, error) {
+			return "ORIGINAL ONLY", nil
+		},
+		writeDeepDive: func(topic, content, outputDir, date string) (string, error) {
+			wroteDate = date
+			return "", nil
+		},
+		sendDeepEmail: func(topic string, briefing *model.Briefing, cfg *config.Config, gotFailed []fetcher.FailedSource) error {
+			emailedDate = briefing.Date
+			return nil
+		},
+		printText: func(string) {},
+	}
+
+	if err := app.runDeepDive(deepCommand{topic: "Claude", fromRaw: "2026-03-28 00:00", toRaw: "2026-03-29 23:59", sendEmail: true}); err != nil {
+		t.Fatalf("runDeepDive() error = %v", err)
+	}
+	if wroteDate != "26.03.29" {
+		t.Fatalf("writeDeepDive() date = %q, want %q", wroteDate, "26.03.29")
+	}
+	if emailedDate != "26.03.29" {
+		t.Fatalf("sendDeepEmail() briefing.Date = %q, want %q", emailedDate, "26.03.29")
 	}
 }

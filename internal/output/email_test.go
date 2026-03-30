@@ -63,3 +63,32 @@ func TestBuildEmailBodyAppendsFailedSection(t *testing.T) {
 		}
 	}
 }
+
+func TestBuildDeepEmailBodyUsesDeepTitle(t *testing.T) {
+	briefing := &model.Briefing{RawContent: "正文"}
+	got := buildDeepEmailBody("Claude", briefing, nil)
+	if !strings.Contains(got, "国际资讯话题深挖 | Claude") {
+		t.Fatalf("buildDeepEmailBody() = %q", got)
+	}
+}
+
+func TestBuildDeepEmailBodyAppendsFailedSection(t *testing.T) {
+	briefing := &model.Briefing{RawContent: "正文"}
+	failed := []fetcher.FailedSource{{
+		Name: "HN",
+		Err:  errors.New("timeout"),
+	}}
+
+	got := buildDeepEmailBody("Claude", briefing, failed)
+	wantParts := []string{
+		"国际资讯话题深挖 | Claude",
+		"正文",
+		"---\n抓取异常",
+		"- HN: timeout",
+	}
+	for _, want := range wantParts {
+		if !strings.Contains(got, want) {
+			t.Fatalf("buildDeepEmailBody() = %q, want substring %q", got, want)
+		}
+	}
+}

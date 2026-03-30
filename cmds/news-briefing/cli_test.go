@@ -226,6 +226,20 @@ func TestParseArgsDeep(t *testing.T) {
 		}
 	})
 
+	t.Run("parses send email flag", func(t *testing.T) {
+		cmd, err := parseArgs([]string{"deep", "Claude", "--ignore-seen", "--send-email"})
+		if err != nil {
+			t.Fatalf("parseArgs() error = %v", err)
+		}
+		deep, ok := cmd.(deepCommand)
+		if !ok {
+			t.Fatalf("command type = %T", cmd)
+		}
+		if deep.topic != "Claude" || !deep.ignoreSeen || !deep.sendEmail {
+			t.Fatalf("deep command = %#v", deep)
+		}
+	})
+
 	t.Run("supports ignore-seen", func(t *testing.T) {
 		cmd, err := parseArgs([]string{"deep", "claude", "--ignore-seen"})
 		if err != nil {

@@ -13,13 +13,18 @@ import (
 )
 
 func SendEmail(briefing *model.Briefing, cfg *config.Config, failed []fetcher.FailedSource) error {
+	return sendEmailWithContent(cfg, briefingEmailSubject(briefing.Date, briefing.Period), buildEmailBody(briefing, failed))
+}
+
+func SendDeepEmail(topic string, briefing *model.Briefing, cfg *config.Config, failed []fetcher.FailedSource) error {
+	return sendEmailWithContent(cfg, deepEmailSubject(topic), buildDeepEmailBody(topic, briefing, failed))
+}
+
+func sendEmailWithContent(cfg *config.Config, subject string, body string) error {
 	password := os.Getenv("EMAIL_SMTP_AUTH_CODE")
 	if password == "" {
 		return fmt.Errorf("EMAIL_SMTP_AUTH_CODE not set in .env")
 	}
-
-	subject := briefingEmailSubject(briefing.Date, briefing.Period)
-	body := buildEmailBody(briefing, failed)
 
 	m := gomail.NewMessage()
 	m.SetHeader("From", cfg.Email.From)
@@ -39,7 +44,15 @@ func SendEmail(briefing *model.Briefing, cfg *config.Config, failed []fetcher.Fa
 
 func buildEmailBody(briefing *model.Briefing, failed []fetcher.FailedSource) string {
 	header := briefingTitle(briefing.Date, briefing.Period) + "\n\n"
-	body := header + briefing.RawContent
+	return appendFailedSection(header+briefing.RawContent, failed)
+}
+
+func buildDeepEmailBody(topic string, briefing *model.Briefing, failed []fetcher.FailedSource) string {
+	header := deepEmailTitle(topic) + "\n\n"
+	return appendFailedSection(header+briefing.RawContent, failed)
+}
+
+func appendFailedSection(body string, failed []fetcher.FailedSource) string {
 	if len(failed) == 0 {
 		return body
 	}

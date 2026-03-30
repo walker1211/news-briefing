@@ -28,6 +28,7 @@ type deepCommand struct {
 	fromRaw    string
 	toRaw      string
 	ignoreSeen bool
+	sendEmail  bool
 }
 type helpCommand struct{}
 
@@ -90,7 +91,7 @@ func parseArgs(args []string) (command, error) {
 		if topic == "" {
 			return nil, fmt.Errorf("missing deep topic")
 		}
-		return deepCommand{topic: topic, fromRaw: fromRaw, toRaw: toRaw, ignoreSeen: hasFlagIn(args[1:], "--ignore-seen")}, nil
+		return deepCommand{topic: topic, fromRaw: fromRaw, toRaw: toRaw, ignoreSeen: hasFlagIn(args[1:], "--ignore-seen"), sendEmail: hasFlagIn(args[1:], "--send-email")}, nil
 	case "help":
 		return helpCommand{}, nil
 	default:
@@ -200,7 +201,7 @@ func commandValidationRules(cmd string) (map[string]struct{}, map[string]struct{
 	case "serve", "help":
 		return nil, nil, false
 	case "deep":
-		return map[string]struct{}{"--ignore-seen": {}}, map[string]struct{}{"--from": {}, "--to": {}}, true
+		return map[string]struct{}{"--ignore-seen": {}, "--send-email": {}}, map[string]struct{}{"--from": {}, "--to": {}}, true
 	case "regen":
 		return map[string]struct{}{"--ignore-seen": {}, "--send-email": {}, "--raw": {}}, map[string]struct{}{"--from": {}, "--to": {}, "--period": {}}, false
 	default:

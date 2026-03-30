@@ -24,3 +24,11 @@ func briefingEmailSubject(date, period string) string {
 func briefingFileName(date, period string) string {
 	return fmt.Sprintf("%s-%s-%s.md", date, periodPrefix(period), period)
 }
+
+func deepEmailSubject(topic string) string {
+	return fmt.Sprintf("[资讯简报] 话题深挖 | %s", topic)
+}
+
+func deepEmailTitle(topic string) string {
+	return fmt.Sprintf("国际资讯话题深挖 | %s", topic)
+}

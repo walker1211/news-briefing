@@ -31,3 +31,15 @@ func TestBriefingFormatHandlesInvalidPeriodWithoutPanic(t *testing.T) {
 		t.Fatalf("briefingTitle() = %q", got)
 	}
 }
+
+func TestDeepEmailSubject(t *testing.T) {
+	if got := deepEmailSubject("Claude"); got != "[资讯简报] 话题深挖 | Claude" {
+		t.Fatalf("deepEmailSubject() = %q", got)
+	}
+}
+
+func TestDeepEmailTitle(t *testing.T) {
+	if got := deepEmailTitle("Claude"); got != "国际资讯话题深挖 | Claude" {
+		t.Fatalf("deepEmailTitle() = %q", got)
+	}
+}

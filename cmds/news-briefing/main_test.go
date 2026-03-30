@@ -98,6 +98,12 @@ func TestUsageMentionsRegenDefaults(t *testing.T) {
 	if !strings.Contains(usage, "默认读取未读池；若仅传 --ignore-seen，则使用最近 12 小时窗口") {
 		t.Fatalf("usageText() missing deep default window behavior note")
 	}
+	if !strings.Contains(usage, "--send-email                 发送邮件") {
+		t.Fatalf("usageText() missing deep send-email flag")
+	}
+	if !strings.Contains(usage, "news-briefing deep \"Claude\" --send-email") {
+		t.Fatalf("usageText() missing deep send-email example")
+	}
 	if strings.Contains(usage, "Asia/Shanghai") {
 		t.Fatalf("usageText() should not hardcode Asia/Shanghai")
 	}
