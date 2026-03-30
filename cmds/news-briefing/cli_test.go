@@ -239,6 +239,46 @@ func TestParseArgsDeep(t *testing.T) {
 			t.Fatalf("deep command = %#v", deep)
 		}
 	})
+
+	t.Run("supports explicit window", func(t *testing.T) {
+		cmd, err := parseArgs([]string{"deep", "Claude", "--from", "2026-03-28 00:00", "--to", "2026-03-29 23:59"})
+		if err != nil {
+			t.Fatalf("parseArgs() error = %v", err)
+		}
+		deep, ok := cmd.(deepCommand)
+		if !ok {
+			t.Fatalf("command type = %T", cmd)
+		}
+		if deep.topic != "Claude" || deep.fromRaw != "2026-03-28 00:00" || deep.toRaw != "2026-03-29 23:59" {
+			t.Fatalf("deep command = %#v", deep)
+		}
+	})
+
+	t.Run("supports explicit window with ignore-seen", func(t *testing.T) {
+		cmd, err := parseArgs([]string{"deep", "Claude", "API", "--from", "2026-03-28 00:00", "--to", "2026-03-29 23:59", "--ignore-seen"})
+		if err != nil {
+			t.Fatalf("parseArgs() error = %v", err)
+		}
+		deep, ok := cmd.(deepCommand)
+		if !ok {
+			t.Fatalf("command type = %T", cmd)
+		}
+		if deep.topic != "Claude API" || deep.fromRaw != "2026-03-28 00:00" || deep.toRaw != "2026-03-29 23:59" || !deep.ignoreSeen {
+			t.Fatalf("deep command = %#v", deep)
+		}
+	})
+
+	t.Run("requires paired from and to", func(t *testing.T) {
+		for _, args := range [][]string{
+			{"deep", "Claude", "--from", "2026-03-28 00:00"},
+			{"deep", "Claude", "--to", "2026-03-29 23:59"},
+		} {
+			_, err := parseArgs(args)
+			if err == nil || !strings.Contains(err.Error(), "--from and --to must be provided together") {
+				t.Fatalf("parseArgs(%v) error = %v", args, err)
+			}
+		}
+	})
 }
 
 func TestParseArgsRegenRejects(t *testing.T) {

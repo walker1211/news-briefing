@@ -1,10 +1,12 @@
 package fetcher
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/walker1211/news-briefing/internal/model"
 )
@@ -80,9 +82,9 @@ func TestSeenStoreLoadRejectsCorruptJSON(t *testing.T) {
 func TestDedupWithLegacySeenWritesCanonicalStore(t *testing.T) {
 	dir := t.TempDir()
 	legacyPath := filepath.Join(dir, "seen.json")
-	legacy := `[
-  {"url":"https://example.com/a","time":"2026-03-22T08:00:00Z"}
-]`
+	legacy := fmt.Sprintf(`[
+  {"url":"https://example.com/a","time":%q}
+]`, time.Now().Add(-24*time.Hour).UTC().Format(time.RFC3339))
 	if err := os.WriteFile(legacyPath, []byte(legacy), 0o644); err != nil {
 		t.Fatalf("WriteFile() error = %v", err)
 	}

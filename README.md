@@ -343,15 +343,21 @@ output:
 
 ### `deep`
 
-围绕指定话题生成话题深挖包：
+围绕指定话题生成话题深挖包。每日简报里“今日最值得追的方向”部分给出的 deep 命令，也会默认带上 `--ignore-seen`，避免被历史已读状态过早过滤：
 
 ```bash
 ./news-briefing deep "OpenAI"
 ./news-briefing deep "Claude" --ignore-seen
+./news-briefing deep "Claude" --from "2026-03-28 00:00" --to "2026-03-29 23:59"
+./news-briefing deep "Claude" --from "2026-03-28 00:00" --to "2026-03-29 23:59" --ignore-seen
 ```
 
 规则：
 
+- `--from` / `--to` 可选，按 `schedule_timezone` 解析；未配置时使用系统本地时区，格式 `YYYY-MM-DD HH:MM`
+- `--from` / `--to` 要么都不传，要么一起传
+- `--to` 必须晚于或等于 `--from`
+- 不传 `--from` / `--to` 时，默认读取未读池；若仅传 `--ignore-seen`，则使用最近 12 小时窗口
 - `--ignore-seen` 会跳过持久化已读状态，仅做当前批次内去重
 
 ### `serve`

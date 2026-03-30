@@ -18,7 +18,7 @@ import (
 const argSep = "\x1f"
 
 func TestBriefingPromptUsesFollowupDirectionsInsteadOfTopicSuggestions(t *testing.T) {
-	if !strings.Contains(briefingPrompt, "## 今日最值得追的 3 个方向") {
+	if !strings.Contains(briefingPrompt, "## 今日最值得追的方向") {
 		t.Fatalf("briefingPrompt missing new section title")
 	}
 
@@ -26,7 +26,7 @@ func TestBriefingPromptUsesFollowupDirectionsInsteadOfTopicSuggestions(t *testin
 		"**为什么值得追：**",
 		"**接下来关注什么：**",
 		"**深挖命令：**",
-		"./news-briefing deep \"关键词\"",
+		"./news-briefing deep \"关键词\" --ignore-seen",
 	} {
 		if !strings.Contains(briefingPrompt, want) {
 			t.Fatalf("briefingPrompt missing %q", want)
@@ -36,11 +36,19 @@ func TestBriefingPromptUsesFollowupDirectionsInsteadOfTopicSuggestions(t *testin
 
 func TestBriefingPromptDefinesDirectionCountRule(t *testing.T) {
 	for _, want := range []string{
-		"必须恰好输出 3 个方向",
-		"不要输出 2 个或 4 个",
+		"输出 2-4 个最值得普通用户继续关注的新闻方向",
+		"不要少于 2 个，也不要多于 4 个",
 	} {
 		if !strings.Contains(briefingPrompt, want) {
 			t.Fatalf("briefingPrompt missing count rule %q", want)
+		}
+	}
+	for _, unwanted := range []string{
+		"必须恰好输出 3 个方向",
+		"不要输出 2 个或 4 个",
+	} {
+		if strings.Contains(briefingPrompt, unwanted) {
+			t.Fatalf("briefingPrompt unexpectedly contains %q", unwanted)
 		}
 	}
 }

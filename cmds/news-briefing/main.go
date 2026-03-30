@@ -120,7 +120,11 @@ Flags (for fetch):
   --zh                   翻译成中文（调用已配置 AI CLI）
 
 Flags (for deep):
-  --ignore-seen          跳过已读状态文件（默认 <output.dir>/state/seen.json），仅做本批次内去重
+  --from "YYYY-MM-DD HH:MM"   可选开始时间（按 schedule_timezone 解析，未配置时使用系统本地时区）
+  --to "YYYY-MM-DD HH:MM"     可选结束时间（按 schedule_timezone 解析，未配置时使用系统本地时区）
+  --ignore-seen                跳过已读状态文件（默认 <output.dir>/state/seen.json），仅做本批次内去重
+  --from / --to 要么都不传，要么一起传；且 --to 必须晚于或等于 --from
+  默认读取未读池；若仅传 --ignore-seen，则使用最近 12 小时窗口
 
 Examples:
   news-briefing run
@@ -130,7 +134,9 @@ Examples:
   news-briefing regen --from "2026-03-18 08:00" --to "2026-03-18 14:00" --period 1400 --ignore-seen --send-email
   news-briefing fetch
   news-briefing deep "OpenAI"
-  news-briefing deep "Claude" --ignore-seen`
+  news-briefing deep "Claude" --ignore-seen
+  news-briefing deep "Claude" --from "2026-03-28 00:00" --to "2026-03-29 23:59"
+  news-briefing deep "Claude" --from "2026-03-28 00:00" --to "2026-03-29 23:59" --ignore-seen`
 }
 
 func currentPeriod() string {

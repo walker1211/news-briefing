@@ -25,6 +25,8 @@ type fetchCommand struct{ zh bool }
 type serveCommand struct{}
 type deepCommand struct {
 	topic      string
+	fromRaw    string
+	toRaw      string
 	ignoreSeen bool
 }
 type helpCommand struct{}
@@ -79,11 +81,16 @@ func parseArgs(args []string) (command, error) {
 	case "serve":
 		return serveCommand{}, nil
 	case "deep":
-		topic := collectArgsFrom(args[1:])
+		fromRaw, fromSet := readStringFlag(args[1:], "--from")
+		toRaw, toSet := readStringFlag(args[1:], "--to")
+		if fromSet != toSet {
+			return nil, fmt.Errorf("--from and --to must be provided together")
+		}
+		topic := collectDeepTopicArgs(args[1:])
 		if topic == "" {
 			return nil, fmt.Errorf("missing deep topic")
 		}
-		return deepCommand{topic: topic, ignoreSeen: hasFlagIn(args[1:], "--ignore-seen")}, nil
+		return deepCommand{topic: topic, fromRaw: fromRaw, toRaw: toRaw, ignoreSeen: hasFlagIn(args[1:], "--ignore-seen")}, nil
 	case "help":
 		return helpCommand{}, nil
 	default:
@@ -121,12 +128,20 @@ func nextTokenAfterFlag(args []string, flag string) (string, bool) {
 	return "", false
 }
 
-func collectArgsFrom(args []string) string {
+func collectDeepTopicArgs(args []string) string {
 	var parts []string
-	for _, arg := range args {
-		if !strings.HasPrefix(arg, "--") {
-			parts = append(parts, arg)
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+		if strings.HasPrefix(arg, "-") {
+			switch arg {
+			case "--from", "--to":
+				if i+1 < len(args) {
+					i++
+				}
+			}
+			continue
 		}
+		parts = append(parts, arg)
 	}
 	return strings.Join(parts, " ")
 }
@@ -185,7 +200,7 @@ func commandValidationRules(cmd string) (map[string]struct{}, map[string]struct{
 	case "serve", "help":
 		return nil, nil, false
 	case "deep":
-		return map[string]struct{}{"--ignore-seen": {}}, nil, true
+		return map[string]struct{}{"--ignore-seen": {}}, map[string]struct{}{"--from": {}, "--to": {}}, true
 	case "regen":
 		return map[string]struct{}{"--ignore-seen": {}, "--send-email": {}, "--raw": {}}, map[string]struct{}{"--from": {}, "--to": {}, "--period": {}}, false
 	default:

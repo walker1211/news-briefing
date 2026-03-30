@@ -102,7 +102,7 @@ func execute(app *app, cmd command) error {
 		}
 		return nil
 	case deepCommand:
-		return app.runDeepDive(c.topic, c.ignoreSeen)
+		return app.runDeepDive(c)
 	case helpCommand:
 		printUsage()
 		return nil
@@ -274,15 +274,32 @@ func (app *app) renderBriefing(commandPath string, date string, period string, a
 	return nil
 }
 
-func (app *app) runDeepDive(topic string, ignoreSeen bool) error {
-	fmt.Printf("Deep diving into: %s\n", topic)
+func (app *app) runDeepDive(cmd deepCommand) error {
+	fmt.Printf("Deep diving into: %s\n", cmd.topic)
 
 	var (
 		articles []model.Article
 		failed   []fetcher.FailedSource
 		err      error
 	)
-	if ignoreSeen {
+	if cmd.fromRaw != "" || cmd.toRaw != "" {
+		loc := time.Local
+		if app.cfg != nil && app.cfg.ScheduleLocation != nil {
+			loc = app.cfg.ScheduleLocation
+		}
+		from, err := parseRegenTime(cmd.fromRaw, loc)
+		if err != nil {
+			return fmt.Errorf("parse --from: %w", err)
+		}
+		to, err := parseRegenTime(cmd.toRaw, loc)
+		if err != nil {
+			return fmt.Errorf("parse --to: %w", err)
+		}
+		if to.Before(from) {
+			return fmt.Errorf("--to must be after or equal to --from")
+		}
+		articles, failed, err = app.fetchWindow(app.cfg, from, to, true, cmd.ignoreSeen)
+	} else if cmd.ignoreSeen {
 		to := app.currentTime()
 		from := to.Add(-12 * time.Hour)
 		articles, failed, err = app.fetchWindow(app.cfg, from, to, true, true)
@@ -300,7 +317,7 @@ func (app *app) runDeepDive(topic string, ignoreSeen bool) error {
 		app.printText = func(s string) { fmt.Println(s) }
 	}
 
-	relevant, err := selectDeepDiveArticles(topic, articles)
+	relevant, err := selectDeepDiveArticles(cmd.topic, articles)
 	if err != nil {
 		return err
 	}
@@ -310,7 +327,7 @@ func (app *app) runDeepDive(topic string, ignoreSeen bool) error {
 	}
 	if outputNeedsTranslatedContent(app.cfg.Output.Mode) {
 		fmt.Printf("Found %d relevant articles. Generating deep dive...\n", len(relevant))
-		content, err := app.deepDive(topic, relevant)
+		content, err := app.deepDive(cmd.topic, relevant)
 		if err != nil {
 			return err
 		}
@@ -327,7 +344,7 @@ func (app *app) runDeepDive(topic string, ignoreSeen bool) error {
 		return err
 	}
 
-	path, err := app.writeDeepDive(topic, body, app.cfg.Output.Dir, app.currentTime().Format("06.01.02"))
+	path, err := app.writeDeepDive(cmd.topic, body, app.cfg.Output.Dir, app.currentTime().Format("06.01.02"))
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error writing deep dive: %v\n", err)
 	} else {

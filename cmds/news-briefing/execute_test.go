@@ -417,7 +417,7 @@ func TestRunDeepDiveOriginalOnlySkipsDeepDiveAndKeepsOriginalBlock(t *testing.T)
 		printText: func(s string) { printed = s },
 	}
 
-	if err := app.runDeepDive("OpenAI", false); err != nil {
+	if err := app.runDeepDive(deepCommand{topic: "OpenAI"}); err != nil {
 		t.Fatalf("runDeepDive() error = %v", err)
 	}
 	if deepDiveCalled {
@@ -531,7 +531,7 @@ func TestRunDeepDiveUsesOutputModeComposedBody(t *testing.T) {
 		printText: func(s string) { printed = s },
 	}
 
-	if err := app.runDeepDive("OpenAI", false); err != nil {
+	if err := app.runDeepDive(deepCommand{topic: "OpenAI"}); err != nil {
 		t.Fatalf("runDeepDive() error = %v", err)
 	}
 	if gotPath != "deep" {
@@ -568,7 +568,7 @@ func TestRunDeepDiveRejectsInteractiveFollowUpOutput(t *testing.T) {
 		},
 	}
 
-	err := app.runDeepDive("AI bill", false)
+	err := app.runDeepDive(deepCommand{topic: "AI bill"})
 	if err == nil {
 		t.Fatalf("runDeepDive() error = nil, want rejection for interactive follow-up output")
 	}
@@ -737,7 +737,7 @@ func TestRunDeepDiveIgnoreSeenUsesFetchWindow(t *testing.T) {
 		printText: func(string) {},
 	}
 
-	if err := app.runDeepDive("Claude", true); err != nil {
+	if err := app.runDeepDive(deepCommand{topic: "Claude", ignoreSeen: true}); err != nil {
 		t.Fatalf("runDeepDive() error = %v", err)
 	}
 	if fetchAllCalled {
@@ -748,5 +748,100 @@ func TestRunDeepDiveIgnoreSeenUsesFetchWindow(t *testing.T) {
 	}
 	if wroteContent != "ORIGINAL ONLY" {
 		t.Fatalf("writeDeepDive() content = %q, want %q", wroteContent, "ORIGINAL ONLY")
+	}
+}
+
+func TestRunDeepDiveExplicitWindowUsesFetchWindow(t *testing.T) {
+	loc := time.FixedZone("PDT", -7*3600)
+	windowCalled := false
+	fetchAllCalled := false
+	var wroteContent string
+
+	app := &app{
+		cfg: &config.Config{
+			ScheduleLocation: loc,
+			Output:           config.OutputCfg{Dir: t.TempDir(), Mode: model.OutputModeOriginalOnly},
+		},
+		fetchAll: func(cfg *config.Config, markSeen bool) ([]model.Article, []fetcher.FailedSource, error) {
+			fetchAllCalled = true
+			return nil, nil, nil
+		},
+		fetchWindow: func(cfg *config.Config, from, to time.Time, markSeen, ignoreSeen bool) ([]model.Article, []fetcher.FailedSource, error) {
+			windowCalled = true
+			wantFrom := time.Date(2026, 3, 28, 0, 0, 0, 0, loc)
+			wantTo := time.Date(2026, 3, 29, 23, 59, 0, 0, loc)
+			if !from.Equal(wantFrom) || !to.Equal(wantTo) {
+				t.Fatalf("fetchWindow() window = %v ~ %v, want %v ~ %v", from, to, wantFrom, wantTo)
+			}
+			if !markSeen || ignoreSeen {
+				t.Fatalf("fetchWindow() markSeen=%v ignoreSeen=%v, want true false", markSeen, ignoreSeen)
+			}
+			return []model.Article{{Title: "Claude ships feature", Summary: "Claude update"}}, nil, nil
+		},
+		printFailed: func([]fetcher.FailedSource) {},
+		composeBody: func(path string, mode model.OutputMode, content model.OutputContent) (string, error) {
+			return "ORIGINAL ONLY", nil
+		},
+		writeDeepDive: func(topic, content, outputDir, date string) (string, error) {
+			wroteContent = content
+			return "", nil
+		},
+		printText: func(string) {},
+	}
+
+	if err := app.runDeepDive(deepCommand{topic: "Claude", fromRaw: "2026-03-28 00:00", toRaw: "2026-03-29 23:59"}); err != nil {
+		t.Fatalf("runDeepDive() error = %v", err)
+	}
+	if fetchAllCalled {
+		t.Fatal("fetchAll() was called when explicit window is set")
+	}
+	if !windowCalled {
+		t.Fatal("fetchWindow() was not called for explicit window")
+	}
+	if wroteContent != "ORIGINAL ONLY" {
+		t.Fatalf("writeDeepDive() content = %q, want %q", wroteContent, "ORIGINAL ONLY")
+	}
+}
+
+func TestRunDeepDiveExplicitWindowWithIgnoreSeenPassesIgnoreSeen(t *testing.T) {
+	loc := time.FixedZone("PDT", -7*3600)
+	app := &app{
+		cfg: &config.Config{
+			ScheduleLocation: loc,
+			Output:           config.OutputCfg{Dir: t.TempDir(), Mode: model.OutputModeOriginalOnly},
+		},
+		fetchWindow: func(cfg *config.Config, from, to time.Time, markSeen, ignoreSeen bool) ([]model.Article, []fetcher.FailedSource, error) {
+			if !markSeen || !ignoreSeen {
+				t.Fatalf("fetchWindow() markSeen=%v ignoreSeen=%v, want true true", markSeen, ignoreSeen)
+			}
+			return []model.Article{{Title: "Claude ships feature", Summary: "Claude update"}}, nil, nil
+		},
+		printFailed: func([]fetcher.FailedSource) {},
+		composeBody: func(path string, mode model.OutputMode, content model.OutputContent) (string, error) {
+			return "ORIGINAL ONLY", nil
+		},
+		writeDeepDive: func(topic, content, outputDir, date string) (string, error) {
+			return "", nil
+		},
+		printText: func(string) {},
+	}
+
+	if err := app.runDeepDive(deepCommand{topic: "Claude", fromRaw: "2026-03-28 00:00", toRaw: "2026-03-29 23:59", ignoreSeen: true}); err != nil {
+		t.Fatalf("runDeepDive() error = %v", err)
+	}
+}
+
+func TestRunDeepDiveExplicitWindowRejectsToBeforeFrom(t *testing.T) {
+	loc := time.FixedZone("PDT", -7*3600)
+	app := &app{
+		cfg: &config.Config{ScheduleLocation: loc},
+	}
+
+	err := app.runDeepDive(deepCommand{topic: "Claude", fromRaw: "2026-03-29 23:59", toRaw: "2026-03-28 00:00"})
+	if err == nil {
+		t.Fatal("runDeepDive() error = nil, want invalid window error")
+	}
+	if !strings.Contains(err.Error(), "--to must be after or equal to --from") {
+		t.Fatalf("runDeepDive() error = %v", err)
 	}
 }
