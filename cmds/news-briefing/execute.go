@@ -22,9 +22,9 @@ type app struct {
 	waitForever   func()
 	fetchAll      func(*config.Config, bool) ([]model.Article, []fetcher.FailedSource, error)
 	fetchWindow   func(*config.Config, time.Time, time.Time, bool, bool) ([]model.Article, []fetcher.FailedSource, error)
-	summarize     func([]model.Article, []string) (string, error)
-	translate     func([]model.Article, []string) (string, error)
-	deepDive      func(string, []model.Article) (string, error)
+	summarize     func([]model.Article, []string, *time.Location) (string, error)
+	translate     func([]model.Article, []string, *time.Location) (string, error)
+	deepDive      func(string, []model.Article, *time.Location) (string, error)
 	composeBody   func(string, model.OutputMode, model.OutputContent) (string, error)
 	printText     func(string)
 	printFailed   func([]fetcher.FailedSource)
@@ -78,6 +78,13 @@ func categoryOrderFromSources(sources []config.Source) []string {
 		ordered = append(ordered, category)
 	}
 	return ordered
+}
+
+func (app *app) displayLocation() *time.Location {
+	if app.cfg != nil && app.cfg.ScheduleLocation != nil {
+		return app.cfg.ScheduleLocation
+	}
+	return time.Local
 }
 
 func execute(app *app, cmd command) error {
@@ -141,11 +148,11 @@ func (app *app) runFetch(cmd fetchCommand) error {
 
 	categoryOrder := categoryOrderFromSources(app.cfg.Sources)
 	content := model.OutputContent{
-		Original: output.GroupedArticleListView(articles, categoryOrder),
+		Original: output.GroupedArticleListView(articles, categoryOrder, app.displayLocation()),
 	}
 	if outputNeedsTranslatedContent(app.cfg.Output.Mode) {
 		fmt.Println("Translating with AI CLI...")
-		translated, err := app.translate(articles, categoryOrder)
+		translated, err := app.translate(articles, categoryOrder, app.displayLocation())
 		if err != nil {
 			return err
 		}
@@ -228,13 +235,13 @@ func (app *app) renderBriefing(commandPath string, date string, period string, a
 
 	categoryOrder := categoryOrderFromSources(app.cfg.Sources)
 	content := model.OutputContent{
-		Original: output.GroupedArticleListView(articles, categoryOrder),
+		Original: output.GroupedArticleListView(articles, categoryOrder, app.displayLocation()),
 	}
 	summary := ""
 	if outputNeedsTranslatedContent(app.cfg.Output.Mode) {
 		fmt.Println("Generating summary with AI CLI...")
 		var err error
-		summary, err = app.summarize(articles, categoryOrder)
+		summary, err = app.summarize(articles, categoryOrder, app.displayLocation())
 		if err != nil {
 			return err
 		}
@@ -323,11 +330,11 @@ func (app *app) runDeepDive(cmd deepCommand) error {
 	}
 
 	formattedContent := model.OutputContent{
-		Original: output.ArticleListView(relevant),
+		Original: output.ArticleListView(relevant, app.displayLocation()),
 	}
 	if outputNeedsTranslatedContent(app.cfg.Output.Mode) {
 		fmt.Printf("Found %d relevant articles. Generating deep dive...\n", len(relevant))
-		content, err := app.deepDive(cmd.topic, relevant)
+		content, err := app.deepDive(cmd.topic, relevant, app.displayLocation())
 		if err != nil {
 			return err
 		}

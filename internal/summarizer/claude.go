@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/walker1211/news-briefing/internal/model"
 	"github.com/walker1211/news-briefing/internal/output"
@@ -212,19 +213,19 @@ func sanitizeCLIOutput(raw string) string {
 	return strings.TrimSpace(strings.Join(lines[idx:], "\n"))
 }
 
-func Summarize(articles []model.Article, categoryOrder []string) (string, error) {
+func Summarize(articles []model.Article, categoryOrder []string, loc *time.Location) (string, error) {
 	defaultRunnerMu.RLock()
 	runner := defaultRunner
 	defaultRunnerMu.RUnlock()
-	return runner.Summarize(articles, categoryOrder)
+	return runner.Summarize(articles, categoryOrder, loc)
 }
 
-func (r *Runner) Summarize(articles []model.Article, categoryOrder []string) (string, error) {
+func (r *Runner) Summarize(articles []model.Article, categoryOrder []string, loc *time.Location) (string, error) {
 	if len(articles) == 0 {
 		return "今日暂无符合筛选条件的新闻。", nil
 	}
 
-	input := output.GroupedArticleListView(articles, categoryOrder)
+	input := output.GroupedArticleListView(articles, categoryOrder, loc)
 	prompt := briefingPrompt + "\n\n---\n以下是今日新闻条目：\n\n" + input
 
 	return r.callClaude(prompt, r.summarizeExtraFlags()...)
@@ -245,8 +246,8 @@ func shouldSanitizeCLIOutput() bool {
 	return runner.shouldSanitizeCLIOutput()
 }
 
-func (r *Runner) DeepDive(topic string, articles []model.Article) (string, error) {
-	input := output.ArticleListView(articles)
+func (r *Runner) DeepDive(topic string, articles []model.Article, loc *time.Location) (string, error) {
+	input := output.ArticleListView(articles, loc)
 	prompt := fmt.Sprintf(deepDivePrompt, topic) + "\n\n---\n话题: " + topic + "\n\n相关新闻:\n" + input
 
 	return r.callClaude(prompt, r.deepDiveExtraFlags()...)
@@ -265,11 +266,11 @@ const translatePrompt = `将以下新闻列表翻译成中文。要求：
 2. 每条新闻保持编号，只翻译标题和摘要，保留来源名称、时间和链接不变
 3. 直接输出翻译结果，不要加任何额外说明`
 
-func (r *Runner) Translate(articles []model.Article, categoryOrder []string) (string, error) {
+func (r *Runner) Translate(articles []model.Article, categoryOrder []string, loc *time.Location) (string, error) {
 	if len(articles) == 0 {
 		return "暂无新闻。", nil
 	}
-	input := output.GroupedArticleListView(articles, categoryOrder)
+	input := output.GroupedArticleListView(articles, categoryOrder, loc)
 	prompt := translatePrompt + "\n\n" + input
 	return r.callClaude(prompt, r.translateExtraFlags()...)
 }

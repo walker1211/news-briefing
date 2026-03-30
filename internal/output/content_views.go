@@ -8,14 +8,19 @@ import (
 	"github.com/walker1211/news-briefing/internal/model"
 )
 
-var cst = time.FixedZone("CST", 8*3600)
+func formatArticlePublishedAt(published time.Time, loc *time.Location) string {
+	if loc == nil {
+		loc = time.Local
+	}
+	return published.In(loc).Format("2006-01-02 15:04")
+}
 
-func ArticleListView(articles []model.Article) string {
+func ArticleListView(articles []model.Article, loc *time.Location) string {
 	var sb strings.Builder
 	for i, a := range articles {
 		sb.WriteString(fmt.Sprintf("%d. [%s] %s\n   %s\n   Source: %s | %s\n   Link: %s\n\n",
 			i+1, a.Category, a.Title, a.Summary, a.Source,
-			a.Published.In(cst).Format("2006-01-02 15:04"), a.Link))
+			formatArticlePublishedAt(a.Published, loc), a.Link))
 	}
 	return sb.String()
 }
@@ -42,7 +47,7 @@ func OrderedCategories(articles []model.Article, categoryOrder []string) []strin
 	return ordered
 }
 
-func GroupedArticleListView(articles []model.Article, categoryOrder []string) string {
+func GroupedArticleListView(articles []model.Article, categoryOrder []string, loc *time.Location) string {
 	grouped := make(map[string][]model.Article)
 	for _, a := range articles {
 		grouped[a.Category] = append(grouped[a.Category], a)
@@ -59,7 +64,7 @@ func GroupedArticleListView(articles []model.Article, categoryOrder []string) st
 		for _, a := range items {
 			sb.WriteString(fmt.Sprintf("%d. %s\n   %s\n   Source: %s | %s\n   Link: %s\n\n",
 				n, a.Title, a.Summary, a.Source,
-				a.Published.In(cst).Format("2006-01-02 15:04"), a.Link))
+				formatArticlePublishedAt(a.Published, loc), a.Link))
 			n++
 		}
 	}

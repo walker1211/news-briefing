@@ -76,7 +76,7 @@ func TestExecuteFetchTranslateUsesRunner(t *testing.T) {
 		fetchAll: func(cfg *config.Config, markSeen bool) ([]model.Article, []fetcher.FailedSource, error) {
 			return []model.Article{{Title: "a"}}, nil, nil
 		},
-		translate: func(articles []model.Article, categoryOrder []string) (string, error) {
+		translate: func(articles []model.Article, categoryOrder []string, loc *time.Location) (string, error) {
 			called = len(articles) == 1 && articles[0].Title == "a"
 			return "ok", nil
 		},
@@ -112,7 +112,7 @@ func TestExecuteRegenUsesParsedWindowAndFlags(t *testing.T) {
 			called = gotFrom.Equal(from) && gotTo.Equal(to) && !markSeen && ignoreSeen
 			return []model.Article{{Title: "a"}}, nil, nil
 		},
-		summarize:     func([]model.Article, []string) (string, error) { return "summary", nil },
+		summarize:     func([]model.Article, []string, *time.Location) (string, error) { return "summary", nil },
 		printFailed:   func([]fetcher.FailedSource) {},
 		printArticles: func([]model.Article) {},
 		printCLI:      func(*model.Briefing) {},
@@ -187,7 +187,7 @@ func TestRenderBriefingUsesComposedBodyForRun(t *testing.T) {
 
 	app := &app{
 		cfg:       &config.Config{Output: config.OutputCfg{Dir: t.TempDir(), Mode: model.OutputModeBilingualOriginalFirst}},
-		summarize: func([]model.Article, []string) (string, error) { return "TRANSLATED", nil },
+		summarize: func([]model.Article, []string, *time.Location) (string, error) { return "TRANSLATED", nil },
 		composeBody: func(path string, mode model.OutputMode, content model.OutputContent) (string, error) {
 			gotPath, gotMode, gotContent = path, mode, content
 			return "COMPOSED", nil
@@ -209,8 +209,8 @@ func TestRenderBriefingUsesComposedBodyForRun(t *testing.T) {
 		t.Fatalf("composeBody() mode = %q, want %q", gotMode, model.OutputModeBilingualOriginalFirst)
 	}
 	categoryOrder := []string{"AI/科技"}
-	if gotContent.Original != output.GroupedArticleListView(articles, categoryOrder) {
-		t.Fatalf("composeBody() original = %q, want %q", gotContent.Original, output.GroupedArticleListView(articles, categoryOrder))
+	if gotContent.Original != output.GroupedArticleListView(articles, categoryOrder, time.Local) {
+		t.Fatalf("composeBody() original = %q, want %q", gotContent.Original, output.GroupedArticleListView(articles, categoryOrder, time.Local))
 	}
 	if gotContent.Translated != "TRANSLATED" {
 		t.Fatalf("composeBody() translated = %q, want %q", gotContent.Translated, "TRANSLATED")
@@ -229,7 +229,7 @@ func TestRenderBriefingUsesComposedBodyForRegen(t *testing.T) {
 
 	app := &app{
 		cfg:       &config.Config{Output: config.OutputCfg{Dir: t.TempDir(), Mode: model.OutputModeTranslatedOnly}},
-		summarize: func([]model.Article, []string) (string, error) { return "TRANSLATED", nil },
+		summarize: func([]model.Article, []string, *time.Location) (string, error) { return "TRANSLATED", nil },
 		composeBody: func(path string, mode model.OutputMode, content model.OutputContent) (string, error) {
 			gotPath = path
 			return "COMPOSED", nil
@@ -260,7 +260,7 @@ func TestExecuteServeScheduledBriefingUsesServePathForOutputMode(t *testing.T) {
 		fetchWindow: func(cfg *config.Config, from, to time.Time, markSeen bool, ignoreSeen bool) ([]model.Article, []fetcher.FailedSource, error) {
 			return sampleExecuteArticles(), nil, nil
 		},
-		summarize: func([]model.Article, []string) (string, error) { return "TRANSLATED", nil },
+		summarize: func([]model.Article, []string, *time.Location) (string, error) { return "TRANSLATED", nil },
 		composeBody: func(path string, mode model.OutputMode, content model.OutputContent) (string, error) {
 			gotPath = path
 			return "TRANSLATED", nil
@@ -294,7 +294,7 @@ func TestExecuteServeOriginalOnlySkipsSummarize(t *testing.T) {
 		fetchWindow: func(cfg *config.Config, from, to time.Time, markSeen bool, ignoreSeen bool) ([]model.Article, []fetcher.FailedSource, error) {
 			return sampleExecuteArticles(), nil, nil
 		},
-		summarize: func([]model.Article, []string) (string, error) {
+		summarize: func([]model.Article, []string, *time.Location) (string, error) {
 			summarizeCalled = true
 			return "TRANSLATED", nil
 		},
@@ -327,7 +327,7 @@ func TestRenderBriefingOriginalOnlySkipsSummarize(t *testing.T) {
 
 	app := &app{
 		cfg: &config.Config{Sources: []config.Source{{Category: "AI/科技"}}, Output: config.OutputCfg{Dir: t.TempDir(), Mode: model.OutputModeOriginalOnly}},
-		summarize: func([]model.Article, []string) (string, error) {
+		summarize: func([]model.Article, []string, *time.Location) (string, error) {
 			summarizeCalled = true
 			return "TRANSLATED", nil
 		},
@@ -363,7 +363,7 @@ func TestExecuteFetchTranslateOriginalOnlySkipsTranslate(t *testing.T) {
 		fetchAll: func(cfg *config.Config, markSeen bool) ([]model.Article, []fetcher.FailedSource, error) {
 			return articles, nil, nil
 		},
-		translate: func([]model.Article, []string) (string, error) {
+		translate: func([]model.Article, []string, *time.Location) (string, error) {
 			translateCalled = true
 			return "TRANSLATED", nil
 		},
@@ -402,7 +402,7 @@ func TestRunDeepDiveOriginalOnlySkipsDeepDiveAndKeepsOriginalBlock(t *testing.T)
 			return relevant, nil, nil
 		},
 		printFailed: func([]fetcher.FailedSource) {},
-		deepDive: func(string, []model.Article) (string, error) {
+		deepDive: func(string, []model.Article, *time.Location) (string, error) {
 			deepDiveCalled = true
 			return "DEEP TRANSLATED", nil
 		},
@@ -445,7 +445,7 @@ func TestExecuteFetchTranslateUsesOutputModeComposedBody(t *testing.T) {
 		fetchAll: func(cfg *config.Config, markSeen bool) ([]model.Article, []fetcher.FailedSource, error) {
 			return articles, nil, nil
 		},
-		translate: func(articles []model.Article, categoryOrder []string) (string, error) {
+		translate: func(articles []model.Article, categoryOrder []string, loc *time.Location) (string, error) {
 			if strings.Join(categoryOrder, ",") != "国际政治,AI/科技" {
 				t.Fatalf("translate() categoryOrder = %v", categoryOrder)
 			}
@@ -466,8 +466,8 @@ func TestExecuteFetchTranslateUsesOutputModeComposedBody(t *testing.T) {
 		t.Fatalf("composeBody() path = %q, want %q", gotPath, "fetch --zh")
 	}
 	categoryOrder := []string{"国际政治", "AI/科技"}
-	if gotContent.Original != output.GroupedArticleListView(articles, categoryOrder) {
-		t.Fatalf("composeBody() original = %q, want %q", gotContent.Original, output.GroupedArticleListView(articles, categoryOrder))
+	if gotContent.Original != output.GroupedArticleListView(articles, categoryOrder, time.Local) {
+		t.Fatalf("composeBody() original = %q, want %q", gotContent.Original, output.GroupedArticleListView(articles, categoryOrder, time.Local))
 	}
 	if gotContent.Translated != "TRANSLATED" {
 		t.Fatalf("composeBody() translated = %q, want %q", gotContent.Translated, "TRANSLATED")
@@ -517,7 +517,7 @@ func TestRunDeepDiveUsesOutputModeComposedBody(t *testing.T) {
 			return relevant, nil, nil
 		},
 		printFailed: func([]fetcher.FailedSource) {},
-		deepDive: func(string, []model.Article) (string, error) {
+		deepDive: func(string, []model.Article, *time.Location) (string, error) {
 			return "DEEP TRANSLATED", nil
 		},
 		composeBody: func(path string, mode model.OutputMode, content model.OutputContent) (string, error) {
@@ -537,8 +537,8 @@ func TestRunDeepDiveUsesOutputModeComposedBody(t *testing.T) {
 	if gotPath != "deep" {
 		t.Fatalf("composeBody() path = %q, want %q", gotPath, "deep")
 	}
-	if gotContent.Original != output.ArticleListView(relevant) {
-		t.Fatalf("composeBody() original = %q, want %q", gotContent.Original, output.ArticleListView(relevant))
+	if gotContent.Original != output.ArticleListView(relevant, time.Local) {
+		t.Fatalf("composeBody() original = %q, want %q", gotContent.Original, output.ArticleListView(relevant, time.Local))
 	}
 	if gotContent.Translated != "DEEP TRANSLATED" {
 		t.Fatalf("composeBody() translated = %q, want %q", gotContent.Translated, "DEEP TRANSLATED")
@@ -559,7 +559,7 @@ func TestRunDeepDiveRejectsInteractiveFollowUpOutput(t *testing.T) {
 			return []model.Article{{Title: "AI bill", Summary: "AI bill summary"}}, nil, nil
 		},
 		printFailed: func([]fetcher.FailedSource) {},
-		deepDive: func(string, []model.Article) (string, error) {
+		deepDive: func(string, []model.Article, *time.Location) (string, error) {
 			return "你给的 3 条“相关新闻”与“美国 AI 数据中心暂停法案”主题不匹配。你希望我怎么继续？", nil
 		},
 		writeDeepDive: func(string, string, string, string) (string, error) {
@@ -843,5 +843,56 @@ func TestRunDeepDiveExplicitWindowRejectsToBeforeFrom(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "--to must be after or equal to --from") {
 		t.Fatalf("runDeepDive() error = %v", err)
+	}
+}
+
+func TestRunDeepDiveDisplayedTimeMatchesConfiguredWindowTimezone(t *testing.T) {
+	loc, err := time.LoadLocation("America/Los_Angeles")
+	if err != nil {
+		t.Fatalf("LoadLocation() error = %v", err)
+	}
+
+	article := model.Article{
+		Title:     "Claude ships feature",
+		Summary:   "Claude update",
+		Source:    "Example",
+		Link:      "https://example.com/claude",
+		Category:  "AI/科技",
+		Published: time.Date(2026, 3, 18, 14, 0, 0, 0, time.UTC),
+	}
+	shown := output.ArticleListView([]model.Article{article}, loc)
+	if !strings.Contains(shown, "2026-03-18 07:00") {
+		t.Fatalf("ArticleListView() = %q, want displayed Los Angeles time", shown)
+	}
+
+	windowCalled := false
+	app := &app{
+		cfg: &config.Config{
+			ScheduleLocation: loc,
+			Output:           config.OutputCfg{Dir: t.TempDir(), Mode: model.OutputModeOriginalOnly},
+		},
+		fetchWindow: func(cfg *config.Config, from, to time.Time, markSeen, ignoreSeen bool) ([]model.Article, []fetcher.FailedSource, error) {
+			windowCalled = true
+			want := time.Date(2026, 3, 18, 7, 0, 0, 0, loc)
+			if !from.Equal(want) || !to.Equal(want) {
+				t.Fatalf("fetchWindow() window = %v ~ %v, want %v ~ %v", from, to, want, want)
+			}
+			return []model.Article{article}, nil, nil
+		},
+		printFailed: func([]fetcher.FailedSource) {},
+		composeBody: func(path string, mode model.OutputMode, content model.OutputContent) (string, error) {
+			return "ORIGINAL ONLY", nil
+		},
+		writeDeepDive: func(topic, content, outputDir, date string) (string, error) {
+			return "", nil
+		},
+		printText: func(string) {},
+	}
+
+	if err := app.runDeepDive(deepCommand{topic: "Claude", fromRaw: "2026-03-18 07:00", toRaw: "2026-03-18 07:00"}); err != nil {
+		t.Fatalf("runDeepDive() error = %v", err)
+	}
+	if !windowCalled {
+		t.Fatal("fetchWindow() was not called for explicit window")
 	}
 }

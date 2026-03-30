@@ -109,7 +109,7 @@ func TestRunnerUsesConfiguredExtraFlagsForDeepDive(t *testing.T) {
 	runner := NewRunner("claude", []string{"--model", "claude-opus-4-6"}, []string{"--bare", "--disable-slash-commands"}, true, "", "")
 
 	articles := sampleArticles()
-	got, err := runner.DeepDive("OpenAI", articles)
+	got, err := runner.DeepDive("OpenAI", articles, time.Local)
 	if err != nil {
 		t.Fatalf("DeepDive() error = %v", err)
 	}
@@ -122,7 +122,7 @@ func TestRunnerUsesConfiguredExtraFlagsForDeepDive(t *testing.T) {
 		"--append-system-prompt",
 		nonInteractiveDeepDiveSystemPrompt,
 		"-p",
-		fmt.Sprintf(deepDivePrompt, "OpenAI") + "\n\n---\n话题: OpenAI\n\n相关新闻:\n" + output.ArticleListView(articles),
+		fmt.Sprintf(deepDivePrompt, "OpenAI") + "\n\n---\n话题: OpenAI\n\n相关新闻:\n" + output.ArticleListView(articles, time.Local),
 	}
 	if args := splitArgs(got); !reflect.DeepEqual(args, want) {
 		t.Fatalf("DeepDive() args = %#v, want %#v", args, want)
@@ -164,7 +164,7 @@ func TestRunnerUsesConfiguredExtraFlagsForSummarize(t *testing.T) {
 	runner := NewRunner("claude", []string{"--model", "claude-opus-4-6"}, []string{"--bare", "--disable-slash-commands"}, true, "", "")
 
 	articles := sampleArticles()
-	got, err := runner.Summarize(articles, []string{"AI/科技", "国际政治"})
+	got, err := runner.Summarize(articles, []string{"AI/科技", "国际政治"}, time.Local)
 	if err != nil {
 		t.Fatalf("Summarize() error = %v", err)
 	}
@@ -177,7 +177,7 @@ func TestRunnerUsesConfiguredExtraFlagsForSummarize(t *testing.T) {
 		"--append-system-prompt",
 		nonInteractiveBriefingSystemPrompt,
 		"-p",
-		briefingPrompt + "\n\n---\n以下是今日新闻条目：\n\n" + output.GroupedArticleListView(articles, []string{"AI/科技", "国际政治"}),
+		briefingPrompt + "\n\n---\n以下是今日新闻条目：\n\n" + output.GroupedArticleListView(articles, []string{"AI/科技", "国际政治"}, time.Local),
 	}
 	if args := splitArgs(got); !reflect.DeepEqual(args, want) {
 		t.Fatalf("Summarize() args = %#v, want %#v", args, want)
@@ -189,7 +189,7 @@ func TestRunnerUsesConfiguredExtraFlagsForTranslate(t *testing.T) {
 	runner := NewRunner("claude", []string{"--model", "claude-opus-4-6"}, []string{"--bare", "--disable-slash-commands"}, true, "", "")
 
 	articles := sampleArticles()
-	got, err := runner.Translate(articles, []string{"AI/科技", "国际政治"})
+	got, err := runner.Translate(articles, []string{"AI/科技", "国际政治"}, time.Local)
 	if err != nil {
 		t.Fatalf("Translate() error = %v", err)
 	}
@@ -202,7 +202,7 @@ func TestRunnerUsesConfiguredExtraFlagsForTranslate(t *testing.T) {
 		"--append-system-prompt",
 		nonInteractiveBriefingSystemPrompt,
 		"-p",
-		translatePrompt + "\n\n" + output.GroupedArticleListView(articles, []string{"AI/科技", "国际政治"}),
+		translatePrompt + "\n\n" + output.GroupedArticleListView(articles, []string{"AI/科技", "国际政治"}, time.Local),
 	}
 	if args := splitArgs(got); !reflect.DeepEqual(args, want) {
 		t.Fatalf("Translate() args = %#v, want %#v", args, want)
@@ -217,11 +217,11 @@ func TestRunnerInstancesDoNotShareCommandOrProxyState(t *testing.T) {
 	otherRunner := NewRunner("my-ai", []string{"foo"}, nil, false, "", "")
 
 	articles := sampleArticles()
-	first, err := ccsRunner.Summarize(articles, []string{"AI/科技", "国际政治"})
+	first, err := ccsRunner.Summarize(articles, []string{"AI/科技", "国际政治"}, time.Local)
 	if err != nil {
 		t.Fatalf("ccsRunner.Summarize() error = %v", err)
 	}
-	second, err := otherRunner.Summarize(articles, []string{"AI/科技", "国际政治"})
+	second, err := otherRunner.Summarize(articles, []string{"AI/科技", "国际政治"}, time.Local)
 	if err != nil {
 		t.Fatalf("otherRunner.Summarize() error = %v", err)
 	}
@@ -283,12 +283,12 @@ func TestSetProxyPreservesConfiguredCommand(t *testing.T) {
 	SetCommand("my-ai", []string{"foo"})
 	SetProxy("http://127.0.0.1:7897", "socks5://127.0.0.1:7898")
 
-	got, err := Summarize(sampleArticles(), []string{"AI/科技", "国际政治"})
+	got, err := Summarize(sampleArticles(), []string{"AI/科技", "国际政治"}, time.Local)
 	if err != nil {
 		t.Fatalf("Summarize() error = %v", err)
 	}
 
-	want := []string{"foo", "--append-system-prompt", nonInteractiveBriefingSystemPrompt, "-p", briefingPrompt + "\n\n---\n以下是今日新闻条目：\n\n" + output.GroupedArticleListView(sampleArticles(), []string{"AI/科技", "国际政治"})}
+	want := []string{"foo", "--append-system-prompt", nonInteractiveBriefingSystemPrompt, "-p", briefingPrompt + "\n\n---\n以下是今日新闻条目：\n\n" + output.GroupedArticleListView(sampleArticles(), []string{"AI/科技", "国际政治"}, time.Local)}
 	if args := splitArgs(got); !reflect.DeepEqual(args, want) {
 		t.Fatalf("Summarize() args = %#v, want %#v", args, want)
 	}
@@ -313,7 +313,7 @@ func TestDefaultRunnerConcurrentMutationDoesNotRace(t *testing.T) {
 		}()
 		go func() {
 			defer wg.Done()
-			_, _ = Summarize(articles, []string{"AI/科技", "国际政治"})
+			_, _ = Summarize(articles, []string{"AI/科技", "国际政治"}, time.Local)
 		}()
 	}
 	wg.Wait()
