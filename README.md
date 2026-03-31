@@ -23,25 +23,32 @@ It runs LLMs through installed AI CLI tools, so you can use logged-in CLI sessio
     - topic deep-dive packs
 - Outputs to terminal, Markdown, and optional email
 
-### Requirements
+### Install
 
-- Go 1.25 or newer
+#### Option 1: Download from GitHub Releases
 
-### Quick start
+GitHub Releases currently provide macOS and Linux archives only.
 
-1. Copy the example config:
+1. Download the archive for your platform from GitHub Releases.
+2. Extract it into a working directory.
+3. Copy `configs/config.example.yaml` to `configs/config.yaml`.
+4. Fill in `configs/config.yaml` for your sources and AI CLI.
+5. Run `./news-briefing help` from that working directory.
+6. Add `.env` only if you plan to use email sending.
+
+Note: the binary currently reads `configs/config.yaml` and `.env` from the current working directory. Adding the binary to `PATH` does not remove that requirement.
+
+#### Option 2: Build from source
+
+Requires Go 1.25 or newer.
 
 ```bash
 cp configs/config.example.yaml configs/config.yaml
+./build.sh
+./news-briefing help
 ```
 
-2. Put your email smtp auth code in `.env`:
-
-```dotenv
-EMAIL_SMTP_AUTH_CODE=mail_smtp_password
-```
-
-3. Configure your AI CLI in `configs/config.yaml`.
+Before running non-help commands such as `run`, fill in `configs/config.yaml` for your sources and AI CLI. Add `.env` when email sending is enabled.
 
 Example source categories:
 
@@ -112,14 +119,6 @@ Allowed values:
 This setting affects `run`, `regen`, scheduled `serve`, `fetch --zh`, and `deep`.
 Plain `fetch` keeps printing the original article list and does not use the output-mode formatter.
 
-4. Build and run:
-
-```bash
-./build.sh
-./news-briefing help
-./news-briefing run --no-email
-```
-
 ### Common commands
 
 ```bash
@@ -145,9 +144,32 @@ Licensed under the MIT License. See [LICENSE](./LICENSE).
 
 ## 中文
 
-### 环境要求
+### 安装
 
-- Go 1.25 或更高版本
+#### 方式一：从 GitHub Releases 下载
+
+GitHub Releases 当前只提供 macOS 和 Linux 压缩包。
+
+1. 到 GitHub Releases 下载对应平台压缩包。
+2. 解压到一个工作目录。
+3. 将 `configs/config.example.yaml` 复制为 `configs/config.yaml`。
+4. 填写 `configs/config.yaml`，配置新闻源和 AI CLI。
+5. 在该工作目录中运行 `./news-briefing help`。
+6. 只有在需要发送邮件时才补充 `.env`。
+
+说明：当前程序会从当前工作目录读取 `configs/config.yaml` 和 `.env`。即使把二进制加入 `PATH`，也仍然需要在包含这些文件的工作目录中运行。
+
+#### 方式二：从源码构建
+
+需要 Go 1.25 或更高版本。
+
+```bash
+cp configs/config.example.yaml configs/config.yaml
+./build.sh
+./news-briefing help
+```
+
+在运行 `run` 等非 help 命令前，请先填写 `configs/config.yaml`。如需发送邮件，再补充 `.env`。
 
 ### 配置
 
