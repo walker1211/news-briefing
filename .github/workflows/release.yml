@@ -8,6 +8,10 @@ on:
 permissions:
   contents: write
 
+concurrency:
+  group: release-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -74,17 +78,25 @@ jobs:
       - name: Generate checksums
         run: |
           set -euo pipefail
-          (cd dist && shasum -a 256 news-briefing_*.tar.gz > checksums.txt)
+          (cd dist && sha256sum news-briefing_*.tar.gz > checksums.txt)
 
-      - name: Create GitHub release
+      - name: Create or update GitHub release
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
         run: |
           set -euo pipefail
-          gh release create "${GITHUB_REF_NAME}" \
-            dist/news-briefing_*.tar.gz \
-            dist/checksums.txt \
-            --repo "${GH_REPO}" \
-            --title "${GITHUB_REF_NAME}" \
-            --generate-notes
+          if gh release view "${GITHUB_REF_NAME}" --repo "${GH_REPO}" >/dev/null 2>&1; then
+            gh release upload "${GITHUB_REF_NAME}" \
+              dist/news-briefing_*.tar.gz \
+              dist/checksums.txt \
+              --repo "${GH_REPO}" \
+              --clobber
+          else
+            gh release create "${GITHUB_REF_NAME}" \
+              dist/news-briefing_*.tar.gz \
+              dist/checksums.txt \
+              --repo "${GH_REPO}" \
+              --title "${GITHUB_REF_NAME}" \
+              --generate-notes
+          fi
