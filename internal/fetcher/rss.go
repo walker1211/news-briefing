@@ -29,7 +29,7 @@ var fetchFeedWithCurl = func(url string) ([]byte, error) {
 	return output, nil
 }
 
-func FetchRSS(source config.Source, keywords []string, since time.Time) ([]model.Article, error) {
+func FetchRSS(source config.Source, keywords []string, since time.Time) (sourceFetchResult, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
@@ -39,19 +39,19 @@ func FetchRSS(source config.Source, keywords []string, since time.Time) ([]model
 	feed, err := fp.ParseURLWithContext(source.URL, ctx)
 	if err != nil {
 		if !shouldFallbackToCurl(source, err) {
-			return nil, err
+			return sourceFetchResult{}, err
 		}
 		body, curlErr := fetchFeedWithCurl(source.URL)
 		if curlErr != nil {
-			return nil, fmt.Errorf("reddit rss curl fallback failed: %w", curlErr)
+			return sourceFetchResult{}, fmt.Errorf("reddit rss curl fallback failed: %w", curlErr)
 		}
 		feed, err = fp.Parse(bytes.NewReader(body))
 		if err != nil {
-			return nil, err
+			return sourceFetchResult{}, err
 		}
 	}
 
-	var articles []model.Article
+	result := sourceFetchResult{Source: source}
 	for _, item := range feed.Items {
 		pub := time.Now()
 		if item.PublishedParsed != nil {
@@ -60,31 +60,25 @@ func FetchRSS(source config.Source, keywords []string, since time.Time) ([]model
 			pub = *item.UpdatedParsed
 		}
 
-		if pub.Before(since) {
-			continue
-		}
-
-		text := strings.ToLower(item.Title + " " + item.Description)
-		if !matchKeywords(text, keywords) {
-			continue
-		}
-
 		summary := item.Description
 		if len(summary) > 500 {
 			summary = summary[:500]
 		}
 
-		articles = append(articles, model.Article{
-			Title:     item.Title,
-			Link:      item.Link,
-			Summary:   summary,
-			Source:    source.Name,
-			Category:  source.Category,
-			Published: pub,
+		result.Candidates = append(result.Candidates, fetchedCandidate{
+			Article: model.Article{
+				Title:     item.Title,
+				Link:      item.Link,
+				Summary:   summary,
+				Source:    source.Name,
+				Category:  source.Category,
+				Published: pub,
+			},
+			MatchedKeywords: matchedKeywords(item.Title+" "+item.Description, keywords),
 		})
 	}
 
-	return articles, nil
+	return result, nil
 }
 
 func shouldFallbackToCurl(source config.Source, err error) bool {
@@ -103,15 +97,20 @@ func shouldFallbackToCurl(source config.Source, err error) bool {
 	return strings.Contains(strings.ToLower(err.Error()), "403")
 }
 
-func matchKeywords(text string, keywords []string) bool {
+func matchedKeywords(text string, keywords []string) []string {
 	if len(keywords) == 0 {
-		return true
+		return nil
 	}
 	lower := strings.ToLower(text)
+	var matched []string
 	for _, kw := range keywords {
 		if strings.Contains(lower, strings.ToLower(kw)) {
-			return true
+			matched = append(matched, kw)
 		}
 	}
-	return false
+	return matched
+}
+
+func matchKeywords(text string, keywords []string) bool {
+	return len(matchedKeywords(text, keywords)) > 0
 }

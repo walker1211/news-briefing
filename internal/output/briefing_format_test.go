@@ -26,6 +26,12 @@ func TestBriefingFormatFileName(t *testing.T) {
 	}
 }
 
+func TestBriefingFormatIndexFileName(t *testing.T) {
+	if got := briefingIndexFileName("26.03.22", "0800"); got != "26.03.22-早间-0800.json" {
+		t.Fatalf("briefingIndexFileName() = %q", got)
+	}
+}
+
 func TestBriefingFormatHandlesInvalidPeriodWithoutPanic(t *testing.T) {
 	if got := briefingTitle("26.03.22", "800"); got != "国际资讯简报 26.03.22 800 800" {
 		t.Fatalf("briefingTitle() = %q", got)

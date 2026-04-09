@@ -19,7 +19,29 @@ const (
 
 var sleep = time.Sleep
 
-var fetchRedditSource = func(src config.Source, keywords []string, since time.Time) ([]model.Article, error) {
+type fetchedCandidate struct {
+	Article         model.Article
+	MatchedKeywords []string
+}
+
+type sourceFetchResult struct {
+	Source     config.Source
+	Candidates []fetchedCandidate
+}
+
+var fetchRSSSource = func(src config.Source, keywords []string, since time.Time) (sourceFetchResult, error) {
+	return FetchRSS(src, keywords, since)
+}
+
+var fetchHackerNewsSource = func(src config.Source, keywords []string, since time.Time) (sourceFetchResult, error) {
+	return FetchHackerNews(src, keywords, since)
+}
+
+var fetchRedditDirect = func(src config.Source, keywords []string, since time.Time) (sourceFetchResult, error) {
+	return FetchReddit(src, keywords, since)
+}
+
+var fetchRedditSource = func(src config.Source, keywords []string, since time.Time) (sourceFetchResult, error) {
 	return fetchWithRetry(src, keywords, since)
 }
 
@@ -33,10 +55,10 @@ type FailedSource struct {
 	Err  error
 }
 
-var fetchAllSources = func(cfg *config.Config, since time.Time) ([]model.Article, []FailedSource, error) {
+var fetchAllSourcesDetailed = func(cfg *config.Config, since time.Time) ([]sourceFetchResult, []FailedSource, error) {
 	var (
 		mu     sync.Mutex
-		all    []model.Article
+		all    []sourceFetchResult
 		failed []FailedSource
 		wg     sync.WaitGroup
 	)
@@ -55,12 +77,12 @@ var fetchAllSources = func(cfg *config.Config, since time.Time) ([]model.Article
 		wg.Add(1)
 		go func(src config.Source) {
 			defer wg.Done()
-			articles, err := fetchWithRetry(src, cfg.Keywords, since)
+			result, err := fetchWithRetry(src, cfg.Keywords, since)
 			mu.Lock()
 			if err != nil {
 				failed = append(failed, FailedSource{Name: src.Name, Err: err})
 			} else {
-				all = append(all, articles...)
+				all = append(all, result)
 			}
 			mu.Unlock()
 		}(src)
@@ -74,15 +96,29 @@ var fetchAllSources = func(cfg *config.Config, since time.Time) ([]model.Article
 				mu.Lock()
 				failed = append(failed, item)
 				mu.Unlock()
-			}, func(items []model.Article) {
+			}, func(item sourceFetchResult) {
 				mu.Lock()
-				all = append(all, items...)
+				all = append(all, item)
 				mu.Unlock()
 			})
 		}()
 	}
 
 	wg.Wait()
+	return all, failed, nil
+}
+
+var fetchAllSources = func(cfg *config.Config, since time.Time) ([]model.Article, []FailedSource, error) {
+	results, failed, err := fetchAllSourcesDetailed(cfg, since)
+	if err != nil {
+		return nil, nil, err
+	}
+	var all []model.Article
+	for _, result := range results {
+		for _, candidate := range result.Candidates {
+			all = append(all, candidate.Article)
+		}
+	}
 	return all, failed, nil
 }
 
@@ -93,27 +129,164 @@ func FetchAll(cfg *config.Config, markSeen bool) ([]model.Article, []FailedSourc
 	return FetchWindow(cfg, since, time.Now(), markSeen, false)
 }
 
+func FetchAllWithIndex(cfg *config.Config, markSeen bool) ([]model.Article, []FailedSource, model.SourceIndex, error) {
+	since := time.Now().Add(-12 * time.Hour)
+	return FetchWindowWithIndex(cfg, since, time.Now(), markSeen, false)
+}
+
 func FetchWindow(cfg *config.Config, from, to time.Time, markSeen bool, ignoreSeen bool) ([]model.Article, []FailedSource, error) {
-	all, failed, err := fetchAllSources(cfg, from)
+	articles, failed, _, err := FetchWindowWithIndex(cfg, from, to, markSeen, ignoreSeen)
+	return articles, failed, err
+}
+
+func FetchWindowWithIndex(cfg *config.Config, from, to time.Time, markSeen bool, ignoreSeen bool) ([]model.Article, []FailedSource, model.SourceIndex, error) {
+	results, failed, err := fetchAllSourcesDetailed(cfg, from)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, model.SourceIndex{}, err
 	}
 
-	all = filterArticlesByWindow(all, from, to)
-	sort.Slice(all, func(i, j int) bool {
-		return all[i].Published.After(all[j].Published)
-	})
-	all, err = applyDedup(all, markSeen, ignoreSeen, NewSeenStore(cfg.Output.Dir))
-	if err != nil {
-		return nil, failed, err
+	index := newSourceIndex(cfg)
+	runByName := make(map[string]*model.SourceRun, len(index.SourceRuns))
+	for i := range index.SourceRuns {
+		runByName[index.SourceRuns[i].Name] = &index.SourceRuns[i]
 	}
-	return all, failed, nil
+
+	type acceptedTrace struct {
+		article    model.Article
+		traceIndex int
+	}
+
+	var accepted []acceptedTrace
+	for _, result := range results {
+		run := runByName[result.Source.Name]
+		if run != nil {
+			run.Status = "success"
+			run.FetchedCount = len(result.Candidates)
+		}
+		for _, candidate := range result.Candidates {
+			trace := model.ArticleTrace{
+				Title:           candidate.Article.Title,
+				Link:            candidate.Article.Link,
+				Source:          result.Source.Name,
+				SourceType:      result.Source.Type,
+				Category:        result.Source.Category,
+				Published:       candidate.Article.Published,
+				MatchedKeywords: append([]string(nil), candidate.MatchedKeywords...),
+			}
+			index.ArticleTraces = append(index.ArticleTraces, trace)
+			traceIndex := len(index.ArticleTraces) - 1
+			traceRef := &index.ArticleTraces[traceIndex]
+
+			if len(candidate.MatchedKeywords) == 0 {
+				traceRef.Status = model.TraceStatusKeywordMiss
+				traceRef.RejectionReason = string(model.TraceStatusKeywordMiss)
+				if run != nil {
+					run.KeywordMissCount++
+				}
+				continue
+			}
+			if !articleWithinWindow(candidate.Article, from, to) {
+				traceRef.Status = model.TraceStatusOutOfWindow
+				traceRef.RejectionReason = string(model.TraceStatusOutOfWindow)
+				if run != nil {
+					run.WindowMissCount++
+				}
+				continue
+			}
+			accepted = append(accepted, acceptedTrace{article: candidate.Article, traceIndex: traceIndex})
+		}
+	}
+
+	for _, failedSource := range failed {
+		if run := runByName[failedSource.Name]; run != nil {
+			run.Status = string(model.TraceStatusFetchFailed)
+			run.Error = failedSource.Err.Error()
+		}
+	}
+
+	sort.Slice(accepted, func(i, j int) bool {
+		return accepted[i].article.Published.After(accepted[j].article.Published)
+	})
+
+	acceptedArticles := make([]model.Article, 0, len(accepted))
+	acceptedTraceIndexes := make([]int, 0, len(accepted))
+	for _, item := range accepted {
+		acceptedArticles = append(acceptedArticles, item.article)
+		acceptedTraceIndexes = append(acceptedTraceIndexes, item.traceIndex)
+	}
+
+	outcome, err := applyDedup(acceptedArticles, markSeen, ignoreSeen, NewSeenStore(cfg.Output.Dir))
+	if err != nil {
+		return nil, failed, index, err
+	}
+
+	traceIndexesByKey := make(map[string][]int)
+	for i, article := range acceptedArticles {
+		key := dedupKey(article)
+		traceIndexesByKey[key] = append(traceIndexesByKey[key], acceptedTraceIndexes[i])
+	}
+	for key := range outcome.DuplicateKeys {
+		traceIndexes := traceIndexesByKey[key]
+		if len(traceIndexes) == 0 {
+			continue
+		}
+		for i := 1; i < len(traceIndexes); i++ {
+			trace := &index.ArticleTraces[traceIndexes[i]]
+			trace.Status = model.TraceStatusDuplicateInBatch
+			trace.RejectionReason = string(model.TraceStatusDuplicateInBatch)
+			if run := runByName[trace.Source]; run != nil {
+				run.DedupedCount++
+			}
+		}
+	}
+	for key := range outcome.SeenBeforeKeys {
+		traceIndexes := traceIndexesByKey[key]
+		for _, traceIndex := range traceIndexes {
+			trace := &index.ArticleTraces[traceIndex]
+			trace.Status = model.TraceStatusSeenBefore
+			trace.RejectionReason = string(model.TraceStatusSeenBefore)
+			if run := runByName[trace.Source]; run != nil {
+				run.DedupedCount++
+			}
+		}
+	}
+	for _, article := range outcome.Articles {
+		traceIndexes := traceIndexesByKey[dedupKey(article)]
+		if len(traceIndexes) == 0 {
+			continue
+		}
+		trace := &index.ArticleTraces[traceIndexes[0]]
+		trace.Status = model.TraceStatusIncluded
+		trace.RejectionReason = ""
+		if run := runByName[trace.Source]; run != nil {
+			run.IncludedCount++
+		}
+	}
+
+	return outcome.Articles, failed, index, nil
+}
+
+func newSourceIndex(cfg *config.Config) model.SourceIndex {
+	index := model.SourceIndex{SourceRuns: make([]model.SourceRun, 0, len(cfg.Sources))}
+	for _, src := range cfg.Sources {
+		index.SourceRuns = append(index.SourceRuns, model.SourceRun{
+			Name:     src.Name,
+			Type:     src.Type,
+			Category: src.Category,
+			Status:   "success",
+		})
+	}
+	return index
+}
+
+func articleWithinWindow(a model.Article, from, to time.Time) bool {
+	return a.Published.After(from) && !a.Published.After(to)
 }
 
 func filterArticlesByWindow(articles []model.Article, from, to time.Time) []model.Article {
 	var result []model.Article
 	for _, a := range articles {
-		if !a.Published.After(from) || a.Published.After(to) {
+		if !articleWithinWindow(a, from, to) {
 			continue
 		}
 		result = append(result, a)
@@ -121,46 +294,46 @@ func filterArticlesByWindow(articles []model.Article, from, to time.Time) []mode
 	return result
 }
 
-func applyDedup(articles []model.Article, markSeen bool, ignoreSeen bool, store SeenStore) ([]model.Article, error) {
+func applyDedup(articles []model.Article, markSeen bool, ignoreSeen bool, store SeenStore) (DedupOutcome, error) {
 	if ignoreSeen {
 		return DedupInBatch(articles), nil
 	}
 	return Dedup(articles, markSeen, store)
 }
 
-func fetchRedditSourcesSerially(sources []config.Source, keywords []string, since time.Time, appendFailed func(FailedSource), appendArticles func([]model.Article)) {
+func fetchRedditSourcesSerially(sources []config.Source, keywords []string, since time.Time, appendFailed func(FailedSource), appendResult func(sourceFetchResult)) {
 	for i, src := range sources {
 		if i > 0 {
 			sleep(2 * time.Second)
 		}
-		articles, err := fetchRedditSource(src, keywords, since)
+		result, err := fetchRedditSource(src, keywords, since)
 		if err != nil {
 			appendFailed(FailedSource{Name: src.Name, Err: err})
 			continue
 		}
-		appendArticles(articles)
+		appendResult(result)
 	}
 }
 
-func fetchWithRetry(src config.Source, keywords []string, since time.Time) ([]model.Article, error) {
-	var articles []model.Article
+func fetchWithRetry(src config.Source, keywords []string, since time.Time) (sourceFetchResult, error) {
+	var result sourceFetchResult
 	var lastErr error
 
 	for attempt := 1; attempt <= maxRetries; attempt++ {
 		var err error
 		switch src.Type {
 		case "rss":
-			articles, err = FetchRSS(src, keywords, since)
+			result, err = fetchRSSSource(src, keywords, since)
 		case "hackernews":
-			articles, err = FetchHackerNews(src, keywords, since)
+			result, err = fetchHackerNewsSource(src, keywords, since)
 		case "reddit":
-			articles, err = FetchReddit(src, keywords, since)
+			result, err = fetchRedditDirect(src, keywords, since)
 		default:
-			return nil, fmt.Errorf("unknown source type for %s: %s", src.Name, src.Type)
+			return sourceFetchResult{}, fmt.Errorf("unknown source type for %s: %s", src.Name, src.Type)
 		}
 
 		if err == nil {
-			return articles, nil
+			return result, nil
 		}
 		lastErr = err
 		if isRateLimited(err) {
@@ -170,7 +343,7 @@ func fetchWithRetry(src config.Source, keywords []string, since time.Time) ([]mo
 			sleep(retryDelay)
 		}
 	}
-	return nil, lastErr
+	return sourceFetchResult{}, lastErr
 }
 
 // isTTY 检测 stdout 是否为终端

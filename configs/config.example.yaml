@@ -15,6 +15,42 @@ sources:
     url: https://hacker-news.firebaseio.com/v0
     type: hackernews
     category: AI/科技
+  - name: OpenAI News
+    url: https://openai.com/news/rss.xml
+    type: rss
+    category: AI/科技
+  - name: Google Blog AI
+    url: https://blog.google/innovation-and-ai/technology/ai/rss/
+    type: rss
+    category: AI/科技
+  - name: Hugging Face Blog
+    url: https://huggingface.co/blog/feed.xml
+    type: rss
+    category: AI/科技
+  - name: GitHub Blog
+    url: https://github.blog/feed/
+    type: rss
+    category: AI/科技
+  - name: GitHub Changelog
+    url: https://github.blog/changelog/feed/
+    type: rss
+    category: AI/科技
+  - name: Microsoft Dev Blog
+    url: https://devblogs.microsoft.com/feed/
+    type: rss
+    category: AI/科技
+  - name: AllenAI Blog
+    url: https://allenai.org/rss.xml
+    type: rss
+    category: AI/科技
+  - name: Cognition Blog
+    url: https://cognition.ai/rss.xml
+    type: rss
+    category: AI/科技
+  - name: Bing / Microsoft Search Blog
+    url: https://blogs.bing.com/Home/feed
+    type: rss
+    category: AI/科技
   - name: NPR World
     url: https://feeds.npr.org/1004/rss.xml
     type: rss
@@ -46,9 +82,38 @@ keywords:
   - OpenAI
   - OpenClaw
   - Google
+  - Gemini
+  - DeepMind
+  - Hugging Face
+  - Microsoft
+  - GitHub
+  - Meta
+  - Cursor
+  - Windsurf
+  - Cognition
+  - AllenAI
+  - Ai2
+  - 智谱
   - DeepSeek
   - GPT
   - Claude
+  - Claude Mythos
+  - Project Glasswing
+  - Codex
+  - Copilot
+  - Prism
+  - Agent World
+  - Llama
+  - vLLM
+  - Ollama
+  - GLM
+  - SWE
+  - WildDet3D
+  - ACE-Step
+  - Harrier
+  - EUPE
+  - FIPO
+  - warp decode
   - chip
   - semiconductor
   - China
@@ -58,6 +123,12 @@ keywords:
   - Trump
   - military
   - sanction
+  - EU
+  - European Union
+  - NATO
+  - export control
+  - Taiwan
+  - South China Sea
   - Iran
   - Israel
   - war

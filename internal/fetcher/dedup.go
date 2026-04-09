@@ -11,28 +11,43 @@ type seenEntry struct {
 	Time time.Time `json:"time"`
 }
 
+type DedupOutcome struct {
+	Articles       []model.Article
+	DuplicateKeys  map[string]struct{}
+	SeenBeforeKeys map[string]struct{}
+}
+
 // Dedup 过滤已读文章。save 为 true 时将新文章标记为已读。
-func Dedup(articles []model.Article, save bool, store SeenStore) ([]model.Article, error) {
+func Dedup(articles []model.Article, save bool, store SeenStore) (DedupOutcome, error) {
 	seen, err := store.Load()
 	if err != nil {
-		return nil, err
+		return DedupOutcome{}, err
 	}
-	seenMap := make(map[string]bool)
+	historicalSeenMap := make(map[string]bool)
 	for _, s := range seen {
-		seenMap[s.URL] = true
+		historicalSeenMap[s.URL] = true
 	}
+	batchSeenMap := make(map[string]bool)
 
-	var result []model.Article
+	outcome := DedupOutcome{
+		DuplicateKeys:  make(map[string]struct{}),
+		SeenBeforeKeys: make(map[string]struct{}),
+	}
 	for _, a := range articles {
 		key := dedupKey(a)
-		if seenMap[key] {
+		if historicalSeenMap[key] {
+			outcome.SeenBeforeKeys[key] = struct{}{}
 			continue
 		}
-		result = append(result, a)
+		if batchSeenMap[key] {
+			outcome.DuplicateKeys[key] = struct{}{}
+			continue
+		}
+		outcome.Articles = append(outcome.Articles, a)
+		batchSeenMap[key] = true
 		if save {
 			seen = append(seen, seenEntry{URL: key, Time: time.Now()})
 		}
-		seenMap[key] = true
 	}
 
 	if save {
@@ -44,25 +59,29 @@ func Dedup(articles []model.Article, save bool, store SeenStore) ([]model.Articl
 			}
 		}
 		if err := store.Save(trimmed); err != nil {
-			return nil, err
+			return DedupOutcome{}, err
 		}
 	}
 
-	return result, nil
+	return outcome, nil
 }
 
-func DedupInBatch(articles []model.Article) []model.Article {
+func DedupInBatch(articles []model.Article) DedupOutcome {
 	seen := make(map[string]bool)
-	var result []model.Article
+	outcome := DedupOutcome{
+		DuplicateKeys:  make(map[string]struct{}),
+		SeenBeforeKeys: make(map[string]struct{}),
+	}
 	for _, a := range articles {
 		key := dedupKey(a)
 		if seen[key] {
+			outcome.DuplicateKeys[key] = struct{}{}
 			continue
 		}
 		seen[key] = true
-		result = append(result, a)
+		outcome.Articles = append(outcome.Articles, a)
 	}
-	return result
+	return outcome
 }
 
 func dedupKey(a model.Article) string {

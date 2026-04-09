@@ -309,3 +309,73 @@ proxy: {}
 		t.Fatalf("ScheduleLocation = %q, want %q", got, "Asia/Shanghai")
 	}
 }
+
+func TestProjectConfigIncludesDiscoveryEnhancementAISources(t *testing.T) {
+	configPaths := map[string]string{
+		"project": filepath.Join("..", "..", "configs", "config.yaml"),
+		"example": filepath.Join("..", "..", "configs", "config.example.yaml"),
+	}
+	want := []Source{
+		{Name: "AllenAI Blog", URL: "https://allenai.org/rss.xml", Type: "rss", Category: "AI/科技"},
+		{Name: "Cognition Blog", URL: "https://cognition.ai/rss.xml", Type: "rss", Category: "AI/科技"},
+		{Name: "Bing / Microsoft Search Blog", URL: "https://blogs.bing.com/Home/feed", Type: "rss", Category: "AI/科技"},
+	}
+
+	for name, configPath := range configPaths {
+		t.Run(name, func(t *testing.T) {
+			cfg, err := Load(configPath)
+			if err != nil {
+				t.Fatalf("Load() error = %v", err)
+			}
+
+			got := make(map[Source]struct{}, len(cfg.Sources))
+			for _, source := range cfg.Sources {
+				if _, exists := got[source]; exists {
+					t.Fatalf("duplicate source found: %+v", source)
+				}
+				got[source] = struct{}{}
+			}
+			for _, source := range want {
+				if _, exists := got[source]; !exists {
+					t.Fatalf("missing discovery enhancement source: %+v", source)
+				}
+			}
+		})
+	}
+}
+
+func TestProjectConfigIncludesDiscoveryEnhancementAIKeywords(t *testing.T) {
+	configPaths := map[string]string{
+		"project": filepath.Join("..", "..", "configs", "config.yaml"),
+		"example": filepath.Join("..", "..", "configs", "config.example.yaml"),
+	}
+	want := []string{"AllenAI", "Ai2", "GLM-5.1"}
+	rejected := []string{"GLM", "BigModel", "z.ai", "ACE Studio", "StepFun", "HappyHorse", "Paper Review", "BYOK", "Terafab"}
+
+	for name, configPath := range configPaths {
+		t.Run(name, func(t *testing.T) {
+			cfg, err := Load(configPath)
+			if err != nil {
+				t.Fatalf("Load() error = %v", err)
+			}
+
+			got := make(map[string]struct{}, len(cfg.Keywords))
+			for _, keyword := range cfg.Keywords {
+				if _, exists := got[keyword]; exists {
+					t.Fatalf("duplicate keyword found: %q", keyword)
+				}
+				got[keyword] = struct{}{}
+			}
+			for _, keyword := range want {
+				if _, exists := got[keyword]; !exists {
+					t.Fatalf("missing discovery enhancement keyword: %q", keyword)
+				}
+			}
+			for _, keyword := range rejected {
+				if _, exists := got[keyword]; exists {
+					t.Fatalf("unexpected noisy keyword included: %q", keyword)
+				}
+			}
+		})
+	}
+}

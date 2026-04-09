@@ -2,8 +2,10 @@ package main
 
 import (
 	"errors"
+	"io"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -49,8 +51,8 @@ func TestExecuteServeDoesNotExitProcessOnScheduledRunError(t *testing.T) {
 				run(window)
 				return nil
 			},
-			fetchWindow: func(cfg *config.Config, from, to time.Time, markSeen bool, ignoreSeen bool) ([]model.Article, []fetcher.FailedSource, error) {
-				return nil, nil, errors.New("boom")
+			fetchWindowWithIndex: func(cfg *config.Config, from, to time.Time, markSeen bool, ignoreSeen bool) ([]model.Article, []fetcher.FailedSource, model.SourceIndex, error) {
+				return nil, nil, model.SourceIndex{}, errors.New("boom")
 			},
 			waitForever: func() {},
 		}
@@ -108,9 +110,9 @@ func TestExecuteRegenUsesParsedWindowAndFlags(t *testing.T) {
 	emailCalled := false
 	app := &app{
 		cfg: &config.Config{Output: config.OutputCfg{Dir: t.TempDir(), Mode: model.OutputModeTranslatedOnly}},
-		fetchWindow: func(cfg *config.Config, gotFrom, gotTo time.Time, markSeen bool, ignoreSeen bool) ([]model.Article, []fetcher.FailedSource, error) {
+		fetchWindowWithIndex: func(cfg *config.Config, gotFrom, gotTo time.Time, markSeen bool, ignoreSeen bool) ([]model.Article, []fetcher.FailedSource, model.SourceIndex, error) {
 			called = gotFrom.Equal(from) && gotTo.Equal(to) && !markSeen && ignoreSeen
-			return []model.Article{{Title: "a"}}, nil, nil
+			return []model.Article{{Title: "a"}}, nil, model.SourceIndex{}, nil
 		},
 		summarize:     func([]model.Article, []string, *time.Location) (string, error) { return "summary", nil },
 		printFailed:   func([]fetcher.FailedSource) {},
@@ -149,9 +151,9 @@ func TestExecuteRegenParsesRawWindowInConfiguredTimezone(t *testing.T) {
 			ScheduleLocation: loc,
 			Output:           config.OutputCfg{Dir: t.TempDir(), Mode: model.OutputModeOriginalOnly},
 		},
-		fetchWindow: func(cfg *config.Config, gotFrom, gotTo time.Time, markSeen bool, ignoreSeen bool) ([]model.Article, []fetcher.FailedSource, error) {
+		fetchWindowWithIndex: func(cfg *config.Config, gotFrom, gotTo time.Time, markSeen bool, ignoreSeen bool) ([]model.Article, []fetcher.FailedSource, model.SourceIndex, error) {
 			called = gotFrom.Equal(from) && gotTo.Equal(to) && !markSeen && ignoreSeen
-			return []model.Article{{Title: "a"}}, nil, nil
+			return []model.Article{{Title: "a"}}, nil, model.SourceIndex{}, nil
 		},
 		printFailed:   func([]fetcher.FailedSource) {},
 		printArticles: func([]model.Article) {},
@@ -198,7 +200,7 @@ func TestRenderBriefingUsesComposedBodyForRun(t *testing.T) {
 		sendEmail:     func(*model.Briefing, *config.Config, []fetcher.FailedSource) error { return nil },
 	}
 
-	err := app.renderBriefing("run", "26.03.27", "1400", articles, nil, false, false)
+	err := app.renderBriefing("run", "26.03.27", "1400", articles, nil, model.SourceIndex{}, false, false)
 	if err != nil {
 		t.Fatalf("renderBriefing() error = %v", err)
 	}
@@ -239,12 +241,58 @@ func TestRenderBriefingUsesComposedBodyForRegen(t *testing.T) {
 		printFailed:   func([]fetcher.FailedSource) {},
 	}
 
-	err := app.renderBriefing("regen", "26.03.27", "1400", articles, nil, false, false)
+	err := app.renderBriefing("regen", "26.03.27", "1400", articles, nil, model.SourceIndex{}, false, false)
 	if err != nil {
 		t.Fatalf("renderBriefing() error = %v", err)
 	}
 	if gotPath != "regen" {
 		t.Fatalf("composeBody() path = %q, want %q", gotPath, "regen")
+	}
+}
+
+func TestRunBriefingUsesIndexedFetchAndWritesSourceIndex(t *testing.T) {
+	articles := sampleExecuteArticles()
+	fetchCalled := false
+	writeIndexCalled := false
+	index := model.SourceIndex{SourceRuns: []model.SourceRun{{Name: "RSS", Status: "success"}}}
+	markdownPath := filepath.Join(t.TempDir(), "26.03.27-午间-1400.md")
+
+	app := &app{
+		cfg: &config.Config{Output: config.OutputCfg{Dir: t.TempDir(), Mode: model.OutputModeOriginalOnly}},
+		fetchAllWithIndex: func(cfg *config.Config, markSeen bool) ([]model.Article, []fetcher.FailedSource, model.SourceIndex, error) {
+			fetchCalled = true
+			if !markSeen {
+				t.Fatalf("fetchAllWithIndex() markSeen=%v, want true", markSeen)
+			}
+			return articles, nil, index, nil
+		},
+		composeBody: func(path string, mode model.OutputMode, content model.OutputContent) (string, error) {
+			return "ORIGINAL ONLY", nil
+		},
+		printCLI:      func(*model.Briefing) {},
+		printFailed:   func([]fetcher.FailedSource) {},
+		printArticles: func([]model.Article) {},
+		writeMarkdown: func(*model.Briefing, string) (string, error) { return markdownPath, nil },
+		writeSourceIndex: func(gotMarkdownPath string, gotIndex model.SourceIndex) (string, error) {
+			writeIndexCalled = true
+			if gotMarkdownPath != markdownPath {
+				t.Fatalf("writeSourceIndex() markdownPath = %q, want %q", gotMarkdownPath, markdownPath)
+			}
+			if len(gotIndex.SourceRuns) != 1 || gotIndex.SourceRuns[0].Name != "RSS" {
+				t.Fatalf("writeSourceIndex() index = %#v", gotIndex)
+			}
+			return filepath.Join(filepath.Dir(markdownPath), "index", "26.03.27-午间-1400.json"), nil
+		},
+	}
+
+	if err := app.runBriefing("run", "1400", false, false); err != nil {
+		t.Fatalf("runBriefing() error = %v", err)
+	}
+	if !fetchCalled {
+		t.Fatal("fetchAllWithIndex() was not called")
+	}
+	if !writeIndexCalled {
+		t.Fatal("writeSourceIndex() was not called")
 	}
 }
 
@@ -257,8 +305,8 @@ func TestExecuteServeScheduledBriefingUsesServePathForOutputMode(t *testing.T) {
 			run(window)
 			return nil
 		},
-		fetchWindow: func(cfg *config.Config, from, to time.Time, markSeen bool, ignoreSeen bool) ([]model.Article, []fetcher.FailedSource, error) {
-			return sampleExecuteArticles(), nil, nil
+		fetchWindowWithIndex: func(cfg *config.Config, from, to time.Time, markSeen bool, ignoreSeen bool) ([]model.Article, []fetcher.FailedSource, model.SourceIndex, error) {
+			return sampleExecuteArticles(), nil, model.SourceIndex{}, nil
 		},
 		summarize: func([]model.Article, []string, *time.Location) (string, error) { return "TRANSLATED", nil },
 		composeBody: func(path string, mode model.OutputMode, content model.OutputContent) (string, error) {
@@ -291,8 +339,8 @@ func TestExecuteServeOriginalOnlySkipsSummarize(t *testing.T) {
 			run(window)
 			return nil
 		},
-		fetchWindow: func(cfg *config.Config, from, to time.Time, markSeen bool, ignoreSeen bool) ([]model.Article, []fetcher.FailedSource, error) {
-			return sampleExecuteArticles(), nil, nil
+		fetchWindowWithIndex: func(cfg *config.Config, from, to time.Time, markSeen bool, ignoreSeen bool) ([]model.Article, []fetcher.FailedSource, model.SourceIndex, error) {
+			return sampleExecuteArticles(), nil, model.SourceIndex{}, nil
 		},
 		summarize: func([]model.Article, []string, *time.Location) (string, error) {
 			summarizeCalled = true
@@ -341,7 +389,7 @@ func TestRenderBriefingOriginalOnlySkipsSummarize(t *testing.T) {
 		printArticles: func([]model.Article) {},
 	}
 
-	if err := app.renderBriefing("run", "26.03.27", "1400", articles, nil, false, false); err != nil {
+	if err := app.renderBriefing("run", "26.03.27", "1400", articles, nil, model.SourceIndex{}, false, false); err != nil {
 		t.Fatalf("renderBriefing() error = %v", err)
 	}
 	if summarizeCalled {
@@ -349,6 +397,50 @@ func TestRenderBriefingOriginalOnlySkipsSummarize(t *testing.T) {
 	}
 	if gotContent.Translated != "" {
 		t.Fatalf("composeBody() translated = %q, want empty", gotContent.Translated)
+	}
+}
+
+func TestRenderBriefingDoesNotFailWhenSourceIndexWriteFails(t *testing.T) {
+	articles := sampleExecuteArticles()
+	cfg := &config.Config{Sources: []config.Source{{Category: "AI/科技"}}, Output: config.OutputCfg{Dir: t.TempDir(), Mode: model.OutputModeOriginalOnly}}
+
+	stderr, err := os.CreateTemp(t.TempDir(), "stderr")
+	if err != nil {
+		t.Fatalf("CreateTemp() error = %v", err)
+	}
+	defer stderr.Close()
+	oldStderr := os.Stderr
+	os.Stderr = stderr
+	defer func() { os.Stderr = oldStderr }()
+
+	app := &app{
+		cfg:           cfg,
+		printCLI:      func(*model.Briefing) {},
+		printFailed:   func([]fetcher.FailedSource) {},
+		printArticles: func([]model.Article) {},
+		composeBody: func(path string, mode model.OutputMode, content model.OutputContent) (string, error) {
+			return "ORIGINAL ONLY", nil
+		},
+		writeMarkdown: func(*model.Briefing, string) (string, error) {
+			return filepath.Join(cfg.Output.Dir, "26.03.27-午间-1400.md"), nil
+		},
+		writeSourceIndex: func(string, model.SourceIndex) (string, error) {
+			return "", errors.New("disk full")
+		},
+	}
+
+	if err := app.renderBriefing("run", "26.03.27", "1400", articles, nil, model.SourceIndex{}, false, false); err != nil {
+		t.Fatalf("renderBriefing() error = %v, want nil when source index write fails", err)
+	}
+	if _, err := stderr.Seek(0, io.SeekStart); err != nil {
+		t.Fatalf("Seek() error = %v", err)
+	}
+	data, err := io.ReadAll(stderr)
+	if err != nil {
+		t.Fatalf("ReadAll() error = %v", err)
+	}
+	if !strings.Contains(string(data), "Error writing source index") {
+		t.Fatalf("stderr = %q, want source index write error", string(data))
 	}
 }
 

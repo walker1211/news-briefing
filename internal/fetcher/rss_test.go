@@ -50,7 +50,7 @@ func TestFetchRSSFallsBackToCurlForReddit403(t *testing.T) {
 </rss>`), nil
 	}
 
-	articles, err := FetchRSS(config.Source{
+	result, err := FetchRSS(config.Source{
 		Name:     "Reddit Singularity",
 		URL:      "https://www.reddit.com/r/singularity/.rss",
 		Type:     "rss",
@@ -59,12 +59,13 @@ func TestFetchRSSFallsBackToCurlForReddit403(t *testing.T) {
 	if err != nil {
 		t.Fatalf("FetchRSS() error = %v", err)
 	}
-	if len(articles) != 1 {
-		t.Fatalf("len(articles) = %d, want 1", len(articles))
+	if len(result.Candidates) != 1 {
+		t.Fatalf("len(result.Candidates) = %d, want 1", len(result.Candidates))
 	}
-	if articles[0].Title != "AI agent breakthrough" {
-		t.Fatalf("articles[0].Title = %q", articles[0].Title)
+	if result.Candidates[0].Article.Title != "AI agent breakthrough" {
+		t.Fatalf("result.Candidates[0].Article.Title = %q", result.Candidates[0].Article.Title)
 	}
+
 }
 
 func TestFetchRSSReturnsCurlFallbackError(t *testing.T) {

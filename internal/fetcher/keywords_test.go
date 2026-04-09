@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strconv"
 	"strings"
 	"testing"
@@ -37,6 +38,22 @@ func withSharedClient(t *testing.T, client *http.Client) {
 	t.Cleanup(func() {
 		sharedClient = oldClient
 	})
+}
+
+func TestMatchedKeywordsReturnsAllCaseInsensitiveMatches(t *testing.T) {
+	text := "OpenClaw ships with Copilot and openclaw helpers"
+	got := matchedKeywords(text, []string{"OpenClaw", "Copilot", "Missing"})
+	want := []string{"OpenClaw", "Copilot"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("matchedKeywords() = %#v, want %#v", got, want)
+	}
+}
+
+func TestMatchedKeywordsReturnsEmptySliceWhenNoMatches(t *testing.T) {
+	got := matchedKeywords("policy update", []string{"OpenClaw"})
+	if len(got) != 0 {
+		t.Fatalf("len(matchedKeywords()) = %d, want 0", len(got))
+	}
 }
 
 func TestMatchKeywordsMatchesRSSOpenClawText(t *testing.T) {
@@ -91,12 +108,15 @@ func TestMatchKeywordsMatchesRSSOpenClawText(t *testing.T) {
 				}, nil
 			})})
 
-			articles, err := FetchRSS(source, keywords, since)
+			result, err := FetchRSS(source, keywords, since)
 			if err != nil {
 				t.Fatalf("FetchRSS() error = %v", err)
 			}
-			if len(articles) != 1 {
-				t.Fatalf("len(articles) = %d, want 1", len(articles))
+			if len(result.Candidates) != 1 {
+				t.Fatalf("len(result.Candidates) = %d, want 1", len(result.Candidates))
+			}
+			if len(result.Candidates[0].MatchedKeywords) == 0 {
+				t.Fatalf("MatchedKeywords = %#v, want non-empty", result.Candidates[0].MatchedKeywords)
 			}
 		})
 	}
@@ -145,12 +165,15 @@ func TestMatchKeywordsMatchesRedditOpenClawText(t *testing.T) {
 				}, nil
 			})})
 
-			articles, err := FetchReddit(source, keywords, since)
+			result, err := FetchReddit(source, keywords, since)
 			if err != nil {
 				t.Fatalf("FetchReddit() error = %v", err)
 			}
-			if len(articles) != 1 {
-				t.Fatalf("len(articles) = %d, want 1", len(articles))
+			if len(result.Candidates) != 1 {
+				t.Fatalf("len(result.Candidates) = %d, want 1", len(result.Candidates))
+			}
+			if len(result.Candidates[0].MatchedKeywords) == 0 {
+				t.Fatalf("MatchedKeywords = %#v, want non-empty", result.Candidates[0].MatchedKeywords)
 			}
 		})
 	}
@@ -197,12 +220,15 @@ func TestMatchKeywordsMatchesHackerNewsOpenClawTitle(t *testing.T) {
 		}
 	})})
 
-	articles, err := FetchHackerNews(source, keywords, since)
+	result, err := FetchHackerNews(source, keywords, since)
 	if err != nil {
 		t.Fatalf("FetchHackerNews() error = %v", err)
 	}
-	if len(articles) != 1 {
-		t.Fatalf("len(articles) = %d, want 1", len(articles))
+	if len(result.Candidates) != 1 {
+		t.Fatalf("len(result.Candidates) = %d, want 1", len(result.Candidates))
+	}
+	if len(result.Candidates[0].MatchedKeywords) == 0 {
+		t.Fatalf("MatchedKeywords = %#v, want non-empty", result.Candidates[0].MatchedKeywords)
 	}
 }
 
@@ -238,12 +264,15 @@ func TestFetchRSSFiltersInternationalCategoryWithoutKeywordMatch(t *testing.T) {
 		}, nil
 	})})
 
-	articles, err := FetchRSS(source, keywords, since)
+	result, err := FetchRSS(source, keywords, since)
 	if err != nil {
 		t.Fatalf("FetchRSS() error = %v", err)
 	}
-	if len(articles) != 0 {
-		t.Fatalf("len(articles) = %d, want 0", len(articles))
+	if len(result.Candidates) != 1 {
+		t.Fatalf("len(result.Candidates) = %d, want 1", len(result.Candidates))
+	}
+	if len(result.Candidates[0].MatchedKeywords) != 0 {
+		t.Fatalf("MatchedKeywords = %#v, want empty", result.Candidates[0].MatchedKeywords)
 	}
 }
 
@@ -269,11 +298,14 @@ func TestFetchRedditFiltersInternationalCategoryWithoutKeywordMatch(t *testing.T
 		}, nil
 	})})
 
-	articles, err := FetchReddit(source, keywords, since)
+	result, err := FetchReddit(source, keywords, since)
 	if err != nil {
 		t.Fatalf("FetchReddit() error = %v", err)
 	}
-	if len(articles) != 0 {
-		t.Fatalf("len(articles) = %d, want 0", len(articles))
+	if len(result.Candidates) != 1 {
+		t.Fatalf("len(result.Candidates) = %d, want 1", len(result.Candidates))
+	}
+	if len(result.Candidates[0].MatchedKeywords) != 0 {
+		t.Fatalf("MatchedKeywords = %#v, want empty", result.Candidates[0].MatchedKeywords)
 	}
 }

@@ -27,41 +27,33 @@ type redditPost struct {
 	Selftext  string  `json:"selftext"`
 }
 
-func FetchReddit(source config.Source, keywords []string, since time.Time) ([]model.Article, error) {
+func FetchReddit(source config.Source, keywords []string, since time.Time) (sourceFetchResult, error) {
 	client := HTTPClient()
 
 	req, err := http.NewRequest("GET", source.URL, nil)
 	if err != nil {
-		return nil, err
+		return sourceFetchResult{}, err
 	}
 
 	resp, err := client.Do(req)
 	if err != nil {
-		return nil, err
+		return sourceFetchResult{}, err
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != 200 {
-		return nil, fmt.Errorf("http error: %d %s", resp.StatusCode, resp.Status)
+		return sourceFetchResult{}, fmt.Errorf("http error: %d %s", resp.StatusCode, resp.Status)
 	}
 
 	var listing redditListing
 	if err := json.NewDecoder(resp.Body).Decode(&listing); err != nil {
-		return nil, err
+		return sourceFetchResult{}, err
 	}
 
-	var articles []model.Article
+	result := sourceFetchResult{Source: source}
 	for _, child := range listing.Data.Children {
 		post := child.Data
 		pub := time.Unix(int64(post.Created), 0)
-
-		if pub.Before(since) {
-			continue
-		}
-
-		if !matchKeywords(post.Title+" "+post.Selftext, keywords) {
-			continue
-		}
 
 		link := post.URL
 		if link == "" || link == "https://www.reddit.com"+post.Permalink {
@@ -76,15 +68,18 @@ func FetchReddit(source config.Source, keywords []string, since time.Time) ([]mo
 			summary = fmt.Sprintf("Score: %d", post.Score)
 		}
 
-		articles = append(articles, model.Article{
-			Title:     post.Title,
-			Link:      link,
-			Summary:   summary,
-			Source:    source.Name,
-			Category:  source.Category,
-			Published: pub,
+		result.Candidates = append(result.Candidates, fetchedCandidate{
+			Article: model.Article{
+				Title:     post.Title,
+				Link:      link,
+				Summary:   summary,
+				Source:    source.Name,
+				Category:  source.Category,
+				Published: pub,
+			},
+			MatchedKeywords: matchedKeywords(post.Title+" "+post.Selftext, keywords),
 		})
 	}
 
-	return articles, nil
+	return result, nil
 }

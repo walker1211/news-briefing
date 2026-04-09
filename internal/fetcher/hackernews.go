@@ -22,18 +22,18 @@ type hnItem struct {
 	Type  string `json:"type"`
 }
 
-func FetchHackerNews(source config.Source, keywords []string, since time.Time) ([]model.Article, error) {
+func FetchHackerNews(source config.Source, keywords []string, since time.Time) (sourceFetchResult, error) {
 	client := HTTPClient()
 
 	resp, err := client.Get(hnBaseURL + "/topstories.json")
 	if err != nil {
-		return nil, err
+		return sourceFetchResult{}, err
 	}
 	defer resp.Body.Close()
 
 	var ids []int
 	if err := json.NewDecoder(resp.Body).Decode(&ids); err != nil {
-		return nil, err
+		return sourceFetchResult{}, err
 	}
 
 	if len(ids) > 60 {
@@ -41,9 +41,9 @@ func FetchHackerNews(source config.Source, keywords []string, since time.Time) (
 	}
 
 	var (
-		mu       sync.Mutex
-		articles []model.Article
-		wg       sync.WaitGroup
+		mu         sync.Mutex
+		candidates []fetchedCandidate
+		wg         sync.WaitGroup
 	)
 
 	sem := make(chan struct{}, 10)
@@ -61,29 +61,25 @@ func FetchHackerNews(source config.Source, keywords []string, since time.Time) (
 			}
 
 			pub := time.Unix(item.Time, 0)
-			if pub.Before(since) {
-				return
-			}
-
-			if !matchKeywords(item.Title, keywords) {
-				return
-			}
 
 			mu.Lock()
-			articles = append(articles, model.Article{
-				Title:     item.Title,
-				Link:      item.URL,
-				Summary:   fmt.Sprintf("HN Score: %d", item.Score),
-				Source:    source.Name,
-				Category:  source.Category,
-				Published: pub,
+			candidates = append(candidates, fetchedCandidate{
+				Article: model.Article{
+					Title:     item.Title,
+					Link:      item.URL,
+					Summary:   fmt.Sprintf("HN Score: %d", item.Score),
+					Source:    source.Name,
+					Category:  source.Category,
+					Published: pub,
+				},
+				MatchedKeywords: matchedKeywords(item.Title, keywords),
 			})
 			mu.Unlock()
 		}(id)
 	}
 
 	wg.Wait()
-	return articles, nil
+	return sourceFetchResult{Source: source, Candidates: candidates}, nil
 }
 
 func fetchHNItem(client *http.Client, id int) (*hnItem, error) {

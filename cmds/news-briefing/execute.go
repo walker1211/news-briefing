@@ -16,24 +16,27 @@ import (
 )
 
 type app struct {
-	cfg           *config.Config
-	now           func() time.Time
-	startCron     func(*config.Config, func(scheduler.Window)) error
-	waitForever   func()
-	fetchAll      func(*config.Config, bool) ([]model.Article, []fetcher.FailedSource, error)
-	fetchWindow   func(*config.Config, time.Time, time.Time, bool, bool) ([]model.Article, []fetcher.FailedSource, error)
-	summarize     func([]model.Article, []string, *time.Location) (string, error)
-	translate     func([]model.Article, []string, *time.Location) (string, error)
-	deepDive      func(string, []model.Article, *time.Location) (string, error)
-	composeBody   func(string, model.OutputMode, model.OutputContent) (string, error)
-	printText     func(string)
-	printFailed   func([]fetcher.FailedSource)
-	printArticles func([]model.Article)
-	printCLI      func(*model.Briefing)
-	writeMarkdown func(*model.Briefing, string) (string, error)
-	sendEmail     func(*model.Briefing, *config.Config, []fetcher.FailedSource) error
-	sendDeepEmail func(string, *model.Briefing, *config.Config, []fetcher.FailedSource) error
-	writeDeepDive func(string, string, string, string) (string, error)
+	cfg                  *config.Config
+	now                  func() time.Time
+	startCron            func(*config.Config, func(scheduler.Window)) error
+	waitForever          func()
+	fetchAll             func(*config.Config, bool) ([]model.Article, []fetcher.FailedSource, error)
+	fetchAllWithIndex    func(*config.Config, bool) ([]model.Article, []fetcher.FailedSource, model.SourceIndex, error)
+	fetchWindow          func(*config.Config, time.Time, time.Time, bool, bool) ([]model.Article, []fetcher.FailedSource, error)
+	fetchWindowWithIndex func(*config.Config, time.Time, time.Time, bool, bool) ([]model.Article, []fetcher.FailedSource, model.SourceIndex, error)
+	summarize            func([]model.Article, []string, *time.Location) (string, error)
+	translate            func([]model.Article, []string, *time.Location) (string, error)
+	deepDive             func(string, []model.Article, *time.Location) (string, error)
+	composeBody          func(string, model.OutputMode, model.OutputContent) (string, error)
+	printText            func(string)
+	printFailed          func([]fetcher.FailedSource)
+	printArticles        func([]model.Article)
+	printCLI             func(*model.Briefing)
+	writeMarkdown        func(*model.Briefing, string) (string, error)
+	writeSourceIndex     func(string, model.SourceIndex) (string, error)
+	sendEmail            func(*model.Briefing, *config.Config, []fetcher.FailedSource) error
+	sendDeepEmail        func(string, *model.Briefing, *config.Config, []fetcher.FailedSource) error
+	writeDeepDive        func(string, string, string, string) (string, error)
 }
 
 func newApp(cfg *config.Config) *app {
@@ -45,14 +48,16 @@ func newApp(cfg *config.Config) *app {
 		waitForever: func() {
 			select {}
 		},
-		fetchAll:    fetcher.FetchAll,
-		fetchWindow: fetcher.FetchWindow,
-		summarize:   runner.Summarize,
-		translate:   runner.Translate,
-		deepDive:    runner.DeepDive,
-		composeBody: output.FormatBody,
-		printText:   func(s string) { fmt.Println(s) },
-		printFailed: fetcher.PrintFailed,
+		fetchAll:             fetcher.FetchAll,
+		fetchAllWithIndex:    fetcher.FetchAllWithIndex,
+		fetchWindow:          fetcher.FetchWindow,
+		fetchWindowWithIndex: fetcher.FetchWindowWithIndex,
+		summarize:            runner.Summarize,
+		translate:            runner.Translate,
+		deepDive:             runner.DeepDive,
+		composeBody:          output.FormatBody,
+		printText:            func(s string) { fmt.Println(s) },
+		printFailed:          fetcher.PrintFailed,
 		printArticles: func(articles []model.Article) {
 			loc := cfg.ScheduleLocation
 			if loc == nil {
@@ -60,11 +65,12 @@ func newApp(cfg *config.Config) *app {
 			}
 			printArticles(articles, categoryOrderFromSources(cfg.Sources), loc)
 		},
-		printCLI:      output.PrintCLI,
-		writeMarkdown: output.WriteMarkdown,
-		sendEmail:     output.SendEmail,
-		sendDeepEmail: output.SendDeepEmail,
-		writeDeepDive: output.WriteDeepDive,
+		printCLI:         output.PrintCLI,
+		writeMarkdown:    output.WriteMarkdown,
+		writeSourceIndex: output.WriteSourceIndex,
+		sendEmail:        output.SendEmail,
+		sendDeepEmail:    output.SendDeepEmail,
+		writeDeepDive:    output.WriteDeepDive,
 	}
 }
 
@@ -172,16 +178,22 @@ func (app *app) runFetch(cmd fetchCommand) error {
 
 func (app *app) runBriefing(commandPath string, period string, showRaw bool, sendEmail bool) error {
 	fmt.Println("Fetching news...")
-	articles, failed, err := app.fetchAll(app.cfg, true)
+	if app.fetchAllWithIndex == nil {
+		app.fetchAllWithIndex = fetcher.FetchAllWithIndex
+	}
+	articles, failed, index, err := app.fetchAllWithIndex(app.cfg, true)
 	if err != nil {
 		return err
 	}
-	return app.renderBriefing(commandPath, app.currentTime().Format("06.01.02"), period, articles, failed, showRaw, sendEmail)
+	return app.renderBriefing(commandPath, app.currentTime().Format("06.01.02"), period, articles, failed, index, showRaw, sendEmail)
 }
 
 func (app *app) runScheduledBriefing(window scheduler.Window, sendEmail bool) error {
 	fmt.Println("Fetching news...")
-	articles, failed, err := app.fetchWindow(app.cfg, window.From, window.To, true, false)
+	if app.fetchWindowWithIndex == nil {
+		app.fetchWindowWithIndex = fetcher.FetchWindowWithIndex
+	}
+	articles, failed, index, err := app.fetchWindowWithIndex(app.cfg, window.From, window.To, true, false)
 	if err != nil {
 		return err
 	}
@@ -189,7 +201,7 @@ func (app *app) runScheduledBriefing(window scheduler.Window, sendEmail bool) er
 	if loc == nil {
 		loc = time.Local
 	}
-	return app.renderBriefing("serve", window.To.In(loc).Format("06.01.02"), window.Period, articles, failed, false, sendEmail)
+	return app.renderBriefing("serve", window.To.In(loc).Format("06.01.02"), window.Period, articles, failed, index, false, sendEmail)
 }
 
 func (app *app) runRegen(cmd regenCommand) error {
@@ -214,14 +226,17 @@ func (app *app) runRegen(cmd regenCommand) error {
 	}
 
 	fmt.Printf("Fetching news for window %s ~ %s...\n", from.Format("2006-01-02 15:04"), to.Format("2006-01-02 15:04"))
-	articles, failed, err := app.fetchWindow(app.cfg, from, to, false, cmd.ignoreSeen)
+	if app.fetchWindowWithIndex == nil {
+		app.fetchWindowWithIndex = fetcher.FetchWindowWithIndex
+	}
+	articles, failed, index, err := app.fetchWindowWithIndex(app.cfg, from, to, false, cmd.ignoreSeen)
 	if err != nil {
 		return err
 	}
-	return app.renderBriefing("regen", to.Format("06.01.02"), period, articles, failed, cmd.raw, cmd.sendEmail)
+	return app.renderBriefing("regen", to.Format("06.01.02"), period, articles, failed, index, cmd.raw, cmd.sendEmail)
 }
 
-func (app *app) renderBriefing(commandPath string, date string, period string, articles []model.Article, failed []fetcher.FailedSource, showRaw bool, sendEmail bool) error {
+func (app *app) renderBriefing(commandPath string, date string, period string, articles []model.Article, failed []fetcher.FailedSource, index model.SourceIndex, showRaw bool, sendEmail bool) error {
 	fmt.Printf("Found %d articles after filtering.\n", len(articles))
 	app.printFailed(failed)
 	if app.composeBody == nil {
@@ -269,6 +284,13 @@ func (app *app) renderBriefing(commandPath string, date string, period string, a
 		fmt.Fprintf(os.Stderr, "Error writing markdown: %v\n", err)
 	} else {
 		fmt.Printf("Markdown saved: %s\n", path)
+		if app.writeSourceIndex != nil {
+			if indexPath, indexErr := app.writeSourceIndex(path, index); indexErr != nil {
+				fmt.Fprintf(os.Stderr, "Error writing source index: %v\n", indexErr)
+			} else {
+				fmt.Printf("Source index saved: %s\n", indexPath)
+			}
+		}
 	}
 
 	if !sendEmail {

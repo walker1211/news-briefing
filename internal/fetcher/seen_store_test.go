@@ -79,6 +79,40 @@ func TestSeenStoreLoadRejectsCorruptJSON(t *testing.T) {
 	}
 }
 
+func TestDedupMarksSeenBeforeSeparately(t *testing.T) {
+	dir := t.TempDir()
+	canonicalDir := filepath.Join(dir, "output", "state")
+	if err := os.MkdirAll(canonicalDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+	seen := fmt.Sprintf(`[
+  {"url":"https://example.com/a","time":%q}
+]`, time.Now().Add(-24*time.Hour).UTC().Format(time.RFC3339))
+	if err := os.WriteFile(filepath.Join(canonicalDir, "seen.json"), []byte(seen), 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	cwd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("Getwd() error = %v", err)
+	}
+	defer func() { _ = os.Chdir(cwd) }()
+	if err := os.Chdir(dir); err != nil {
+		t.Fatalf("Chdir() error = %v", err)
+	}
+
+	outcome, err := Dedup([]model.Article{{Title: "seen", Link: "https://example.com/a"}, {Title: "new", Link: "https://example.com/b"}}, false, NewSeenStore("output"))
+	if err != nil {
+		t.Fatalf("Dedup() error = %v", err)
+	}
+	if len(outcome.Articles) != 1 || outcome.Articles[0].Link != "https://example.com/b" {
+		t.Fatalf("outcome.Articles = %#v", outcome.Articles)
+	}
+	if _, ok := outcome.SeenBeforeKeys["https://example.com/a"]; !ok {
+		t.Fatalf("SeenBeforeKeys = %#v, want seen key recorded", outcome.SeenBeforeKeys)
+	}
+}
+
 func TestDedupWithLegacySeenWritesCanonicalStore(t *testing.T) {
 	dir := t.TempDir()
 	legacyPath := filepath.Join(dir, "seen.json")
@@ -99,9 +133,12 @@ func TestDedupWithLegacySeenWritesCanonicalStore(t *testing.T) {
 	}
 
 	articles := []model.Article{{Title: "new", Link: "https://example.com/b"}}
-	_, err = Dedup(articles, true, NewSeenStore("output"))
+	outcome, err := Dedup(articles, true, NewSeenStore("output"))
 	if err != nil {
 		t.Fatalf("Dedup() error = %v", err)
+	}
+	if len(outcome.Articles) != 1 {
+		t.Fatalf("len(Dedup(...).Articles) = %d, want 1", len(outcome.Articles))
 	}
 
 	canonicalPath := filepath.Join(dir, "output", "state", "seen.json")
