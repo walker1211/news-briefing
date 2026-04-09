@@ -55,8 +55,10 @@ func TestSourceIndexTypesStatuses(t *testing.T) {
 		model.TraceStatusOutOfWindow,
 		model.TraceStatusDuplicateInBatch,
 		model.TraceStatusSeenBefore,
+		model.TraceStatusMissingAcceptableTime,
+		model.TraceStatusNonReleasePage,
 	}
-	want := []string{"included", "keyword_miss", "out_of_window", "duplicate_in_batch", "seen_before"}
+	want := []string{"included", "keyword_miss", "out_of_window", "duplicate_in_batch", "seen_before", "missing_acceptable_time", "non_release_page"}
 	for i, status := range statuses {
 		if string(status) != want[i] {
 			t.Fatalf("status[%d] = %q, want %q", i, string(status), want[i])

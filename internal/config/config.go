@@ -24,10 +24,13 @@ type Config struct {
 }
 
 type Source struct {
-	Name     string `yaml:"name"`
-	URL      string `yaml:"url"`
-	Type     string `yaml:"type"` // "rss"、"hackernews" 或 "reddit"
-	Category string `yaml:"category"`
+	Name     string   `yaml:"name"`
+	URL      string   `yaml:"url"`
+	Type     string   `yaml:"type"` // 如 "rss"、"hackernews"、"reddit"、"docs_page"、"repo_page"
+	Category string   `yaml:"category"`
+	Keywords []string `yaml:"keywords"`
+	PageKind string   `yaml:"page_kind"`
+	TimeHint string   `yaml:"time_hint"`
 }
 
 type Email struct {

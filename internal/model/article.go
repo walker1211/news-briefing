@@ -14,12 +14,14 @@ type Article struct {
 type TraceStatus string
 
 const (
-	TraceStatusIncluded         TraceStatus = "included"
-	TraceStatusKeywordMiss      TraceStatus = "keyword_miss"
-	TraceStatusOutOfWindow      TraceStatus = "out_of_window"
-	TraceStatusDuplicateInBatch TraceStatus = "duplicate_in_batch"
-	TraceStatusSeenBefore       TraceStatus = "seen_before"
-	TraceStatusFetchFailed      TraceStatus = "fetch_failed"
+	TraceStatusIncluded              TraceStatus = "included"
+	TraceStatusKeywordMiss           TraceStatus = "keyword_miss"
+	TraceStatusOutOfWindow           TraceStatus = "out_of_window"
+	TraceStatusDuplicateInBatch      TraceStatus = "duplicate_in_batch"
+	TraceStatusSeenBefore            TraceStatus = "seen_before"
+	TraceStatusFetchFailed           TraceStatus = "fetch_failed"
+	TraceStatusMissingAcceptableTime TraceStatus = "missing_acceptable_time"
+	TraceStatusNonReleasePage        TraceStatus = "non_release_page"
 )
 
 type ArticleTrace struct {

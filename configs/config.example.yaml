@@ -75,6 +75,18 @@ sources:
     url: https://feeds.a.dj.com/rss/RSSWorldNews.xml
     type: rss
     category: 国际政治
+  - name: UN News
+    url: https://news.un.org/feed/subscribe/en/news/all/rss.xml
+    type: rss
+    category: 国际政治
+  - name: EU Press Corner
+    url: https://ec.europa.eu/commission/presscorner/api/rss?language=en
+    type: rss
+    category: 国际政治
+  - name: The Diplomat
+    url: https://thediplomat.com/feed/
+    type: rss
+    category: 国际政治
 
 keywords:
   - AI
@@ -109,10 +121,7 @@ keywords:
   - GLM
   - SWE
   - WildDet3D
-  - ACE-Step
   - Harrier
-  - EUPE
-  - FIPO
   - warp decode
   - chip
   - semiconductor

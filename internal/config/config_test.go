@@ -310,6 +310,52 @@ proxy: {}
 	}
 }
 
+func TestLoadSupportsPageSourcesAndScopedKeywords(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	content := `sources:
+  - name: GLM Docs
+    url: https://example.com/glm
+    type: docs_page
+    category: AI/科技
+    keywords:
+      - GLM
+    page_kind: announcement
+    time_hint: published
+keywords: []
+email:
+  smtp_host: smtp.example.com
+  smtp_port: 465
+  from: from@example.com
+  to: to@example.com
+schedule: []
+output: {}
+proxy: {}
+`
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if len(cfg.Sources) != 1 {
+		t.Fatalf("len(Sources) = %d, want %d", len(cfg.Sources), 1)
+	}
+
+	source := cfg.Sources[0]
+	if !reflect.DeepEqual(source.Keywords, []string{"GLM"}) {
+		t.Fatalf("Source.Keywords = %v, want %v", source.Keywords, []string{"GLM"})
+	}
+	if source.PageKind != "announcement" {
+		t.Fatalf("Source.PageKind = %q, want %q", source.PageKind, "announcement")
+	}
+	if source.TimeHint != "published" {
+		t.Fatalf("Source.TimeHint = %q, want %q", source.TimeHint, "published")
+	}
+}
+
 func TestProjectConfigIncludesDiscoveryEnhancementAISources(t *testing.T) {
 	configPaths := map[string]string{
 		"project": filepath.Join("..", "..", "configs", "config.yaml"),
@@ -328,16 +374,28 @@ func TestProjectConfigIncludesDiscoveryEnhancementAISources(t *testing.T) {
 				t.Fatalf("Load() error = %v", err)
 			}
 
-			got := make(map[Source]struct{}, len(cfg.Sources))
+			got := make(map[string]Source, len(cfg.Sources))
 			for _, source := range cfg.Sources {
-				if _, exists := got[source]; exists {
+				key := source.Name + "|" + source.URL + "|" + source.Type + "|" + source.Category
+				if _, exists := got[key]; exists {
 					t.Fatalf("duplicate source found: %+v", source)
 				}
-				got[source] = struct{}{}
+				got[key] = source
 			}
 			for _, source := range want {
-				if _, exists := got[source]; !exists {
+				key := source.Name + "|" + source.URL + "|" + source.Type + "|" + source.Category
+				gotSource, exists := got[key]
+				if !exists {
 					t.Fatalf("missing discovery enhancement source: %+v", source)
+				}
+				if len(gotSource.Keywords) != 0 {
+					t.Fatalf("Source.Keywords for %q = %v, want empty", gotSource.Name, gotSource.Keywords)
+				}
+				if gotSource.PageKind != "" {
+					t.Fatalf("Source.PageKind for %q = %q, want empty", gotSource.Name, gotSource.PageKind)
+				}
+				if gotSource.TimeHint != "" {
+					t.Fatalf("Source.TimeHint for %q = %q, want empty", gotSource.Name, gotSource.TimeHint)
 				}
 			}
 		})
@@ -349,8 +407,8 @@ func TestProjectConfigIncludesDiscoveryEnhancementAIKeywords(t *testing.T) {
 		"project": filepath.Join("..", "..", "configs", "config.yaml"),
 		"example": filepath.Join("..", "..", "configs", "config.example.yaml"),
 	}
-	want := []string{"AllenAI", "Ai2", "GLM-5.1"}
-	rejected := []string{"GLM", "BigModel", "z.ai", "ACE Studio", "StepFun", "HappyHorse", "Paper Review", "BYOK", "Terafab"}
+	want := []string{"AllenAI", "Ai2", "GLM"}
+	rejected := []string{"BigModel", "z.ai", "ACE Studio", "StepFun", "HappyHorse", "Paper Review", "BYOK", "Terafab"}
 
 	for name, configPath := range configPaths {
 		t.Run(name, func(t *testing.T) {

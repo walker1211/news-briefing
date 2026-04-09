@@ -22,6 +22,7 @@ var sleep = time.Sleep
 type fetchedCandidate struct {
 	Article         model.Article
 	MatchedKeywords []string
+	Status          model.TraceStatus
 }
 
 type sourceFetchResult struct {
@@ -43,6 +44,14 @@ var fetchRedditDirect = func(src config.Source, keywords []string, since time.Ti
 
 var fetchRedditSource = func(src config.Source, keywords []string, since time.Time) (sourceFetchResult, error) {
 	return fetchWithRetry(src, keywords, since)
+}
+
+var fetchDocsPageSource = func(src config.Source, keywords []string, since time.Time) (sourceFetchResult, error) {
+	return FetchDocsPage(src, keywords, since)
+}
+
+var fetchRepoPageSource = func(src config.Source, keywords []string, since time.Time) (sourceFetchResult, error) {
+	return FetchRepoPage(src, keywords, since)
 }
 
 // isRateLimited 检测是否为 429 限流响应
@@ -176,6 +185,12 @@ func FetchWindowWithIndex(cfg *config.Config, from, to time.Time, markSeen bool,
 			index.ArticleTraces = append(index.ArticleTraces, trace)
 			traceIndex := len(index.ArticleTraces) - 1
 			traceRef := &index.ArticleTraces[traceIndex]
+
+			if candidate.Status == model.TraceStatusMissingAcceptableTime || candidate.Status == model.TraceStatusNonReleasePage {
+				traceRef.Status = candidate.Status
+				traceRef.RejectionReason = string(candidate.Status)
+				continue
+			}
 
 			if len(candidate.MatchedKeywords) == 0 {
 				traceRef.Status = model.TraceStatusKeywordMiss
@@ -328,6 +343,10 @@ func fetchWithRetry(src config.Source, keywords []string, since time.Time) (sour
 			result, err = fetchHackerNewsSource(src, keywords, since)
 		case "reddit":
 			result, err = fetchRedditDirect(src, keywords, since)
+		case "docs_page":
+			result, err = fetchDocsPageSource(src, keywords, since)
+		case "repo_page":
+			result, err = fetchRepoPageSource(src, keywords, since)
 		default:
 			return sourceFetchResult{}, fmt.Errorf("unknown source type for %s: %s", src.Name, src.Type)
 		}
