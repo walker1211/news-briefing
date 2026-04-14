@@ -98,10 +98,11 @@ Commands:
   news-briefing fetch [--zh]      仅抓取新闻，显示原始文章列表（--zh 翻译成中文）
   news-briefing serve             守护模式，按 configs/config.yaml 中 schedule 配置自动执行
   news-briefing deep <topic>      深挖某话题，生成话题深挖包
+  news-briefing resend-md --file <path>  按已有 Markdown 重发邮件
   news-briefing help              显示此帮助
 
 Note:
-  可执行文件名为 news-briefing；子命令包括 run / regen / fetch / serve / deep / help
+  可执行文件名为 news-briefing；子命令包括 run / regen / fetch / serve / deep / resend-md / help
 
 Flags (for run):
   --raw                  同时显示原始文章列表
@@ -138,7 +139,8 @@ Examples:
   news-briefing deep "Claude" --send-email
   news-briefing deep "Claude" --ignore-seen
   news-briefing deep "Claude" --from "2026-03-28 00:00" --to "2026-03-29 23:59"
-  news-briefing deep "Claude" --from "2026-03-28 00:00" --to "2026-03-29 23:59" --ignore-seen`
+  news-briefing deep "Claude" --from "2026-03-28 00:00" --to "2026-03-29 23:59" --ignore-seen
+  news-briefing resend-md --file output/26.04.13-晚间-1800.md`
 }
 
 func currentPeriod() string {

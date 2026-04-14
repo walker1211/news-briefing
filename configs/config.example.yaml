@@ -153,6 +153,10 @@ email:
   smtp_port: 465
   from: from@example.com
   to: to@example.com
+  timeout: 3s
+  retry_times: 3
+  retry_wait_time: 500ms
+  use_proxy: false
 
 schedule:
   - "0 6 * * *"

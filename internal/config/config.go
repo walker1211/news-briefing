@@ -34,10 +34,17 @@ type Source struct {
 }
 
 type Email struct {
-	SMTPHost string `yaml:"smtp_host"`
-	SMTPPort int    `yaml:"smtp_port"`
-	From     string `yaml:"from"`
-	To       string `yaml:"to"`
+	SMTPHost         string        `yaml:"smtp_host"`
+	SMTPPort         int           `yaml:"smtp_port"`
+	From             string        `yaml:"from"`
+	To               string        `yaml:"to"`
+	TimeoutRaw       string        `yaml:"timeout"`
+	RetryTimesRaw    *int          `yaml:"retry_times"`
+	RetryWaitTimeRaw string        `yaml:"retry_wait_time"`
+	UseProxy         bool          `yaml:"use_proxy"`
+	Timeout          time.Duration `yaml:"-"`
+	RetryTimes       int           `yaml:"-"`
+	RetryWaitTime    time.Duration `yaml:"-"`
 }
 
 // Schedule 定时任务列表，每项为一个 cron 表达式
@@ -76,6 +83,43 @@ func resolveScheduleLocation(name string) (*time.Location, error) {
 	return loc, nil
 }
 
+func applyEmailDefaults(email *Email) error {
+	if strings.TrimSpace(email.TimeoutRaw) == "" {
+		email.TimeoutRaw = "3s"
+	}
+	if email.RetryTimesRaw == nil {
+		defaultRetries := 3
+		email.RetryTimesRaw = &defaultRetries
+	}
+	if strings.TrimSpace(email.RetryWaitTimeRaw) == "" {
+		email.RetryWaitTimeRaw = "500ms"
+	}
+
+	timeout, err := time.ParseDuration(strings.TrimSpace(email.TimeoutRaw))
+	if err != nil {
+		return fmt.Errorf("parse email.timeout: %w", err)
+	}
+	if timeout <= 0 {
+		return fmt.Errorf("validate email.timeout: must be greater than 0")
+	}
+
+	wait, err := time.ParseDuration(strings.TrimSpace(email.RetryWaitTimeRaw))
+	if err != nil {
+		return fmt.Errorf("parse email.retry_wait_time: %w", err)
+	}
+	if wait < 0 {
+		return fmt.Errorf("validate email.retry_wait_time: must be zero or greater")
+	}
+	if *email.RetryTimesRaw < 1 {
+		return fmt.Errorf("validate email.retry_times: must be at least 1")
+	}
+
+	email.Timeout = timeout
+	email.RetryTimes = *email.RetryTimesRaw
+	email.RetryWaitTime = wait
+	return nil
+}
+
 func Load(configPath string) (*Config, error) {
 	_ = godotenv.Load()
 
@@ -109,6 +153,9 @@ func Load(configPath string) (*Config, error) {
 		return nil, err
 	}
 	cfg.ScheduleLocation = loc
+	if err := applyEmailDefaults(&cfg.Email); err != nil {
+		return nil, err
+	}
 
 	return &cfg, nil
 }

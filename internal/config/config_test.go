@@ -310,6 +310,156 @@ proxy: {}
 	}
 }
 
+func TestLoadAppliesDefaultEmailDeliveryConfig(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	content := `sources: []
+keywords: []
+email:
+  smtp_host: smtp.example.com
+  smtp_port: 465
+  from: from@example.com
+  to: to@example.com
+schedule: []
+output: {}
+proxy: {}
+`
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+
+	if cfg.Email.Timeout != 3*time.Second {
+		t.Fatalf("Email.Timeout = %v, want %v", cfg.Email.Timeout, 3*time.Second)
+	}
+	if cfg.Email.RetryTimes != 3 {
+		t.Fatalf("Email.RetryTimes = %d, want %d", cfg.Email.RetryTimes, 3)
+	}
+	if cfg.Email.RetryWaitTime != 500*time.Millisecond {
+		t.Fatalf("Email.RetryWaitTime = %v, want %v", cfg.Email.RetryWaitTime, 500*time.Millisecond)
+	}
+	if cfg.Email.UseProxy {
+		t.Fatalf("Email.UseProxy = true, want false")
+	}
+}
+
+func TestLoadParsesConfiguredEmailDeliveryConfig(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	content := `sources: []
+keywords: []
+email:
+  smtp_host: smtp.example.com
+  smtp_port: 465
+  from: from@example.com
+  to: to@example.com
+  timeout: 4s
+  retry_times: 2
+  retry_wait_time: 250ms
+  use_proxy: true
+schedule: []
+output: {}
+proxy: {}
+`
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+
+	if cfg.Email.Timeout != 4*time.Second {
+		t.Fatalf("Email.Timeout = %v, want %v", cfg.Email.Timeout, 4*time.Second)
+	}
+	if cfg.Email.RetryTimes != 2 {
+		t.Fatalf("Email.RetryTimes = %d, want %d", cfg.Email.RetryTimes, 2)
+	}
+	if cfg.Email.RetryWaitTime != 250*time.Millisecond {
+		t.Fatalf("Email.RetryWaitTime = %v, want %v", cfg.Email.RetryWaitTime, 250*time.Millisecond)
+	}
+	if !cfg.Email.UseProxy {
+		t.Fatalf("Email.UseProxy = false, want true")
+	}
+}
+
+func TestLoadRejectsInvalidEmailDeliveryConfig(t *testing.T) {
+	tests := []struct {
+		name    string
+		config  string
+		wantErr string
+	}{
+		{
+			name: "bad timeout",
+			config: `sources: []
+keywords: []
+email:
+  smtp_host: smtp.example.com
+  smtp_port: 465
+  from: from@example.com
+  to: to@example.com
+  timeout: nope
+schedule: []
+output: {}
+proxy: {}
+`,
+			wantErr: "email.timeout",
+		},
+		{
+			name: "retry times below one",
+			config: `sources: []
+keywords: []
+email:
+  smtp_host: smtp.example.com
+  smtp_port: 465
+  from: from@example.com
+  to: to@example.com
+  retry_times: 0
+schedule: []
+output: {}
+proxy: {}
+`,
+			wantErr: "email.retry_times",
+		},
+		{
+			name: "negative retry wait",
+			config: `sources: []
+keywords: []
+email:
+  smtp_host: smtp.example.com
+  smtp_port: 465
+  from: from@example.com
+  to: to@example.com
+  retry_wait_time: -1ms
+schedule: []
+output: {}
+proxy: {}
+`,
+			wantErr: "email.retry_wait_time",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dir := t.TempDir()
+			path := filepath.Join(dir, "config.yaml")
+			if err := os.WriteFile(path, []byte(tt.config), 0o644); err != nil {
+				t.Fatalf("write config: %v", err)
+			}
+
+			_, err := Load(path)
+			if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
+				t.Fatalf("Load() error = %v, want %q", err, tt.wantErr)
+			}
+		})
+	}
+}
+
 func TestLoadSupportsPageSourcesAndScopedKeywords(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.yaml")

@@ -1,10 +1,16 @@
 package output
 
 import (
+	"context"
 	"errors"
+	"net"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/walker1211/news-briefing/internal/config"
 	"github.com/walker1211/news-briefing/internal/fetcher"
 	"github.com/walker1211/news-briefing/internal/model"
 )
@@ -90,5 +96,189 @@ func TestBuildDeepEmailBodyAppendsFailedSection(t *testing.T) {
 		if !strings.Contains(got, want) {
 			t.Fatalf("buildDeepEmailBody() = %q, want substring %q", got, want)
 		}
+	}
+}
+
+func TestBriefingSubjectFromMarkdownFilename(t *testing.T) {
+	subject, err := briefingSubjectFromMarkdownFilename("output/26.04.13-晚间-1800.md")
+	if err != nil {
+		t.Fatalf("briefingSubjectFromMarkdownFilename() error = %v", err)
+	}
+	if subject != "国际资讯简报 26.04.13 晚间 18:00" {
+		t.Fatalf("subject = %q", subject)
+	}
+}
+
+func TestBriefingSubjectFromMarkdownFilenameRejectsInvalidName(t *testing.T) {
+	_, err := briefingSubjectFromMarkdownFilename("output/bad-name.md")
+	if err == nil || !strings.Contains(err.Error(), "markdown filename") {
+		t.Fatalf("briefingSubjectFromMarkdownFilename() error = %v", err)
+	}
+}
+
+func TestSendMarkdownFileRejectsFileOutsideOutputDir(t *testing.T) {
+	cfg := &config.Config{Output: config.OutputCfg{Dir: "output"}}
+	err := SendMarkdownFile("/tmp/26.04.13-晚间-1800.md", cfg)
+	if err == nil || !strings.Contains(err.Error(), "outside output dir") {
+		t.Fatalf("SendMarkdownFile() error = %v", err)
+	}
+}
+
+func TestSendMarkdownFileRejectsSymlinkEscapingOutputDir(t *testing.T) {
+	dir := t.TempDir()
+	outsidePath := filepath.Join(dir, "secret.md")
+	if err := os.WriteFile(outsidePath, []byte("secret"), 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+	outputDir := filepath.Join(dir, "output")
+	if err := os.Mkdir(outputDir, 0o755); err != nil {
+		t.Fatalf("Mkdir() error = %v", err)
+	}
+	linkPath := filepath.Join(outputDir, "26.04.13-晚间-1800.md")
+	if err := os.Symlink(outsidePath, linkPath); err != nil {
+		t.Fatalf("Symlink() error = %v", err)
+	}
+
+	cfg := &config.Config{Output: config.OutputCfg{Dir: outputDir}}
+	err := SendMarkdownFile(linkPath, cfg)
+	if err == nil || !strings.Contains(err.Error(), "outside output dir") {
+		t.Fatalf("SendMarkdownFile() error = %v", err)
+	}
+}
+
+func TestSendMarkdownFileRejectsSymlinkPathOutsideOutputDirEvenWhenTargetInside(t *testing.T) {
+	dir := t.TempDir()
+	outputDir := filepath.Join(dir, "output")
+	if err := os.Mkdir(outputDir, 0o755); err != nil {
+		t.Fatalf("Mkdir() error = %v", err)
+	}
+	realPath := filepath.Join(outputDir, "26.04.13-晚间-1800.md")
+	if err := os.WriteFile(realPath, []byte("real body"), 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+	linkDir := filepath.Join(dir, "links")
+	if err := os.Mkdir(linkDir, 0o755); err != nil {
+		t.Fatalf("Mkdir() error = %v", err)
+	}
+	linkPath := filepath.Join(linkDir, "26.04.13-晚间-1800.md")
+	if err := os.Symlink(realPath, linkPath); err != nil {
+		t.Fatalf("Symlink() error = %v", err)
+	}
+
+	cfg := &config.Config{Output: config.OutputCfg{Dir: outputDir}, Email: config.Email{RetryTimes: 1}}
+	oldSend := smtpSend
+	defer func() { smtpSend = oldSend }()
+	smtpSend = func(cfg *config.Config, subject, body, password string) error { return nil }
+	if err := os.Setenv("EMAIL_SMTP_AUTH_CODE", "secret"); err != nil {
+		t.Fatalf("Setenv() error = %v", err)
+	}
+	defer os.Unsetenv("EMAIL_SMTP_AUTH_CODE")
+
+	err := SendMarkdownFile(linkPath, cfg)
+	if err == nil || !strings.Contains(err.Error(), "outside output dir") {
+		t.Fatalf("SendMarkdownFile() error = %v", err)
+	}
+}
+
+func TestEmailDialContextUsesConfiguredSocks5Proxy(t *testing.T) {
+	oldFactory := newSocks5EmailDialContext
+	defer func() { newSocks5EmailDialContext = oldFactory }()
+
+	capturedAddr := ""
+	capturedTimeout := time.Duration(0)
+	newSocks5EmailDialContext = func(proxyAddr string, timeout time.Duration) (func(context.Context, string, string) (net.Conn, error), error) {
+		capturedAddr = proxyAddr
+		capturedTimeout = timeout
+		return func(ctx context.Context, network, address string) (net.Conn, error) {
+			return nil, errors.New("stop")
+		}, nil
+	}
+
+	cfg := &config.Config{
+		Email: config.Email{Timeout: 2 * time.Second, UseProxy: true},
+		Proxy: config.Proxy{Socks5: "socks5://127.0.0.1:1080"},
+	}
+	_, err := newEmailDialContext(cfg)
+	if err != nil {
+		t.Fatalf("newEmailDialContext() error = %v", err)
+	}
+	if capturedAddr != "socks5://127.0.0.1:1080" {
+		t.Fatalf("proxy addr = %q, want socks5://127.0.0.1:1080", capturedAddr)
+	}
+	if capturedTimeout != 2*time.Second {
+		t.Fatalf("timeout = %v, want %v", capturedTimeout, 2*time.Second)
+	}
+}
+
+func TestEmailDialContextRejectsMissingSocks5ProxyWhenEnabled(t *testing.T) {
+	cfg := &config.Config{Email: config.Email{Timeout: time.Second, UseProxy: true}}
+	_, err := newEmailDialContext(cfg)
+	if err == nil || !strings.Contains(err.Error(), "proxy.socks5") {
+		t.Fatalf("newEmailDialContext() error = %v", err)
+	}
+}
+
+func TestEmailDialerDirectIgnoresProxyEnvWhenDisabled(t *testing.T) {
+	oldFactory := newDirectEmailDialContext
+	defer func() { newDirectEmailDialContext = oldFactory }()
+
+	capturedTimeout := time.Duration(0)
+	newDirectEmailDialContext = func(timeout time.Duration) func(ctx context.Context, network, address string) (net.Conn, error) {
+		capturedTimeout = timeout
+		return func(ctx context.Context, network, address string) (net.Conn, error) {
+			return nil, errors.New("stop")
+		}
+	}
+
+	cfg := &config.Config{Email: config.Email{SMTPHost: "smtp.example.com", SMTPPort: 465, Timeout: time.Second, UseProxy: false}}
+	err := deliverSMTPMessage(cfg, "subject", "body", "secret")
+	if err == nil || !strings.Contains(err.Error(), "stop") {
+		t.Fatalf("deliverSMTPMessage() error = %v", err)
+	}
+	if capturedTimeout != time.Second {
+		t.Fatalf("capturedTimeout = %v, want %v", capturedTimeout, time.Second)
+	}
+}
+
+func TestSendEmailWithRetryStopsAfterSuccess(t *testing.T) {
+	cfg := &config.Config{Email: config.Email{RetryTimes: 3, RetryWaitTime: 0, UseProxy: false}}
+	attempts := 0
+	oldSend := smtpSend
+	defer func() { smtpSend = oldSend }()
+	smtpSend = func(cfg *config.Config, subject, body, password string) error {
+		attempts++
+		if attempts < 3 {
+			return errors.New("temporary timeout")
+		}
+		return nil
+	}
+	if err := os.Setenv("EMAIL_SMTP_AUTH_CODE", "secret"); err != nil {
+		t.Fatalf("Setenv() error = %v", err)
+	}
+	defer os.Unsetenv("EMAIL_SMTP_AUTH_CODE")
+
+	if err := sendEmailWithContent(cfg, "subject", "body"); err != nil {
+		t.Fatalf("sendEmailWithContent() error = %v", err)
+	}
+	if attempts != 3 {
+		t.Fatalf("attempts = %d, want 3", attempts)
+	}
+}
+
+func TestSendEmailWithRetryReturnsLastError(t *testing.T) {
+	cfg := &config.Config{Email: config.Email{RetryTimes: 3, RetryWaitTime: 0, UseProxy: false}}
+	oldSend := smtpSend
+	defer func() { smtpSend = oldSend }()
+	smtpSend = func(cfg *config.Config, subject, body, password string) error {
+		return errors.New("temporary timeout")
+	}
+	if err := os.Setenv("EMAIL_SMTP_AUTH_CODE", "secret"); err != nil {
+		t.Fatalf("Setenv() error = %v", err)
+	}
+	defer os.Unsetenv("EMAIL_SMTP_AUTH_CODE")
+
+	err := sendEmailWithContent(cfg, "subject", "body")
+	if err == nil || !strings.Contains(err.Error(), "after 3 attempts") {
+		t.Fatalf("sendEmailWithContent() error = %v", err)
 	}
 }

@@ -793,6 +793,64 @@ func TestRunDeepDiveSendEmailFailureDoesNotFailCommand(t *testing.T) {
 	}
 }
 
+func TestExecuteResendMDSendsMarkdownFile(t *testing.T) {
+	called := false
+	var gotPath string
+	app := &app{
+		cfg: &config.Config{Email: config.Email{To: "test@example.com"}},
+		resendMarkdownEmail: func(path string, cfg *config.Config) error {
+			called = true
+			gotPath = path
+			return nil
+		},
+		printText: func(string) {},
+	}
+
+	if err := execute(app, resendMDCommand{file: "output/26.04.13-晚间-1800.md"}); err != nil {
+		t.Fatalf("execute() error = %v", err)
+	}
+	if !called {
+		t.Fatal("resendMarkdownEmail() was not called")
+	}
+	if gotPath != "output/26.04.13-晚间-1800.md" {
+		t.Fatalf("resendMarkdownEmail() path = %q", gotPath)
+	}
+}
+
+func TestExecuteResendMDReturnsSendError(t *testing.T) {
+	app := &app{
+		cfg: &config.Config{},
+		resendMarkdownEmail: func(path string, cfg *config.Config) error {
+			return errors.New("smtp down")
+		},
+		printText: func(string) {},
+	}
+
+	err := execute(app, resendMDCommand{file: "output/26.04.13-晚间-1800.md"})
+	if err == nil || !strings.Contains(err.Error(), "smtp down") {
+		t.Fatalf("execute() error = %v, want smtp down", err)
+	}
+}
+
+func TestExecuteResendMDPrintsSuccessMessage(t *testing.T) {
+	var printed []string
+	app := &app{
+		cfg:       &config.Config{Email: config.Email{To: "test@example.com"}},
+		printText: func(s string) { printed = append(printed, s) },
+		resendMarkdownEmail: func(path string, cfg *config.Config) error {
+			return nil
+		},
+	}
+
+	if err := execute(app, resendMDCommand{file: "output/26.04.13-晚间-1800.md"}); err != nil {
+		t.Fatalf("execute() error = %v", err)
+	}
+	joined := strings.Join(printed, "\n")
+	if !strings.Contains(joined, "Email resent to test@example.com") {
+		t.Fatalf("printed = %q", joined)
+	}
+}
+
 func sampleExecuteArticles() []model.Article {
 	return []model.Article{{
 		Title:     "OpenAI ships feature",

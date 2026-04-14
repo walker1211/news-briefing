@@ -183,6 +183,34 @@ func TestParseArgsHelpRejects(t *testing.T) {
 	})
 }
 
+func TestParseArgsResendMD(t *testing.T) {
+	cmd, err := parseArgs([]string{"resend-md", "--file", "output/26.04.13-晚间-1800.md"})
+	if err != nil {
+		t.Fatalf("parseArgs() error = %v", err)
+	}
+	resend, ok := cmd.(resendMDCommand)
+	if !ok {
+		t.Fatalf("command type = %T", cmd)
+	}
+	if resend.file != "output/26.04.13-晚间-1800.md" {
+		t.Fatalf("resend file = %q, want %q", resend.file, "output/26.04.13-晚间-1800.md")
+	}
+}
+
+func TestParseArgsResendMDRejectsMissingFile(t *testing.T) {
+	_, err := parseArgs([]string{"resend-md"})
+	if err == nil || !strings.Contains(err.Error(), "--file") {
+		t.Fatalf("parseArgs() error = %v, want missing --file", err)
+	}
+}
+
+func TestParseArgsResendMDRejectsUnknownFlag(t *testing.T) {
+	_, err := parseArgs([]string{"resend-md", "--bad"})
+	if err == nil || !strings.Contains(err.Error(), "unknown flag for resend-md: --bad") {
+		t.Fatalf("parseArgs() error = %v", err)
+	}
+}
+
 func TestParseArgsDeep(t *testing.T) {
 	t.Run("single-word topic", func(t *testing.T) {
 		cmd, err := parseArgs([]string{"deep", "OpenAI"})

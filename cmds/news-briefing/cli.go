@@ -30,14 +30,16 @@ type deepCommand struct {
 	ignoreSeen bool
 	sendEmail  bool
 }
+type resendMDCommand struct{ file string }
 type helpCommand struct{}
 
-func (runCommand) isCommand()   {}
-func (regenCommand) isCommand() {}
-func (fetchCommand) isCommand() {}
-func (serveCommand) isCommand() {}
-func (deepCommand) isCommand()  {}
-func (helpCommand) isCommand()  {}
+func (runCommand) isCommand()      {}
+func (regenCommand) isCommand()    {}
+func (fetchCommand) isCommand()    {}
+func (serveCommand) isCommand()    {}
+func (deepCommand) isCommand()     {}
+func (resendMDCommand) isCommand() {}
+func (helpCommand) isCommand()     {}
 
 func parseArgs(args []string) (command, error) {
 	if len(args) == 0 {
@@ -92,6 +94,12 @@ func parseArgs(args []string) (command, error) {
 			return nil, fmt.Errorf("missing deep topic")
 		}
 		return deepCommand{topic: topic, fromRaw: fromRaw, toRaw: toRaw, ignoreSeen: hasFlagIn(args[1:], "--ignore-seen"), sendEmail: hasFlagIn(args[1:], "--send-email")}, nil
+	case "resend-md":
+		file, ok := readStringFlag(args[1:], "--file")
+		if !ok || file == "" {
+			return nil, fmt.Errorf("--file is required")
+		}
+		return resendMDCommand{file: file}, nil
 	case "help":
 		return helpCommand{}, nil
 	default:
@@ -158,7 +166,7 @@ func normalizeCommandName(name string) string {
 
 func isKnownCommandName(name string) bool {
 	switch name {
-	case "run", "regen", "fetch", "serve", "deep", "help":
+	case "run", "regen", "fetch", "serve", "deep", "resend-md", "help":
 		return true
 	default:
 		return false
@@ -202,6 +210,8 @@ func commandValidationRules(cmd string) (map[string]struct{}, map[string]struct{
 		return nil, nil, false
 	case "deep":
 		return map[string]struct{}{"--ignore-seen": {}, "--send-email": {}}, map[string]struct{}{"--from": {}, "--to": {}}, true
+	case "resend-md":
+		return nil, map[string]struct{}{"--file": {}}, false
 	case "regen":
 		return map[string]struct{}{"--ignore-seen": {}, "--send-email": {}, "--raw": {}}, map[string]struct{}{"--from": {}, "--to": {}, "--period": {}}, false
 	default:

@@ -36,6 +36,7 @@ type app struct {
 	writeSourceIndex     func(string, model.SourceIndex) (string, error)
 	sendEmail            func(*model.Briefing, *config.Config, []fetcher.FailedSource) error
 	sendDeepEmail        func(string, *model.Briefing, *config.Config, []fetcher.FailedSource) error
+	resendMarkdownEmail  func(string, *config.Config) error
 	writeDeepDive        func(string, string, string, string) (string, error)
 }
 
@@ -65,12 +66,13 @@ func newApp(cfg *config.Config) *app {
 			}
 			printArticles(articles, categoryOrderFromSources(cfg.Sources), loc)
 		},
-		printCLI:         output.PrintCLI,
-		writeMarkdown:    output.WriteMarkdown,
-		writeSourceIndex: output.WriteSourceIndex,
-		sendEmail:        output.SendEmail,
-		sendDeepEmail:    output.SendDeepEmail,
-		writeDeepDive:    output.WriteDeepDive,
+		printCLI:            output.PrintCLI,
+		writeMarkdown:       output.WriteMarkdown,
+		writeSourceIndex:    output.WriteSourceIndex,
+		sendEmail:           output.SendEmail,
+		sendDeepEmail:       output.SendDeepEmail,
+		resendMarkdownEmail: output.SendMarkdownFile,
+		writeDeepDive:       output.WriteDeepDive,
 	}
 }
 
@@ -118,6 +120,15 @@ func execute(app *app, cmd command) error {
 		return nil
 	case deepCommand:
 		return app.runDeepDive(c)
+	case resendMDCommand:
+		if app.resendMarkdownEmail == nil {
+			app.resendMarkdownEmail = output.SendMarkdownFile
+		}
+		if err := app.resendMarkdownEmail(c.file, app.cfg); err != nil {
+			return err
+		}
+		app.printText(fmt.Sprintf("Email resent to %s", app.cfg.Email.To))
+		return nil
 	case helpCommand:
 		printUsage()
 		return nil
