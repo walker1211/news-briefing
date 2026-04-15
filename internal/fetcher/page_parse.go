@@ -10,10 +10,10 @@ import (
 	"github.com/walker1211/news-briefing/internal/model"
 )
 
-func parsePageSource(src config.Source, html string) (fetchedCandidate, model.TraceStatus, error) {
+func parsePageSource(src config.Source, html string) (fetchedCandidate, bool, error) {
 	doc, err := goquery.NewDocumentFromReader(strings.NewReader(html))
 	if err != nil {
-		return fetchedCandidate{}, "", fmt.Errorf("parse html: %w", err)
+		return fetchedCandidate{}, false, fmt.Errorf("parse html: %w", err)
 	}
 
 	title := extractPageTitle(doc)
@@ -22,12 +22,12 @@ func parsePageSource(src config.Source, html string) (fetchedCandidate, model.Tr
 	matched := matchedKeywords(combinedText, src.Keywords)
 
 	if !hasReleaseEvidence(combinedText) {
-		return fetchedCandidate{}, model.TraceStatusNonReleasePage, nil
+		return fetchedCandidate{}, false, nil
 	}
 
 	published, ok := selectPublishedTime(doc, src.TimeHint, hasStrongReleaseEvidence(combinedText))
 	if !ok {
-		return fetchedCandidate{}, model.TraceStatusMissingAcceptableTime, nil
+		return fetchedCandidate{}, false, nil
 	}
 
 	return fetchedCandidate{
@@ -40,7 +40,7 @@ func parsePageSource(src config.Source, html string) (fetchedCandidate, model.Tr
 			Published: published,
 		},
 		MatchedKeywords: matched,
-	}, "", nil
+	}, true, nil
 }
 
 func extractPageTitle(doc *goquery.Document) string {

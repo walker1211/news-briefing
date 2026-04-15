@@ -8,7 +8,6 @@ import (
 	"time"
 
 	"github.com/walker1211/news-briefing/internal/config"
-	"github.com/walker1211/news-briefing/internal/model"
 )
 
 func FetchDocsPage(src config.Source, _ []string, _ time.Time) (sourceFetchResult, error) {
@@ -43,23 +42,12 @@ func fetchPageSource(src config.Source) (sourceFetchResult, error) {
 		return sourceFetchResult{}, fmt.Errorf("read page body: %w", err)
 	}
 
-	candidate, status, err := parsePageSource(src, string(body))
+	candidate, accepted, err := parsePageSource(src, string(body))
 	if err != nil {
 		return sourceFetchResult{}, err
 	}
-	if status != "" {
-		return sourceFetchResult{
-			Source: src,
-			Candidates: []fetchedCandidate{{
-				Article: model.Article{
-					Title:    src.Name,
-					Link:     src.URL,
-					Source:   src.Name,
-					Category: src.Category,
-				},
-				Status: status,
-			}},
-		}, nil
+	if !accepted {
+		return sourceFetchResult{Source: src}, nil
 	}
 
 	return sourceFetchResult{Source: src, Candidates: []fetchedCandidate{candidate}}, nil

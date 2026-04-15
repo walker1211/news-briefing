@@ -149,7 +149,7 @@ func TestFetchWindowReturnsFailedSourcesWhenDedupErrors(t *testing.T) {
 	}
 }
 
-func TestFetchWindowWithIndexTracksSourceRunsAndTraces(t *testing.T) {
+func TestFetchWindowFiltersCandidatesAndPreservesFailures(t *testing.T) {
 	oldFetch := fetchAllSourcesDetailed
 	defer func() { fetchAllSourcesDetailed = oldFetch }()
 
@@ -161,21 +161,19 @@ func TestFetchWindowWithIndexTracksSourceRunsAndTraces(t *testing.T) {
 	}}
 
 	fetchAllSourcesDetailed = func(cfg *config.Config, since time.Time) ([]sourceFetchResult, []FailedSource, error) {
-		return []sourceFetchResult{
-			{
-				Source: config.Source{Name: "RSS", Type: "rss", Category: "AI/科技"},
-				Candidates: []fetchedCandidate{
-					{Article: model.Article{Title: "miss keyword", Link: "https://example.com/miss", Source: "RSS", Category: "AI/科技", Published: from.Add(time.Hour)}},
-					{Article: model.Article{Title: "out window", Link: "https://example.com/window", Source: "RSS", Category: "AI/科技", Published: to.Add(time.Minute)}, MatchedKeywords: []string{"AI"}},
-					{Article: model.Article{Title: "include", Link: "https://example.com/include", Source: "RSS", Category: "AI/科技", Published: from.Add(2 * time.Hour)}, MatchedKeywords: []string{"AI"}},
-				},
+		return []sourceFetchResult{{
+			Source: config.Source{Name: "RSS", Type: "rss", Category: "AI/科技"},
+			Candidates: []fetchedCandidate{
+				{Article: model.Article{Title: "miss keyword", Link: "https://example.com/miss", Source: "RSS", Category: "AI/科技", Published: from.Add(time.Hour)}},
+				{Article: model.Article{Title: "out window", Link: "https://example.com/window", Source: "RSS", Category: "AI/科技", Published: to.Add(time.Minute)}, MatchedKeywords: []string{"AI"}},
+				{Article: model.Article{Title: "include", Link: "https://example.com/include", Source: "RSS", Category: "AI/科技", Published: from.Add(2 * time.Hour)}, MatchedKeywords: []string{"AI"}},
 			},
-		}, []FailedSource{{Name: "HN", Err: errors.New("boom")}}, nil
+		}}, []FailedSource{{Name: "HN", Err: errors.New("boom")}}, nil
 	}
 
-	articles, failed, index, err := FetchWindowWithIndex(cfg, from, to, false, true)
+	articles, failed, err := FetchWindow(cfg, from, to, false, true)
 	if err != nil {
-		t.Fatalf("FetchWindowWithIndex() error = %v", err)
+		t.Fatalf("FetchWindow() error = %v", err)
 	}
 	if len(articles) != 1 || articles[0].Title != "include" {
 		t.Fatalf("articles = %#v, want included article only", articles)
@@ -183,46 +181,9 @@ func TestFetchWindowWithIndexTracksSourceRunsAndTraces(t *testing.T) {
 	if len(failed) != 1 || failed[0].Name != "HN" {
 		t.Fatalf("failed = %#v, want HN failure preserved", failed)
 	}
-	if len(index.SourceRuns) != 2 {
-		t.Fatalf("len(index.SourceRuns) = %d, want 2", len(index.SourceRuns))
-	}
-
-	var rssRun, hnRun *model.SourceRun
-	for i := range index.SourceRuns {
-		run := &index.SourceRuns[i]
-		switch run.Name {
-		case "RSS":
-			rssRun = run
-		case "HN":
-			hnRun = run
-		}
-	}
-	if rssRun == nil || hnRun == nil {
-		t.Fatalf("SourceRuns = %#v, want RSS and HN entries", index.SourceRuns)
-	}
-	if rssRun.Status != "success" || rssRun.FetchedCount != 3 || rssRun.KeywordMissCount != 1 || rssRun.WindowMissCount != 1 || rssRun.IncludedCount != 1 {
-		t.Fatalf("rssRun = %#v", *rssRun)
-	}
-	if hnRun.Status != string(model.TraceStatusFetchFailed) || !strings.Contains(hnRun.Error, "boom") {
-		t.Fatalf("hnRun = %#v", *hnRun)
-	}
-
-	statusByLink := map[string]model.ArticleTrace{}
-	for _, trace := range index.ArticleTraces {
-		statusByLink[trace.Link] = trace
-	}
-	if got := statusByLink["https://example.com/miss"]; got.Status != model.TraceStatusKeywordMiss || got.RejectionReason != string(model.TraceStatusKeywordMiss) {
-		t.Fatalf("keyword miss trace = %#v", got)
-	}
-	if got := statusByLink["https://example.com/window"]; got.Status != model.TraceStatusOutOfWindow || got.RejectionReason != string(model.TraceStatusOutOfWindow) {
-		t.Fatalf("out of window trace = %#v", got)
-	}
-	if got := statusByLink["https://example.com/include"]; got.Status != model.TraceStatusIncluded || got.RejectionReason != "" || len(got.MatchedKeywords) != 1 {
-		t.Fatalf("included trace = %#v", got)
-	}
 }
 
-func TestFetchWindowWithIndexTracksDuplicateCandidatesPerTrace(t *testing.T) {
+func TestFetchWindowDedupsAcceptedCandidates(t *testing.T) {
 	oldFetch := fetchAllSourcesDetailed
 	defer func() { fetchAllSourcesDetailed = oldFetch }()
 
@@ -240,9 +201,9 @@ func TestFetchWindowWithIndexTracksDuplicateCandidatesPerTrace(t *testing.T) {
 		}}, nil, nil
 	}
 
-	articles, failed, index, err := FetchWindowWithIndex(cfg, from, to, false, true)
+	articles, failed, err := FetchWindow(cfg, from, to, false, true)
 	if err != nil {
-		t.Fatalf("FetchWindowWithIndex() error = %v", err)
+		t.Fatalf("FetchWindow() error = %v", err)
 	}
 	if len(failed) != 0 {
 		t.Fatalf("failed = %#v, want no failed sources", failed)
@@ -250,162 +211,9 @@ func TestFetchWindowWithIndexTracksDuplicateCandidatesPerTrace(t *testing.T) {
 	if len(articles) != 1 || articles[0].Title != "first" {
 		t.Fatalf("articles = %#v, want first article only", articles)
 	}
-	if len(index.ArticleTraces) != 2 {
-		t.Fatalf("len(index.ArticleTraces) = %d, want 2", len(index.ArticleTraces))
-	}
-
-	statuses := map[string]model.TraceStatus{}
-	for _, trace := range index.ArticleTraces {
-		statuses[trace.Title] = trace.Status
-	}
-	if statuses["first"] != model.TraceStatusIncluded {
-		t.Fatalf("first trace status = %q, want %q", statuses["first"], model.TraceStatusIncluded)
-	}
-	if statuses["second"] != model.TraceStatusDuplicateInBatch {
-		t.Fatalf("second trace status = %q, want %q", statuses["second"], model.TraceStatusDuplicateInBatch)
-	}
 }
 
-func TestFetchWindowWithIndexKeepsNewestTraceWhenDuplicateOrderDiffers(t *testing.T) {
-	oldFetch := fetchAllSourcesDetailed
-	defer func() { fetchAllSourcesDetailed = oldFetch }()
-
-	from := time.Date(2026, 3, 18, 8, 0, 0, 0, time.UTC)
-	to := from.Add(6 * time.Hour)
-	cfg := &config.Config{Output: config.OutputCfg{Dir: "output"}, Sources: []config.Source{{Name: "RSS", Type: "rss", Category: "AI/科技"}}}
-
-	fetchAllSourcesDetailed = func(cfg *config.Config, since time.Time) ([]sourceFetchResult, []FailedSource, error) {
-		return []sourceFetchResult{{
-			Source: config.Source{Name: "RSS", Type: "rss", Category: "AI/科技"},
-			Candidates: []fetchedCandidate{
-				{Article: model.Article{Title: "older", Link: "https://example.com/dup-order", Source: "RSS", Category: "AI/科技", Published: from.Add(time.Hour)}, MatchedKeywords: []string{"AI"}},
-				{Article: model.Article{Title: "newer", Link: "https://example.com/dup-order", Source: "RSS", Category: "AI/科技", Published: from.Add(2 * time.Hour)}, MatchedKeywords: []string{"AI"}},
-			},
-		}}, nil, nil
-	}
-
-	articles, _, index, err := FetchWindowWithIndex(cfg, from, to, false, true)
-	if err != nil {
-		t.Fatalf("FetchWindowWithIndex() error = %v", err)
-	}
-	if len(articles) != 1 || articles[0].Title != "newer" {
-		t.Fatalf("articles = %#v, want newer article only", articles)
-	}
-
-	statuses := map[string]model.TraceStatus{}
-	for _, trace := range index.ArticleTraces {
-		statuses[trace.Title] = trace.Status
-	}
-	if statuses["newer"] != model.TraceStatusIncluded {
-		t.Fatalf("newer trace status = %q, want %q", statuses["newer"], model.TraceStatusIncluded)
-	}
-	if statuses["older"] != model.TraceStatusDuplicateInBatch {
-		t.Fatalf("older trace status = %q, want %q", statuses["older"], model.TraceStatusDuplicateInBatch)
-	}
-}
-
-func TestFetchWindowWithIndexDoesNotOverwriteRejectedTraceWithDedupResult(t *testing.T) {
-	oldFetch := fetchAllSourcesDetailed
-	defer func() { fetchAllSourcesDetailed = oldFetch }()
-
-	from := time.Date(2026, 3, 18, 8, 0, 0, 0, time.UTC)
-	to := from.Add(6 * time.Hour)
-	cfg := &config.Config{Output: config.OutputCfg{Dir: "output"}, Sources: []config.Source{{Name: "RSS", Type: "rss", Category: "AI/科技"}}}
-
-	fetchAllSourcesDetailed = func(cfg *config.Config, since time.Time) ([]sourceFetchResult, []FailedSource, error) {
-		return []sourceFetchResult{{
-			Source: config.Source{Name: "RSS", Type: "rss", Category: "AI/科技"},
-			Candidates: []fetchedCandidate{
-				{Article: model.Article{Title: "miss", Link: "https://example.com/mixed", Source: "RSS", Category: "AI/科技", Published: from.Add(time.Hour)}},
-				{Article: model.Article{Title: "include", Link: "https://example.com/mixed", Source: "RSS", Category: "AI/科技", Published: from.Add(2 * time.Hour)}, MatchedKeywords: []string{"AI"}},
-			},
-		}}, nil, nil
-	}
-
-	articles, _, index, err := FetchWindowWithIndex(cfg, from, to, false, true)
-	if err != nil {
-		t.Fatalf("FetchWindowWithIndex() error = %v", err)
-	}
-	if len(articles) != 1 || articles[0].Title != "include" {
-		t.Fatalf("articles = %#v, want include article only", articles)
-	}
-
-	statusByTitle := map[string]model.TraceStatus{}
-	reasonByTitle := map[string]string{}
-	for _, trace := range index.ArticleTraces {
-		statusByTitle[trace.Title] = trace.Status
-		reasonByTitle[trace.Title] = trace.RejectionReason
-	}
-	if statusByTitle["miss"] != model.TraceStatusKeywordMiss || reasonByTitle["miss"] != string(model.TraceStatusKeywordMiss) {
-		t.Fatalf("miss trace = status %q reason %q, want keyword_miss", statusByTitle["miss"], reasonByTitle["miss"])
-	}
-	if statusByTitle["include"] != model.TraceStatusIncluded || reasonByTitle["include"] != "" {
-		t.Fatalf("include trace = status %q reason %q, want included", statusByTitle["include"], reasonByTitle["include"])
-	}
-}
-
-func TestFetchWindowWithIndexMarksAllAcceptedDuplicatesAsSeenBefore(t *testing.T) {
-	oldFetch := fetchAllSourcesDetailed
-	defer func() { fetchAllSourcesDetailed = oldFetch }()
-
-	dir := t.TempDir()
-	canonicalDir := filepath.Join(dir, "output", "state")
-	if err := os.MkdirAll(canonicalDir, 0o755); err != nil {
-		t.Fatalf("MkdirAll() error = %v", err)
-	}
-	seenContent := `[
-	  {"url":"https://example.com/seen-dup","time":"2026-03-17T10:00:00Z"}
-	]`
-	if err := os.WriteFile(filepath.Join(canonicalDir, "seen.json"), []byte(seenContent), 0o644); err != nil {
-		t.Fatalf("WriteFile() error = %v", err)
-	}
-
-	cwd, err := os.Getwd()
-	if err != nil {
-		t.Fatalf("Getwd() error = %v", err)
-	}
-	defer func() { _ = os.Chdir(cwd) }()
-	if err := os.Chdir(dir); err != nil {
-		t.Fatalf("Chdir() error = %v", err)
-	}
-
-	from := time.Date(2026, 3, 18, 8, 0, 0, 0, time.UTC)
-	to := from.Add(6 * time.Hour)
-	cfg := &config.Config{Output: config.OutputCfg{Dir: "output"}, Sources: []config.Source{{Name: "RSS", Type: "rss", Category: "AI/科技"}}}
-
-	fetchAllSourcesDetailed = func(cfg *config.Config, since time.Time) ([]sourceFetchResult, []FailedSource, error) {
-		return []sourceFetchResult{{
-			Source: config.Source{Name: "RSS", Type: "rss", Category: "AI/科技"},
-			Candidates: []fetchedCandidate{
-				{Article: model.Article{Title: "older", Link: "https://example.com/seen-dup", Source: "RSS", Category: "AI/科技", Published: from.Add(time.Hour)}, MatchedKeywords: []string{"AI"}},
-				{Article: model.Article{Title: "newer", Link: "https://example.com/seen-dup", Source: "RSS", Category: "AI/科技", Published: from.Add(2 * time.Hour)}, MatchedKeywords: []string{"AI"}},
-			},
-		}}, nil, nil
-	}
-
-	articles, _, index, err := FetchWindowWithIndex(cfg, from, to, false, false)
-	if err != nil {
-		t.Fatalf("FetchWindowWithIndex() error = %v", err)
-	}
-	if len(articles) != 0 {
-		t.Fatalf("articles = %#v, want no included articles", articles)
-	}
-
-	statusByTitle := map[string]model.TraceStatus{}
-	reasonByTitle := map[string]string{}
-	for _, trace := range index.ArticleTraces {
-		statusByTitle[trace.Title] = trace.Status
-		reasonByTitle[trace.Title] = trace.RejectionReason
-	}
-	if statusByTitle["older"] != model.TraceStatusSeenBefore || reasonByTitle["older"] != string(model.TraceStatusSeenBefore) {
-		t.Fatalf("older trace = status %q reason %q, want seen_before", statusByTitle["older"], reasonByTitle["older"])
-	}
-	if statusByTitle["newer"] != model.TraceStatusSeenBefore || reasonByTitle["newer"] != string(model.TraceStatusSeenBefore) {
-		t.Fatalf("newer trace = status %q reason %q, want seen_before", statusByTitle["newer"], reasonByTitle["newer"])
-	}
-}
-
-func TestFetchWindowWithIndexIncludesDocsPageCandidate(t *testing.T) {
+func TestFetchWindowIncludesDocsPageCandidate(t *testing.T) {
 	oldFetchDocsPage := fetchDocsPageSource
 	defer func() { fetchDocsPageSource = oldFetchDocsPage }()
 
@@ -423,9 +231,9 @@ func TestFetchWindowWithIndexIncludesDocsPageCandidate(t *testing.T) {
 		}, nil
 	}
 
-	articles, failed, index, err := FetchWindowWithIndex(cfg, from, to, false, true)
+	articles, failed, err := FetchWindow(cfg, from, to, false, true)
 	if err != nil {
-		t.Fatalf("FetchWindowWithIndex() error = %v", err)
+		t.Fatalf("FetchWindow() error = %v", err)
 	}
 	if len(failed) != 0 {
 		t.Fatalf("failed = %#v, want no failed sources", failed)
@@ -433,21 +241,9 @@ func TestFetchWindowWithIndexIncludesDocsPageCandidate(t *testing.T) {
 	if len(articles) != 1 || articles[0].Title != "GLM-4.5 发布" {
 		t.Fatalf("articles = %#v, want included docs page article", articles)
 	}
-	if len(index.SourceRuns) != 1 {
-		t.Fatalf("len(index.SourceRuns) = %d, want 1", len(index.SourceRuns))
-	}
-	if got := index.SourceRuns[0]; got.Name != "GLM Docs" || got.Type != "docs_page" || got.Status != "success" || got.FetchedCount != 1 || got.IncludedCount != 1 {
-		t.Fatalf("source run = %#v", got)
-	}
-	if len(index.ArticleTraces) != 1 {
-		t.Fatalf("len(index.ArticleTraces) = %d, want 1", len(index.ArticleTraces))
-	}
-	if got := index.ArticleTraces[0]; got.Status != model.TraceStatusIncluded || got.RejectionReason != "" || got.SourceType != "docs_page" {
-		t.Fatalf("article trace = %#v", got)
-	}
 }
 
-func TestFetchWindowWithIndexMarksMissingAcceptableTime(t *testing.T) {
+func TestFetchWindowRejectsUnacceptedDocsPageCandidate(t *testing.T) {
 	oldFetchDocsPage := fetchDocsPageSource
 	defer func() { fetchDocsPageSource = oldFetchDocsPage }()
 
@@ -456,72 +252,18 @@ func TestFetchWindowWithIndexMarksMissingAcceptableTime(t *testing.T) {
 	cfg := &config.Config{Output: config.OutputCfg{Dir: "output"}, Sources: []config.Source{{Name: "No Time", Type: "docs_page", Category: "AI/科技", URL: "https://example.com/no-time"}}}
 
 	fetchDocsPageSource = func(src config.Source, keywords []string, since time.Time) (sourceFetchResult, error) {
-		return sourceFetchResult{
-			Source: src,
-			Candidates: []fetchedCandidate{{
-				Article: model.Article{Title: "No Time", Link: "https://example.com/no-time", Source: "No Time", Category: "AI/科技"},
-				Status:  model.TraceStatusMissingAcceptableTime,
-			}},
-		}, nil
+		return sourceFetchResult{Source: src}, nil
 	}
 
-	articles, failed, index, err := FetchWindowWithIndex(cfg, from, to, false, true)
+	articles, failed, err := FetchWindow(cfg, from, to, false, true)
 	if err != nil {
-		t.Fatalf("FetchWindowWithIndex() error = %v", err)
+		t.Fatalf("FetchWindow() error = %v", err)
 	}
 	if len(failed) != 0 {
 		t.Fatalf("failed = %#v, want no failed sources", failed)
 	}
 	if len(articles) != 0 {
 		t.Fatalf("articles = %#v, want no included articles", articles)
-	}
-	if got := index.SourceRuns[0]; got.FetchedCount != 1 || got.IncludedCount != 0 {
-		t.Fatalf("source run = %#v", got)
-	}
-	if len(index.ArticleTraces) != 1 {
-		t.Fatalf("len(index.ArticleTraces) = %d, want 1", len(index.ArticleTraces))
-	}
-	if got := index.ArticleTraces[0]; got.Status != model.TraceStatusMissingAcceptableTime || got.RejectionReason != string(model.TraceStatusMissingAcceptableTime) {
-		t.Fatalf("article trace = %#v", got)
-	}
-}
-
-func TestFetchWindowWithIndexMarksNonReleasePage(t *testing.T) {
-	oldFetchRepoPage := fetchRepoPageSource
-	defer func() { fetchRepoPageSource = oldFetchRepoPage }()
-
-	from := time.Date(2026, 4, 7, 0, 0, 0, 0, time.UTC)
-	to := from.Add(24 * time.Hour)
-	cfg := &config.Config{Output: config.OutputCfg{Dir: "output"}, Sources: []config.Source{{Name: "Static Repo", Type: "repo_page", Category: "AI/科技", URL: "https://example.com/static"}}}
-
-	fetchRepoPageSource = func(src config.Source, keywords []string, since time.Time) (sourceFetchResult, error) {
-		return sourceFetchResult{
-			Source: src,
-			Candidates: []fetchedCandidate{{
-				Article: model.Article{Title: "Static Repo", Link: "https://example.com/static", Source: "Static Repo", Category: "AI/科技"},
-				Status:  model.TraceStatusNonReleasePage,
-			}},
-		}, nil
-	}
-
-	articles, failed, index, err := FetchWindowWithIndex(cfg, from, to, false, true)
-	if err != nil {
-		t.Fatalf("FetchWindowWithIndex() error = %v", err)
-	}
-	if len(failed) != 0 {
-		t.Fatalf("failed = %#v, want no failed sources", failed)
-	}
-	if len(articles) != 0 {
-		t.Fatalf("articles = %#v, want no included articles", articles)
-	}
-	if got := index.SourceRuns[0]; got.FetchedCount != 1 || got.IncludedCount != 0 {
-		t.Fatalf("source run = %#v", got)
-	}
-	if len(index.ArticleTraces) != 1 {
-		t.Fatalf("len(index.ArticleTraces) = %d, want 1", len(index.ArticleTraces))
-	}
-	if got := index.ArticleTraces[0]; got.Status != model.TraceStatusNonReleasePage || got.RejectionReason != string(model.TraceStatusNonReleasePage) {
-		t.Fatalf("article trace = %#v", got)
 	}
 }
 

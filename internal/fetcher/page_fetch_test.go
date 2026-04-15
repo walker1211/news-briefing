@@ -8,7 +8,6 @@ import (
 	"time"
 
 	"github.com/walker1211/news-briefing/internal/config"
-	"github.com/walker1211/news-briefing/internal/model"
 )
 
 func loadPageFixture(t *testing.T, name string) string {
@@ -32,9 +31,12 @@ func TestParseDocsPageExtractsPublishedAnnouncement(t *testing.T) {
 		TimeHint: "published",
 	}
 
-	candidate, reason, err := parsePageSource(src, loadPageFixture(t, "glm_docs.html"))
+	candidate, accepted, err := parsePageSource(src, loadPageFixture(t, "glm_docs.html"))
 	if err != nil {
 		t.Fatalf("parsePageSource() error = %v", err)
+	}
+	if !accepted {
+		t.Fatal("accepted = false, want true")
 	}
 	if candidate.Article.Title == "" {
 		t.Fatal("candidate.Article.Title is empty")
@@ -49,9 +51,6 @@ func TestParseDocsPageExtractsPublishedAnnouncement(t *testing.T) {
 	if !reflect.DeepEqual(candidate.MatchedKeywords, []string{"GLM"}) {
 		t.Fatalf("candidate.MatchedKeywords = %#v, want %#v", candidate.MatchedKeywords, []string{"GLM"})
 	}
-	if reason != "" {
-		t.Fatalf("reason = %q, want empty", reason)
-	}
 }
 
 func TestParseRepoPagePrefersReleasePublishedTime(t *testing.T) {
@@ -65,9 +64,12 @@ func TestParseRepoPagePrefersReleasePublishedTime(t *testing.T) {
 		TimeHint: "release published",
 	}
 
-	candidate, reason, err := parsePageSource(src, loadPageFixture(t, "ace_step_release.html"))
+	candidate, accepted, err := parsePageSource(src, loadPageFixture(t, "ace_step_release.html"))
 	if err != nil {
 		t.Fatalf("parsePageSource() error = %v", err)
+	}
+	if !accepted {
+		t.Fatal("accepted = false, want true")
 	}
 	if candidate.Article.Title == "" {
 		t.Fatal("candidate.Article.Title is empty")
@@ -82,9 +84,6 @@ func TestParseRepoPagePrefersReleasePublishedTime(t *testing.T) {
 	if !reflect.DeepEqual(candidate.MatchedKeywords, []string{"ACE-Step"}) {
 		t.Fatalf("candidate.MatchedKeywords = %#v, want %#v", candidate.MatchedKeywords, []string{"ACE-Step"})
 	}
-	if reason != "" {
-		t.Fatalf("reason = %q, want empty", reason)
-	}
 }
 
 func TestParsePageRejectsMissingAcceptableTime(t *testing.T) {
@@ -98,12 +97,12 @@ func TestParsePageRejectsMissingAcceptableTime(t *testing.T) {
 		TimeHint: "published",
 	}
 
-	_, reason, err := parsePageSource(src, loadPageFixture(t, "no_time.html"))
+	_, accepted, err := parsePageSource(src, loadPageFixture(t, "no_time.html"))
 	if err != nil {
 		t.Fatalf("parsePageSource() error = %v", err)
 	}
-	if reason != model.TraceStatusMissingAcceptableTime {
-		t.Fatalf("reason = %q, want %q", reason, model.TraceStatusMissingAcceptableTime)
+	if accepted {
+		t.Fatal("accepted = true, want false")
 	}
 }
 
@@ -118,11 +117,11 @@ func TestParsePageRejectsNonReleaseStaticPage(t *testing.T) {
 		TimeHint: "release published",
 	}
 
-	_, reason, err := parsePageSource(src, loadPageFixture(t, "non_release.html"))
+	_, accepted, err := parsePageSource(src, loadPageFixture(t, "non_release.html"))
 	if err != nil {
 		t.Fatalf("parsePageSource() error = %v", err)
 	}
-	if reason != model.TraceStatusNonReleasePage {
-		t.Fatalf("reason = %q, want %q", reason, model.TraceStatusNonReleasePage)
+	if accepted {
+		t.Fatal("accepted = true, want false")
 	}
 }

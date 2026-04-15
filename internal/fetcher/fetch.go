@@ -22,7 +22,6 @@ var sleep = time.Sleep
 type fetchedCandidate struct {
 	Article         model.Article
 	MatchedKeywords []string
-	Status          model.TraceStatus
 }
 
 type sourceFetchResult struct {
@@ -117,20 +116,6 @@ var fetchAllSourcesDetailed = func(cfg *config.Config, since time.Time) ([]sourc
 	return all, failed, nil
 }
 
-var fetchAllSources = func(cfg *config.Config, since time.Time) ([]model.Article, []FailedSource, error) {
-	results, failed, err := fetchAllSourcesDetailed(cfg, since)
-	if err != nil {
-		return nil, nil, err
-	}
-	var all []model.Article
-	for _, result := range results {
-		for _, candidate := range result.Candidates {
-			all = append(all, candidate.Article)
-		}
-	}
-	return all, failed, nil
-}
-
 // FetchAll 并发抓取所有新闻源，支持重试。
 // 返回文章列表、失败源列表和错误。
 func FetchAll(cfg *config.Config, markSeen bool) ([]model.Article, []FailedSource, error) {
@@ -138,160 +123,34 @@ func FetchAll(cfg *config.Config, markSeen bool) ([]model.Article, []FailedSourc
 	return FetchWindow(cfg, since, time.Now(), markSeen, false)
 }
 
-func FetchAllWithIndex(cfg *config.Config, markSeen bool) ([]model.Article, []FailedSource, model.SourceIndex, error) {
-	since := time.Now().Add(-12 * time.Hour)
-	return FetchWindowWithIndex(cfg, since, time.Now(), markSeen, false)
-}
-
 func FetchWindow(cfg *config.Config, from, to time.Time, markSeen bool, ignoreSeen bool) ([]model.Article, []FailedSource, error) {
-	articles, failed, _, err := FetchWindowWithIndex(cfg, from, to, markSeen, ignoreSeen)
-	return articles, failed, err
-}
-
-func FetchWindowWithIndex(cfg *config.Config, from, to time.Time, markSeen bool, ignoreSeen bool) ([]model.Article, []FailedSource, model.SourceIndex, error) {
 	results, failed, err := fetchAllSourcesDetailed(cfg, from)
 	if err != nil {
-		return nil, nil, model.SourceIndex{}, err
+		return nil, nil, err
 	}
 
-	index := newSourceIndex(cfg)
-	runByName := make(map[string]*model.SourceRun, len(index.SourceRuns))
-	for i := range index.SourceRuns {
-		runByName[index.SourceRuns[i].Name] = &index.SourceRuns[i]
-	}
-
-	type acceptedTrace struct {
-		article    model.Article
-		traceIndex int
-	}
-
-	var accepted []acceptedTrace
+	accepted := make([]model.Article, 0)
 	for _, result := range results {
-		run := runByName[result.Source.Name]
-		if run != nil {
-			run.Status = "success"
-			run.FetchedCount = len(result.Candidates)
-		}
 		for _, candidate := range result.Candidates {
-			trace := model.ArticleTrace{
-				Title:           candidate.Article.Title,
-				Link:            candidate.Article.Link,
-				Source:          result.Source.Name,
-				SourceType:      result.Source.Type,
-				Category:        result.Source.Category,
-				Published:       candidate.Article.Published,
-				MatchedKeywords: append([]string(nil), candidate.MatchedKeywords...),
-			}
-			index.ArticleTraces = append(index.ArticleTraces, trace)
-			traceIndex := len(index.ArticleTraces) - 1
-			traceRef := &index.ArticleTraces[traceIndex]
-
-			if candidate.Status == model.TraceStatusMissingAcceptableTime || candidate.Status == model.TraceStatusNonReleasePage {
-				traceRef.Status = candidate.Status
-				traceRef.RejectionReason = string(candidate.Status)
-				continue
-			}
-
 			if len(candidate.MatchedKeywords) == 0 {
-				traceRef.Status = model.TraceStatusKeywordMiss
-				traceRef.RejectionReason = string(model.TraceStatusKeywordMiss)
-				if run != nil {
-					run.KeywordMissCount++
-				}
 				continue
 			}
 			if !articleWithinWindow(candidate.Article, from, to) {
-				traceRef.Status = model.TraceStatusOutOfWindow
-				traceRef.RejectionReason = string(model.TraceStatusOutOfWindow)
-				if run != nil {
-					run.WindowMissCount++
-				}
 				continue
 			}
-			accepted = append(accepted, acceptedTrace{article: candidate.Article, traceIndex: traceIndex})
-		}
-	}
-
-	for _, failedSource := range failed {
-		if run := runByName[failedSource.Name]; run != nil {
-			run.Status = string(model.TraceStatusFetchFailed)
-			run.Error = failedSource.Err.Error()
+			accepted = append(accepted, candidate.Article)
 		}
 	}
 
 	sort.Slice(accepted, func(i, j int) bool {
-		return accepted[i].article.Published.After(accepted[j].article.Published)
+		return accepted[i].Published.After(accepted[j].Published)
 	})
 
-	acceptedArticles := make([]model.Article, 0, len(accepted))
-	acceptedTraceIndexes := make([]int, 0, len(accepted))
-	for _, item := range accepted {
-		acceptedArticles = append(acceptedArticles, item.article)
-		acceptedTraceIndexes = append(acceptedTraceIndexes, item.traceIndex)
-	}
-
-	outcome, err := applyDedup(acceptedArticles, markSeen, ignoreSeen, NewSeenStore(cfg.Output.Dir))
+	outcome, err := applyDedup(accepted, markSeen, ignoreSeen, NewSeenStore(cfg.Output.Dir))
 	if err != nil {
-		return nil, failed, index, err
+		return nil, failed, err
 	}
-
-	traceIndexesByKey := make(map[string][]int)
-	for i, article := range acceptedArticles {
-		key := dedupKey(article)
-		traceIndexesByKey[key] = append(traceIndexesByKey[key], acceptedTraceIndexes[i])
-	}
-	for key := range outcome.DuplicateKeys {
-		traceIndexes := traceIndexesByKey[key]
-		if len(traceIndexes) == 0 {
-			continue
-		}
-		for i := 1; i < len(traceIndexes); i++ {
-			trace := &index.ArticleTraces[traceIndexes[i]]
-			trace.Status = model.TraceStatusDuplicateInBatch
-			trace.RejectionReason = string(model.TraceStatusDuplicateInBatch)
-			if run := runByName[trace.Source]; run != nil {
-				run.DedupedCount++
-			}
-		}
-	}
-	for key := range outcome.SeenBeforeKeys {
-		traceIndexes := traceIndexesByKey[key]
-		for _, traceIndex := range traceIndexes {
-			trace := &index.ArticleTraces[traceIndex]
-			trace.Status = model.TraceStatusSeenBefore
-			trace.RejectionReason = string(model.TraceStatusSeenBefore)
-			if run := runByName[trace.Source]; run != nil {
-				run.DedupedCount++
-			}
-		}
-	}
-	for _, article := range outcome.Articles {
-		traceIndexes := traceIndexesByKey[dedupKey(article)]
-		if len(traceIndexes) == 0 {
-			continue
-		}
-		trace := &index.ArticleTraces[traceIndexes[0]]
-		trace.Status = model.TraceStatusIncluded
-		trace.RejectionReason = ""
-		if run := runByName[trace.Source]; run != nil {
-			run.IncludedCount++
-		}
-	}
-
-	return outcome.Articles, failed, index, nil
-}
-
-func newSourceIndex(cfg *config.Config) model.SourceIndex {
-	index := model.SourceIndex{SourceRuns: make([]model.SourceRun, 0, len(cfg.Sources))}
-	for _, src := range cfg.Sources {
-		index.SourceRuns = append(index.SourceRuns, model.SourceRun{
-			Name:     src.Name,
-			Type:     src.Type,
-			Category: src.Category,
-			Status:   "success",
-		})
-	}
-	return index
+	return outcome.Articles, failed, nil
 }
 
 func articleWithinWindow(a model.Article, from, to time.Time) bool {
