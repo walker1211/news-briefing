@@ -32,6 +32,12 @@ func TestBriefingFormatIndexFileName(t *testing.T) {
 	}
 }
 
+func TestWatchFileName(t *testing.T) {
+	if got := watchFileName("26.04.15", "1600"); got != "26.04.15-午间-1600-watch.md" {
+		t.Fatalf("watchFileName() = %q", got)
+	}
+}
+
 func TestBriefingFormatHandlesInvalidPeriodWithoutPanic(t *testing.T) {
 	if got := briefingTitle("26.03.22", "800"); got != "国际资讯简报 26.03.22 800 800" {
 		t.Fatalf("briefingTitle() = %q", got)

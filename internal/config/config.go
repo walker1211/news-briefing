@@ -14,6 +14,7 @@ import (
 type Config struct {
 	Sources          []Source       `yaml:"sources"`
 	Keywords         []string       `yaml:"keywords"`
+	Watch            WatchConfig    `yaml:"watch"`
 	Email            Email          `yaml:"email"`
 	Schedule         Schedule       `yaml:"schedule"`
 	ScheduleTimezone string         `yaml:"schedule_timezone"`
@@ -31,6 +32,19 @@ type Source struct {
 	Keywords []string `yaml:"keywords"`
 	PageKind string   `yaml:"page_kind"`
 	TimeHint string   `yaml:"time_hint"`
+}
+
+type WatchConfig struct {
+	Sites []WatchSite `yaml:"sites"`
+}
+
+type WatchSite struct {
+	Name              string   `yaml:"name"`
+	Type              string   `yaml:"type"`
+	HomeURL           string   `yaml:"home_url"`
+	BriefingCategory  string   `yaml:"briefing_category"`
+	CategoryAllowlist []string `yaml:"category_allowlist"`
+	HighValueKeywords []string `yaml:"high_value_keywords"`
 }
 
 type Email struct {

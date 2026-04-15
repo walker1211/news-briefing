@@ -13,6 +13,7 @@ import (
 	"github.com/walker1211/news-briefing/internal/output"
 	"github.com/walker1211/news-briefing/internal/scheduler"
 	"github.com/walker1211/news-briefing/internal/summarizer"
+	"github.com/walker1211/news-briefing/internal/watch"
 )
 
 type app struct {
@@ -22,6 +23,7 @@ type app struct {
 	waitForever         func()
 	fetchAll            func(*config.Config, bool) ([]model.Article, []fetcher.FailedSource, error)
 	fetchWindow         func(*config.Config, time.Time, time.Time, bool, bool) ([]model.Article, []fetcher.FailedSource, error)
+	fetchWatch          func(*config.Config, time.Time) ([]model.Article, *model.WatchReport, error)
 	summarize           func([]model.Article, []string, *time.Location) (string, error)
 	translate           func([]model.Article, []string, *time.Location) (string, error)
 	deepDive            func(string, []model.Article, *time.Location) (string, error)
@@ -31,6 +33,7 @@ type app struct {
 	printArticles       func([]model.Article)
 	printCLI            func(*model.Briefing)
 	writeMarkdown       func(*model.Briefing, string) (string, error)
+	writeWatchMarkdown  func(*model.WatchReport, string, string, string) (string, error)
 	sendEmail           func(*model.Briefing, *config.Config, []fetcher.FailedSource) error
 	sendDeepEmail       func(string, *model.Briefing, *config.Config, []fetcher.FailedSource) error
 	resendMarkdownEmail func(string, *config.Config) error
@@ -48,6 +51,7 @@ func newApp(cfg *config.Config) *app {
 		},
 		fetchAll:    fetcher.FetchAll,
 		fetchWindow: fetcher.FetchWindow,
+		fetchWatch:  watch.Run,
 		summarize:   runner.Summarize,
 		translate:   runner.Translate,
 		deepDive:    runner.DeepDive,
@@ -63,6 +67,7 @@ func newApp(cfg *config.Config) *app {
 		},
 		printCLI:            output.PrintCLI,
 		writeMarkdown:       output.WriteMarkdown,
+		writeWatchMarkdown:  output.WriteWatchMarkdown,
 		sendEmail:           output.SendEmail,
 		sendDeepEmail:       output.SendDeepEmail,
 		resendMarkdownEmail: output.SendMarkdownFile,
@@ -186,11 +191,24 @@ func (app *app) runBriefing(commandPath string, period string, showRaw bool, sen
 	if app.fetchAll == nil {
 		app.fetchAll = fetcher.FetchAll
 	}
+	now := app.currentTime()
 	articles, failed, err := app.fetchAll(app.cfg, true)
 	if err != nil {
 		return err
 	}
-	return app.renderBriefing(commandPath, app.currentTime().Format("06.01.02"), period, articles, failed, showRaw, sendEmail)
+	if app.fetchWatch != nil {
+		watchArticles, report, err := app.fetchWatch(app.cfg, now)
+		if err != nil {
+			return err
+		}
+		articles = append(articles, watchArticles...)
+		if app.writeWatchMarkdown != nil && report != nil {
+			if _, err := app.writeWatchMarkdown(report, app.cfg.Output.Dir, now.Format("06.01.02"), period); err != nil {
+				return err
+			}
+		}
+	}
+	return app.renderBriefing(commandPath, now.Format("06.01.02"), period, articles, failed, showRaw, sendEmail)
 }
 
 func (app *app) runScheduledBriefing(window scheduler.Window, sendEmail bool) error {
@@ -205,6 +223,18 @@ func (app *app) runScheduledBriefing(window scheduler.Window, sendEmail bool) er
 	loc := app.cfg.ScheduleLocation
 	if loc == nil {
 		loc = time.Local
+	}
+	if app.fetchWatch != nil {
+		watchArticles, report, err := app.fetchWatch(app.cfg, window.To)
+		if err != nil {
+			return err
+		}
+		articles = append(articles, watchArticles...)
+		if app.writeWatchMarkdown != nil && report != nil {
+			if _, err := app.writeWatchMarkdown(report, app.cfg.Output.Dir, window.To.In(loc).Format("06.01.02"), window.Period); err != nil {
+				return err
+			}
+		}
 	}
 	return app.renderBriefing("serve", window.To.In(loc).Format("06.01.02"), window.Period, articles, failed, false, sendEmail)
 }

@@ -278,6 +278,138 @@ func TestRunBriefingUsesFetchAll(t *testing.T) {
 	}
 }
 
+func TestRunBriefingMergesWatchArticlesAndWritesSidecar(t *testing.T) {
+	now := time.Date(2026, 4, 15, 16, 0, 0, 0, time.UTC)
+	outputDir := t.TempDir()
+	var printed *model.Briefing
+	watchCalled := false
+	watchWritten := false
+
+	app := &app{
+		cfg: &config.Config{Output: config.OutputCfg{Dir: outputDir, Mode: model.OutputModeOriginalOnly}},
+		now: func() time.Time { return now },
+		fetchAll: func(cfg *config.Config, markSeen bool) ([]model.Article, []fetcher.FailedSource, error) {
+			return []model.Article{{Title: "news", Category: "AI/科技", Published: now.Add(-time.Hour)}}, nil, nil
+		},
+		fetchWatch: func(cfg *config.Config, gotNow time.Time) ([]model.Article, *model.WatchReport, error) {
+			watchCalled = gotNow.Equal(now)
+			return []model.Article{{Title: "watch", Category: "AI/科技", Published: gotNow}}, &model.WatchReport{GeneratedAt: gotNow}, nil
+		},
+		composeBody: func(path string, mode model.OutputMode, content model.OutputContent) (string, error) {
+			return "ORIGINAL ONLY", nil
+		},
+		writeWatchMarkdown: func(report *model.WatchReport, gotOutputDir, date, period string) (string, error) {
+			watchWritten = report != nil && gotOutputDir == outputDir && date == "26.04.15" && period == "1600"
+			return "", nil
+		},
+		printCLI:      func(b *model.Briefing) { printed = b },
+		printFailed:   func([]fetcher.FailedSource) {},
+		printArticles: func([]model.Article) {},
+		writeMarkdown: func(*model.Briefing, string) (string, error) { return "", nil },
+	}
+
+	if err := app.runBriefing("run", "1600", false, false); err != nil {
+		t.Fatalf("runBriefing() error = %v", err)
+	}
+	if !watchCalled {
+		t.Fatal("fetchWatch() was not called with current run time")
+	}
+	if !watchWritten {
+		t.Fatal("writeWatchMarkdown() was not called with expected arguments")
+	}
+	if printed == nil {
+		t.Fatal("printCLI() briefing = nil")
+	}
+	if len(printed.Articles) != 2 {
+		t.Fatalf("len(printed.Articles) = %d, want 2", len(printed.Articles))
+	}
+	if printed.Articles[0].Title != "news" || printed.Articles[1].Title != "watch" {
+		t.Fatalf("printed.Articles = %#v", printed.Articles)
+	}
+}
+
+func TestRunScheduledBriefingMergesWatchArticlesAndWritesSidecar(t *testing.T) {
+	loc := time.FixedZone("CST", 8*3600)
+	window := scheduler.Window{
+		Period: "1600",
+		From:   time.Date(2026, 4, 15, 7, 0, 0, 0, loc),
+		To:     time.Date(2026, 4, 15, 16, 0, 0, 0, loc),
+	}
+	outputDir := t.TempDir()
+	var printed *model.Briefing
+	watchCalled := false
+	watchWritten := false
+
+	app := &app{
+		cfg: &config.Config{ScheduleLocation: loc, Output: config.OutputCfg{Dir: outputDir, Mode: model.OutputModeOriginalOnly}},
+		fetchWindow: func(cfg *config.Config, from, to time.Time, markSeen bool, ignoreSeen bool) ([]model.Article, []fetcher.FailedSource, error) {
+			return []model.Article{{Title: "news", Category: "AI/科技", Published: to.Add(-time.Hour)}}, nil, nil
+		},
+		fetchWatch: func(cfg *config.Config, gotNow time.Time) ([]model.Article, *model.WatchReport, error) {
+			watchCalled = gotNow.Equal(window.To)
+			return []model.Article{{Title: "watch", Category: "AI/科技", Published: gotNow}}, &model.WatchReport{GeneratedAt: gotNow}, nil
+		},
+		composeBody: func(path string, mode model.OutputMode, content model.OutputContent) (string, error) {
+			return "ORIGINAL ONLY", nil
+		},
+		writeWatchMarkdown: func(report *model.WatchReport, gotOutputDir, date, period string) (string, error) {
+			watchWritten = report != nil && gotOutputDir == outputDir && date == "26.04.15" && period == "1600"
+			return "", nil
+		},
+		printCLI:      func(b *model.Briefing) { printed = b },
+		printFailed:   func([]fetcher.FailedSource) {},
+		printArticles: func([]model.Article) {},
+		writeMarkdown: func(*model.Briefing, string) (string, error) { return "", nil },
+	}
+
+	if err := app.runScheduledBriefing(window, false); err != nil {
+		t.Fatalf("runScheduledBriefing() error = %v", err)
+	}
+	if !watchCalled {
+		t.Fatal("fetchWatch() was not called with scheduled window end")
+	}
+	if !watchWritten {
+		t.Fatal("writeWatchMarkdown() was not called for scheduled briefing")
+	}
+	if printed == nil {
+		t.Fatal("printCLI() briefing = nil")
+	}
+	if len(printed.Articles) != 2 {
+		t.Fatalf("len(printed.Articles) = %d, want 2", len(printed.Articles))
+	}
+	if printed.Articles[0].Title != "news" || printed.Articles[1].Title != "watch" {
+		t.Fatalf("printed.Articles = %#v", printed.Articles)
+	}
+}
+
+func TestRunRegenSkipsWatch(t *testing.T) {
+	watchCalled := false
+	app := &app{
+		cfg: &config.Config{Output: config.OutputCfg{Dir: t.TempDir(), Mode: model.OutputModeOriginalOnly}},
+		fetchWindow: func(cfg *config.Config, from, to time.Time, markSeen bool, ignoreSeen bool) ([]model.Article, []fetcher.FailedSource, error) {
+			return []model.Article{{Title: "news", Category: "AI/科技", Published: to}}, nil, nil
+		},
+		fetchWatch: func(cfg *config.Config, now time.Time) ([]model.Article, *model.WatchReport, error) {
+			watchCalled = true
+			return nil, nil, nil
+		},
+		composeBody: func(path string, mode model.OutputMode, content model.OutputContent) (string, error) {
+			return "ORIGINAL ONLY", nil
+		},
+		printFailed:   func([]fetcher.FailedSource) {},
+		printArticles: func([]model.Article) {},
+		printCLI:      func(*model.Briefing) {},
+		writeMarkdown: func(*model.Briefing, string) (string, error) { return "", nil },
+	}
+
+	if err := app.runRegen(regenCommand{fromRaw: "2026-04-15 07:00", toRaw: "2026-04-15 16:00", period: "1600"}); err != nil {
+		t.Fatalf("runRegen() error = %v", err)
+	}
+	if watchCalled {
+		t.Fatal("fetchWatch() should not run for regen")
+	}
+}
+
 func TestExecuteServeScheduledBriefingUsesServePathForOutputMode(t *testing.T) {
 	var gotPath string
 	window := scheduler.Window{Period: "0800", From: time.Date(2026, 3, 18, 7, 0, 0, 0, time.UTC), To: time.Date(2026, 3, 18, 8, 0, 0, 0, time.UTC)}

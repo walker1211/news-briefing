@@ -148,6 +148,39 @@ keywords:
   - Russia
   - Ukraine
 
+watch:
+  sites:
+    - name: Anthropic Claude Support
+      type: anthropic_support
+      home_url: https://support.claude.com/zh-CN
+      briefing_category: AI/科技
+      category_allowlist:
+        - Claude
+        - 安全保障
+        - 隐私与法律
+        - Claude 付费套餐
+        - Claude API 与控制台
+        - 团队与企业套餐
+      high_value_keywords:
+        - 身份验证
+        - 电话验证
+        - 账户限制
+        - 地区可用性
+        - 计费
+        - 套餐
+        - 配额
+        - API 权限
+        - 登录
+        - 封禁
+        - 申诉
+        - 隐私
+        - 数据使用
+        - 训练
+        - 安全策略
+        - 风控
+        - 团队
+        - 企业
+
 email:
   smtp_host: smtp.example.com
   smtp_port: 465

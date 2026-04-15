@@ -506,6 +506,84 @@ proxy: {}
 	}
 }
 
+func TestLoadSupportsWatchSites(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	content := `sources: []
+keywords: []
+watch:
+  sites:
+    - name: Anthropic Claude Support
+      type: anthropic_support
+      home_url: https://support.claude.com/zh-CN
+      briefing_category: AI/科技
+      category_allowlist:
+        - Claude
+        - 安全保障
+      high_value_keywords:
+        - 身份验证
+        - 电话验证
+email:
+  smtp_host: smtp.example.com
+  smtp_port: 465
+  from: from@example.com
+  to: to@example.com
+schedule: []
+output: {}
+proxy: {}
+`
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if len(cfg.Watch.Sites) != 1 {
+		t.Fatalf("len(cfg.Watch.Sites) = %d, want 1", len(cfg.Watch.Sites))
+	}
+	site := cfg.Watch.Sites[0]
+	if site.Type != "anthropic_support" {
+		t.Fatalf("site.Type = %q", site.Type)
+	}
+	if !reflect.DeepEqual(site.CategoryAllowlist, []string{"Claude", "安全保障"}) {
+		t.Fatalf("site.CategoryAllowlist = %#v", site.CategoryAllowlist)
+	}
+	if !reflect.DeepEqual(site.HighValueKeywords, []string{"身份验证", "电话验证"}) {
+		t.Fatalf("site.HighValueKeywords = %#v", site.HighValueKeywords)
+	}
+}
+
+func TestProjectConfigIncludesAnthropicSupportWatch(t *testing.T) {
+	configPaths := map[string]string{
+		"project": filepath.Join("..", "..", "configs", "config.yaml"),
+		"example": filepath.Join("..", "..", "configs", "config.example.yaml"),
+	}
+
+	for name, configPath := range configPaths {
+		t.Run(name, func(t *testing.T) {
+			cfg, err := Load(configPath)
+			if err != nil {
+				t.Fatalf("Load() error = %v", err)
+			}
+			if len(cfg.Watch.Sites) != 1 {
+				t.Fatalf("len(cfg.Watch.Sites) = %d, want 1", len(cfg.Watch.Sites))
+			}
+			site := cfg.Watch.Sites[0]
+			if site.Name != "Anthropic Claude Support" || site.Type != "anthropic_support" {
+				t.Fatalf("site = %#v", site)
+			}
+			if site.BriefingCategory != "AI/科技" {
+				t.Fatalf("site.BriefingCategory = %q", site.BriefingCategory)
+			}
+			if len(site.CategoryAllowlist) == 0 || len(site.HighValueKeywords) == 0 {
+				t.Fatalf("site = %#v", site)
+			}
+		})
+	}
+}
+
 func TestProjectConfigIncludesDiscoveryEnhancementAISources(t *testing.T) {
 	configPaths := map[string]string{
 		"project": filepath.Join("..", "..", "configs", "config.yaml"),

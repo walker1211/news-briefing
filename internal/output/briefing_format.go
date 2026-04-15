@@ -29,6 +29,14 @@ func briefingIndexFileName(date, period string) string {
 	return fmt.Sprintf("%s-%s-%s.json", date, periodPrefix(period), period)
 }
 
+func watchTitle(date, period string) string {
+	return fmt.Sprintf("非新闻监听 %s %s %s", date, periodPrefix(period), briefingClock(period))
+}
+
+func watchFileName(date, period string) string {
+	return fmt.Sprintf("%s-%s-%s-watch.md", date, periodPrefix(period), period)
+}
+
 func deepEmailSubject(topic string) string {
 	return fmt.Sprintf("[资讯简报] 话题深挖 | %s", topic)
 }
