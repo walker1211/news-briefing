@@ -13,6 +13,7 @@ import (
 	"github.com/walker1211/news-briefing/internal/model"
 	"github.com/walker1211/news-briefing/internal/output"
 	"github.com/walker1211/news-briefing/internal/scheduler"
+	"github.com/walker1211/news-briefing/internal/watch"
 )
 
 func TestExecuteServeUsesScheduler(t *testing.T) {
@@ -1284,6 +1285,136 @@ func TestRunDeepDiveUsesConfiguredTimezoneForBriefingDate(t *testing.T) {
 	}
 	if emailedDate != "26.03.18" {
 		t.Fatalf("sendDeepEmail() briefing.Date = %q, want %q", emailedDate, "26.03.18")
+	}
+}
+
+func TestRunDeepDiveIncludesWatchSeenArticles(t *testing.T) {
+	outputDir := t.TempDir()
+	seenStore := watch.NewSeenStore(outputDir)
+	if err := seenStore.Save(model.WatchSeenState{Items: []model.WatchSeenArticle{{
+		ID:               "https://support.claude.com/zh-CN/articles/14328960-claude-上的-身份验证",
+		URL:              "https://support.claude.com/zh-CN/articles/14328960-claude-上的-身份验证",
+		Title:            "Claude 上的身份验证",
+		Source:           "Anthropic Claude Support",
+		BriefingCategory: "AI/科技",
+		WatchCategory:    "安全保障",
+		Summary:          "支持文档新增身份验证说明",
+		Body:             "某些使用场景需要提供政府颁发的身份证件与实时自拍。",
+		EventType:        "content_changed",
+		DetectedAt:       time.Date(2026, 4, 15, 16, 0, 0, 0, time.UTC),
+	}}}); err != nil {
+		t.Fatalf("seenStore.Save() error = %v", err)
+	}
+
+	var deepArticles []model.Article
+	app := &app{
+		cfg: &config.Config{Output: config.OutputCfg{Dir: outputDir, Mode: model.OutputModeTranslatedOnly}},
+		now: func() time.Time { return time.Date(2026, 4, 15, 18, 0, 0, 0, time.UTC) },
+		fetchAll: func(cfg *config.Config, markSeen bool) ([]model.Article, []fetcher.FailedSource, error) {
+			return nil, nil, nil
+		},
+		printFailed: func([]fetcher.FailedSource) {},
+		deepDive: func(topic string, articles []model.Article, loc *time.Location) (string, error) {
+			deepArticles = articles
+			return "DEEP TRANSLATED", nil
+		},
+		composeBody: func(path string, mode model.OutputMode, content model.OutputContent) (string, error) {
+			return "COMPOSED DEEP", nil
+		},
+		writeDeepDive: func(topic, content, outputDir, date string) (string, error) {
+			return "", nil
+		},
+		printText: func(string) {},
+	}
+
+	if err := app.runDeepDive(deepCommand{topic: "身份验证"}); err != nil {
+		t.Fatalf("runDeepDive() error = %v", err)
+	}
+	if len(deepArticles) != 1 {
+		t.Fatalf("len(deepArticles) = %d, want 1", len(deepArticles))
+	}
+	if deepArticles[0].Title != "Claude 上的身份验证" {
+		t.Fatalf("deepArticles[0] = %#v", deepArticles[0])
+	}
+	if !strings.Contains(deepArticles[0].Summary, "[Watch][安全保障]") {
+		t.Fatalf("deepArticles[0].Summary = %q", deepArticles[0].Summary)
+	}
+}
+
+func TestRunDeepDiveWithoutWatchSeenFileStaysCompatible(t *testing.T) {
+	app := &app{
+		cfg: &config.Config{Output: config.OutputCfg{Dir: t.TempDir(), Mode: model.OutputModeOriginalOnly}},
+		fetchAll: func(cfg *config.Config, markSeen bool) ([]model.Article, []fetcher.FailedSource, error) {
+			return []model.Article{{Title: "Claude ships feature", Summary: "Claude update"}}, nil, nil
+		},
+		printFailed: func([]fetcher.FailedSource) {},
+		composeBody: func(path string, mode model.OutputMode, content model.OutputContent) (string, error) {
+			return "ORIGINAL ONLY", nil
+		},
+		writeDeepDive: func(topic, content, outputDir, date string) (string, error) {
+			return "", nil
+		},
+		printText: func(string) {},
+	}
+
+	if err := app.runDeepDive(deepCommand{topic: "Claude"}); err != nil {
+		t.Fatalf("runDeepDive() error = %v", err)
+	}
+}
+
+func TestLoadWatchSeenArticlesFiltersOldItems(t *testing.T) {
+	outputDir := t.TempDir()
+	seenStore := watch.NewSeenStore(outputDir)
+	if err := seenStore.Save(model.WatchSeenState{Items: []model.WatchSeenArticle{
+		{
+			ID:               "old",
+			URL:              "https://support.claude.com/old",
+			Title:            "旧监听",
+			Source:           "Anthropic Claude Support",
+			BriefingCategory: "AI/科技",
+			WatchCategory:    "安全保障",
+			Summary:          "旧摘要",
+			Body:             "旧正文",
+			EventType:        "content_changed",
+			DetectedAt:       time.Date(2026, 4, 10, 10, 0, 0, 0, time.UTC),
+		},
+		{
+			ID:               "boundary",
+			URL:              "https://support.claude.com/boundary",
+			Title:            "边界监听",
+			Source:           "Anthropic Claude Support",
+			BriefingCategory: "AI/科技",
+			WatchCategory:    "安全保障",
+			Summary:          "边界摘要",
+			Body:             "边界正文",
+			EventType:        "new_article",
+			DetectedAt:       time.Date(2026, 4, 15, 0, 0, 0, 0, time.UTC),
+		},
+		{
+			ID:               "new",
+			URL:              "https://support.claude.com/new",
+			Title:            "新监听",
+			Source:           "Anthropic Claude Support",
+			BriefingCategory: "AI/科技",
+			WatchCategory:    "安全保障",
+			Summary:          "新摘要",
+			Body:             "新正文",
+			EventType:        "new_article",
+			DetectedAt:       time.Date(2026, 4, 15, 10, 0, 0, 0, time.UTC),
+		},
+	}}); err != nil {
+		t.Fatalf("seenStore.Save() error = %v", err)
+	}
+
+	articles, err := loadWatchSeenArticles(outputDir, time.Date(2026, 4, 15, 0, 0, 0, 0, time.UTC), time.Date(2026, 4, 15, 23, 59, 59, 0, time.UTC))
+	if err != nil {
+		t.Fatalf("loadWatchSeenArticles() error = %v", err)
+	}
+	if len(articles) != 1 {
+		t.Fatalf("len(articles) = %d, want 1", len(articles))
+	}
+	if articles[0].Title != "新监听" {
+		t.Fatalf("articles[0] = %#v", articles[0])
 	}
 }
 

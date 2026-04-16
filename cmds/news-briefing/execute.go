@@ -342,6 +342,8 @@ func (app *app) runDeepDive(cmd deepCommand) error {
 		err          error
 		briefingDate = app.currentTime().In(app.displayLocation()).Format("06.01.02")
 	)
+	windowTo := app.currentTime()
+	windowFrom := windowTo.Add(-12 * time.Hour)
 	if cmd.fromRaw != "" || cmd.toRaw != "" {
 		loc := time.Local
 		if app.cfg != nil && app.cfg.ScheduleLocation != nil {
@@ -358,11 +360,15 @@ func (app *app) runDeepDive(cmd deepCommand) error {
 		if to.Before(from) {
 			return fmt.Errorf("--to must be after or equal to --from")
 		}
+		windowFrom = from
+		windowTo = to
 		briefingDate = to.In(app.displayLocation()).Format("06.01.02")
 		articles, failed, err = app.fetchWindow(app.cfg, from, to, false, cmd.ignoreSeen)
 	} else if cmd.ignoreSeen {
 		to := app.currentTime()
 		from := to.Add(-12 * time.Hour)
+		windowFrom = from
+		windowTo = to
 		articles, failed, err = app.fetchWindow(app.cfg, from, to, false, true)
 	} else {
 		articles, failed, err = app.fetchAll(app.cfg, false)
@@ -370,6 +376,11 @@ func (app *app) runDeepDive(cmd deepCommand) error {
 	if err != nil {
 		return err
 	}
+	watchArticles, err := loadWatchSeenArticles(app.cfg.Output.Dir, windowFrom, windowTo)
+	if err != nil {
+		return err
+	}
+	articles = append(articles, watchArticles...)
 	app.printFailed(failed)
 	if app.composeBody == nil {
 		app.composeBody = output.FormatBody
@@ -432,6 +443,43 @@ func (app *app) runDeepDive(cmd deepCommand) error {
 	fmt.Println()
 	app.printText(body)
 	return nil
+}
+
+func loadWatchSeenArticles(outputDir string, from, to time.Time) ([]model.Article, error) {
+	store := watch.NewSeenStore(outputDir)
+	state, err := store.Load()
+	if err != nil {
+		return nil, err
+	}
+	articles := make([]model.Article, 0, len(state.Items))
+	for _, item := range state.Items {
+		if !item.DetectedAt.After(from) || item.DetectedAt.After(to) {
+			continue
+		}
+		articles = append(articles, annotateWatchDeepArticle(item))
+	}
+	return articles, nil
+}
+
+func annotateWatchDeepArticle(item model.WatchSeenArticle) model.Article {
+	summary := item.Summary
+	if summary == "" {
+		summary = item.Body
+	}
+	if summary == "" {
+		summary = item.EventType
+	}
+	if summary != "" {
+		summary = "[Watch][" + item.WatchCategory + "] " + summary
+	}
+	return model.Article{
+		Title:     item.Title,
+		Link:      item.URL,
+		Summary:   summary,
+		Source:    item.Source + " Watch",
+		Category:  item.BriefingCategory,
+		Published: item.DetectedAt,
+	}
 }
 
 func selectDeepDiveArticles(topic string, articles []model.Article) ([]model.Article, error) {

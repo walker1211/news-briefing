@@ -48,13 +48,15 @@ func Run(cfg *config.Config, now time.Time) ([]model.Article, *model.WatchReport
 	}
 
 	articles := make([]model.Article, 0)
+	seenItems := make([]model.WatchSeenArticle, 0)
 	for _, site := range cfg.Watch.Sites {
-		siteArticles, events, err := runSite(site, now, indexState, articleState)
+		siteArticles, siteSeenItems, events, err := runSite(site, now, indexState, articleState)
 		if err != nil {
 			return nil, nil, err
 		}
 		report.Events = append(report.Events, events...)
 		articles = append(articles, siteArticles...)
+		seenItems = append(seenItems, siteSeenItems...)
 	}
 
 	if err := indexStore.Save(indexState); err != nil {
@@ -63,17 +65,25 @@ func Run(cfg *config.Config, now time.Time) ([]model.Article, *model.WatchReport
 	if err := articleStore.Save(articleState); err != nil {
 		return nil, nil, err
 	}
+	if err := updateSeenState(cfg.Output.Dir, seenItems); err != nil {
+		return nil, nil, err
+	}
 	return articles, report, nil
 }
 
-func runSite(site config.WatchSite, now time.Time, indexState IndexState, articleState ArticleState) ([]model.Article, []model.WatchEvent, error) {
+func runSite(site config.WatchSite, now time.Time, indexState IndexState, articleState ArticleState) ([]model.Article, []model.WatchSeenArticle, []model.WatchEvent, error) {
 	if site.Type != "anthropic_support" {
-		return nil, nil, nil
+		return nil, nil, nil, nil
+	}
+
+	type seenPayload struct {
+		summary string
+		body    string
 	}
 
 	homeHTML, err := fetchWatchHTML(site.HomeURL)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 	allowlist := make(map[string]struct{}, len(site.CategoryAllowlist))
 	for _, category := range site.CategoryAllowlist {
@@ -81,7 +91,7 @@ func runSite(site config.WatchSite, now time.Time, indexState IndexState, articl
 	}
 	homeItems, err := parseAnthropicHome(homeHTML, allowlist)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 	indexState.Homes[site.Name] = model.WatchIndexSnapshot{
 		Scope:      "home",
@@ -94,15 +104,16 @@ func runSite(site config.WatchSite, now time.Time, indexState IndexState, articl
 	}
 
 	articles := make([]model.Article, 0)
+	seenItems := make([]model.WatchSeenArticle, 0)
 	events := make([]model.WatchEvent, 0)
 	for _, categoryItem := range homeItems {
 		categoryHTML, err := fetchWatchHTML(categoryItem.URL)
 		if err != nil {
-			return nil, nil, err
+			return nil, nil, nil, err
 		}
 		current, err := parseAnthropicCategory(categoryItem.Title, categoryItem.URL, categoryHTML)
 		if err != nil {
-			return nil, nil, err
+			return nil, nil, nil, err
 		}
 		current.Source = site.Name
 		current.SnapshotAt = now
@@ -113,11 +124,11 @@ func runSite(site config.WatchSite, now time.Time, indexState IndexState, articl
 			for _, item := range current.Items {
 				articleHTML, err := fetchWatchHTML(item.URL)
 				if err != nil {
-					return nil, nil, err
+					return nil, nil, nil, err
 				}
 				title, summary, body, err := parseAnthropicArticle(articleHTML)
 				if err != nil {
-					return nil, nil, err
+					return nil, nil, nil, err
 				}
 				articleState[item.URL] = model.WatchArticleState{
 					URL:           item.URL,
@@ -142,6 +153,7 @@ func runSite(site config.WatchSite, now time.Time, indexState IndexState, articl
 			applyWatchEventPriority(&categoryEvents[i])
 		}
 
+		seenPayloads := make(map[string]seenPayload)
 		for _, item := range current.Items {
 			if slices.Contains(changedURLs, item.URL) {
 				continue
@@ -149,11 +161,11 @@ func runSite(site config.WatchSite, now time.Time, indexState IndexState, articl
 			state, ok := articleState[item.URL]
 			articleHTML, err := fetchWatchHTML(item.URL)
 			if err != nil {
-				return nil, nil, err
+				return nil, nil, nil, err
 			}
 			title, summary, body, err := parseAnthropicArticle(articleHTML)
 			if err != nil {
-				return nil, nil, err
+				return nil, nil, nil, err
 			}
 			summaryHash := hashWatchContent(summary)
 			bodyHash := hashWatchContent(body)
@@ -183,6 +195,7 @@ func runSite(site config.WatchSite, now time.Time, indexState IndexState, articl
 				}
 				applyWatchEventPriority(&event)
 				categoryEvents = append(categoryEvents, event)
+				seenPayloads[item.URL] = seenPayload{summary: summary, body: body}
 				articleState[item.URL] = model.WatchArticleState{
 					URL:           item.URL,
 					Title:         title,
@@ -214,11 +227,11 @@ func runSite(site config.WatchSite, now time.Time, indexState IndexState, articl
 
 			articleHTML, err := fetchWatchHTML(url)
 			if err != nil {
-				return nil, nil, err
+				return nil, nil, nil, err
 			}
 			title, summary, body, err := parseAnthropicArticle(articleHTML)
 			if err != nil {
-				return nil, nil, err
+				return nil, nil, nil, err
 			}
 			articleState[url] = model.WatchArticleState{
 				URL:           url,
@@ -237,6 +250,7 @@ func runSite(site config.WatchSite, now time.Time, indexState IndexState, articl
 				categoryEvents[matchedIndex].Reason = defaultWatchReason(categoryEvents[matchedIndex].EventType, categoryEvents[matchedIndex].ArticleTitle)
 			}
 			applyWatchEventPriority(&categoryEvents[matchedIndex])
+			seenPayloads[url] = seenPayload{summary: summary, body: body}
 		}
 
 		indexState.Categories[stateKey] = current
@@ -245,13 +259,27 @@ func runSite(site config.WatchSite, now time.Time, indexState IndexState, articl
 				delete(articleState, event.ArticleURL)
 			}
 			events = append(events, event)
-			if event.IncludeInBriefing {
-				articles = append(articles, watchEventToArticle(site, event))
+			if !event.IncludeInBriefing {
+				continue
 			}
+			articles = append(articles, watchEventToArticle(site, event))
+			payload, ok := seenPayloads[event.ArticleURL]
+			if !ok {
+				articleHTML, err := fetchWatchHTML(event.ArticleURL)
+				if err != nil {
+					return nil, nil, nil, err
+				}
+				_, summary, body, err := parseAnthropicArticle(articleHTML)
+				if err != nil {
+					return nil, nil, nil, err
+				}
+				payload = seenPayload{summary: summary, body: body}
+			}
+			seenItems = append(seenItems, watchEventToSeenArticle(site, event, payload.summary, payload.body))
 		}
 	}
 
-	return articles, events, nil
+	return articles, seenItems, events, nil
 }
 
 func watchCategoryStateKey(source, category string) string {
@@ -309,6 +337,39 @@ func matchedWatchKeywords(text string, keywords []string) []string {
 func hashWatchContent(value string) string {
 	sum := sha1.Sum([]byte(value))
 	return fmt.Sprintf("%x", sum[:])
+}
+
+func updateSeenState(outputDir string, items []model.WatchSeenArticle) error {
+	store := NewSeenStore(outputDir)
+	state, err := store.Load()
+	if err != nil {
+		return err
+	}
+	if state.Items == nil {
+		state.Items = []model.WatchSeenArticle{}
+	}
+	for _, item := range items {
+		if item.URL == "" {
+			continue
+		}
+		state.Items = append(state.Items, item)
+	}
+	return store.Save(state)
+}
+
+func watchEventToSeenArticle(site config.WatchSite, event model.WatchEvent, summary string, body string) model.WatchSeenArticle {
+	return model.WatchSeenArticle{
+		ID:               event.ArticleURL,
+		URL:              event.ArticleURL,
+		Title:            event.ArticleTitle,
+		Source:           site.Name,
+		BriefingCategory: site.BriefingCategory,
+		WatchCategory:    event.Category,
+		Summary:          summary,
+		Body:             body,
+		EventType:        event.EventType,
+		DetectedAt:       event.DetectedAt,
+	}
 }
 
 func watchEventToArticle(site config.WatchSite, event model.WatchEvent) model.Article {

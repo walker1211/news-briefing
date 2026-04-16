@@ -342,3 +342,212 @@ func TestRunDeletesArticleStateForRemovedArticle(t *testing.T) {
 		t.Fatalf("removed article state still exists: %#v", state[removedURL])
 	}
 }
+
+func TestRunWritesSeenStateForContentChangedBriefingArticle(t *testing.T) {
+	oldFetch := fetchWatchHTML
+	defer func() { fetchWatchHTML = oldFetch }()
+
+	responses := map[string]string{
+		"https://support.claude.com/zh-CN":                                  mustReadFixture(t, "anthropic/home.html"),
+		"https://support.claude.com/zh-CN/collections/4078535-security":     mustReadFixture(t, "anthropic/category_security.html"),
+		"https://support.claude.com/zh-CN/articles/14328960-claude-上的-身份验证": `<html><head><title>Claude 上的身份验证</title><meta name="description" content="某些使用场景需要提供政府颁发的身份证件与实时自拍。" /></head><body><article><h1>Claude 上的身份验证</h1><p>某些使用场景需要提供政府颁发的身份证件与实时自拍。</p><p>新增了实时自拍与手机号码交叉校验。</p></article></body></html>`,
+	}
+	fetchWatchHTML = func(url string) (string, error) { return responses[url], nil }
+
+	cfg := &config.Config{
+		Output: config.OutputCfg{Dir: t.TempDir()},
+		Watch: config.WatchConfig{Sites: []config.WatchSite{{
+			Name:              "Anthropic Claude Support",
+			Type:              "anthropic_support",
+			HomeURL:           "https://support.claude.com/zh-CN",
+			BriefingCategory:  "AI/科技",
+			CategoryAllowlist: []string{"安全保障"},
+			HighValueKeywords: []string{"身份验证", "电话验证"},
+		}}},
+	}
+
+	indexStore := NewIndexStore(cfg.Output.Dir)
+	articleStore := NewArticleStore(cfg.Output.Dir)
+	seenStore := NewSeenStore(cfg.Output.Dir)
+	if err := indexStore.Save(IndexState{Categories: map[string]model.WatchIndexSnapshot{
+		"Anthropic Claude Support::安全保障": {
+			Scope:     "category",
+			Source:    "Anthropic Claude Support",
+			Category:  "安全保障",
+			URL:       "https://support.claude.com/zh-CN/collections/4078535-security",
+			ItemCount: 1,
+			Items: []model.WatchIndexItem{{
+				Title:    "Claude 上的身份验证",
+				URL:      "https://support.claude.com/zh-CN/articles/14328960-claude-上的-身份验证",
+				Position: 1,
+				ItemHash: "same-item",
+			}},
+			Hash: "old-snapshot",
+		},
+	}}); err != nil {
+		t.Fatalf("indexStore.Save() error = %v", err)
+	}
+	if err := articleStore.Save(ArticleState{
+		"https://support.claude.com/zh-CN/articles/14328960-claude-上的-身份验证": {
+			URL:         "https://support.claude.com/zh-CN/articles/14328960-claude-上的-身份验证",
+			Title:       "Claude 上的身份验证",
+			SummaryHash: "summary-old",
+			BodyHash:    "body-old",
+		},
+	}); err != nil {
+		t.Fatalf("articleStore.Save() error = %v", err)
+	}
+
+	articles, _, err := Run(cfg, time.Date(2026, 4, 15, 16, 0, 0, 0, time.UTC))
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if len(articles) != 1 {
+		t.Fatalf("len(articles) = %d, want 1", len(articles))
+	}
+	seen, err := seenStore.Load()
+	if err != nil {
+		t.Fatalf("seenStore.Load() error = %v", err)
+	}
+	if len(seen.Items) != 1 {
+		t.Fatalf("len(seen.Items) = %d, want 1; items=%#v", len(seen.Items), seen.Items)
+	}
+	item := seen.Items[0]
+	if item.URL != "https://support.claude.com/zh-CN/articles/14328960-claude-上的-身份验证" {
+		t.Fatalf("seen item url = %q", item.URL)
+	}
+	if item.WatchCategory != "安全保障" || item.EventType != "content_changed" {
+		t.Fatalf("seen item = %#v", item)
+	}
+	if item.Body == "" || item.Summary == "" {
+		t.Fatalf("seen item body/summary missing: %#v", item)
+	}
+}
+
+func TestRunBootstrapDoesNotWriteSeenState(t *testing.T) {
+	oldFetch := fetchWatchHTML
+	defer func() { fetchWatchHTML = oldFetch }()
+
+	responses := map[string]string{
+		"https://support.claude.com/zh-CN":                                  mustReadFixture(t, "anthropic/home.html"),
+		"https://support.claude.com/zh-CN/collections/4078535-security":     mustReadFixture(t, "anthropic/category_security.html"),
+		"https://support.claude.com/zh-CN/articles/14328960-claude-上的-身份验证": mustReadFixture(t, "anthropic/article_identity_verification.html"),
+	}
+	fetchWatchHTML = func(url string) (string, error) { return responses[url], nil }
+
+	cfg := &config.Config{
+		Output: config.OutputCfg{Dir: t.TempDir()},
+		Watch: config.WatchConfig{Sites: []config.WatchSite{{
+			Name:              "Anthropic Claude Support",
+			Type:              "anthropic_support",
+			HomeURL:           "https://support.claude.com/zh-CN",
+			BriefingCategory:  "AI/科技",
+			CategoryAllowlist: []string{"安全保障"},
+			HighValueKeywords: []string{"身份验证", "电话验证"},
+		}}},
+	}
+
+	_, _, err := Run(cfg, time.Date(2026, 4, 15, 16, 0, 0, 0, time.UTC))
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	seenStore := NewSeenStore(cfg.Output.Dir)
+	seen, err := seenStore.Load()
+	if err != nil {
+		t.Fatalf("seenStore.Load() error = %v", err)
+	}
+	if len(seen.Items) != 0 {
+		t.Fatalf("len(seen.Items) = %d, want 0", len(seen.Items))
+	}
+}
+
+func TestRunContentChangedUpdatesSeenState(t *testing.T) {
+	oldFetch := fetchWatchHTML
+	defer func() { fetchWatchHTML = oldFetch }()
+
+	responses := map[string]string{
+		"https://support.claude.com/zh-CN":                                  mustReadFixture(t, "anthropic/home.html"),
+		"https://support.claude.com/zh-CN/collections/4078535-security":     mustReadFixture(t, "anthropic/category_security.html"),
+		"https://support.claude.com/zh-CN/articles/14328960-claude-上的-身份验证": mustReadFixture(t, "anthropic/article_identity_verification.html"),
+	}
+	fetchWatchHTML = func(url string) (string, error) { return responses[url], nil }
+
+	cfg := &config.Config{
+		Output: config.OutputCfg{Dir: t.TempDir()},
+		Watch: config.WatchConfig{Sites: []config.WatchSite{{
+			Name:              "Anthropic Claude Support",
+			Type:              "anthropic_support",
+			HomeURL:           "https://support.claude.com/zh-CN",
+			BriefingCategory:  "AI/科技",
+			CategoryAllowlist: []string{"安全保障"},
+			HighValueKeywords: []string{"身份验证", "电话验证"},
+		}}},
+	}
+
+	indexStore := NewIndexStore(cfg.Output.Dir)
+	articleStore := NewArticleStore(cfg.Output.Dir)
+	seenStore := NewSeenStore(cfg.Output.Dir)
+	if err := indexStore.Save(IndexState{Categories: map[string]model.WatchIndexSnapshot{
+		"Anthropic Claude Support::安全保障": {
+			Scope:     "category",
+			Source:    "Anthropic Claude Support",
+			Category:  "安全保障",
+			URL:       "https://support.claude.com/zh-CN/collections/4078535-security",
+			ItemCount: 1,
+			Items: []model.WatchIndexItem{{
+				Title:    "Claude 上的身份验证",
+				URL:      "https://support.claude.com/zh-CN/articles/14328960-claude-上的-身份验证",
+				Position: 1,
+				ItemHash: "same-item",
+			}},
+			Hash: "old-snapshot",
+		},
+	}}); err != nil {
+		t.Fatalf("indexStore.Save() error = %v", err)
+	}
+	if err := articleStore.Save(ArticleState{
+		"https://support.claude.com/zh-CN/articles/14328960-claude-上的-身份验证": {
+			URL:         "https://support.claude.com/zh-CN/articles/14328960-claude-上的-身份验证",
+			Title:       "Claude 上的身份验证",
+			SummaryHash: "summary-old",
+			BodyHash:    "body-old",
+		},
+	}); err != nil {
+		t.Fatalf("articleStore.Save() error = %v", err)
+	}
+	if err := seenStore.Save(model.WatchSeenState{Items: []model.WatchSeenArticle{{
+		ID:               "https://support.claude.com/zh-CN/articles/14328960-claude-上的-身份验证",
+		URL:              "https://support.claude.com/zh-CN/articles/14328960-claude-上的-身份验证",
+		Title:            "Claude 上的身份验证",
+		Source:           "Anthropic Claude Support",
+		BriefingCategory: "AI/科技",
+		WatchCategory:    "安全保障",
+		Summary:          "旧摘要",
+		Body:             "旧正文",
+		EventType:        "new_article",
+		DetectedAt:       time.Date(2026, 4, 15, 15, 0, 0, 0, time.UTC),
+	}}}); err != nil {
+		t.Fatalf("seenStore.Save() error = %v", err)
+	}
+
+	responses["https://support.claude.com/zh-CN/articles/14328960-claude-上的-身份验证"] = `<html><head><title>Claude 上的身份验证</title><meta name="description" content="某些使用场景需要提供政府颁发的身份证件与实时自拍。" /></head><body><article><h1>Claude 上的身份验证</h1><p>某些使用场景需要提供政府颁发的身份证件与实时自拍。</p><p>新增了实时自拍与手机号码交叉校验。</p></article></body></html>`
+
+	_, _, err := Run(cfg, time.Date(2026, 4, 15, 16, 0, 0, 0, time.UTC))
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	seen, err := seenStore.Load()
+	if err != nil {
+		t.Fatalf("seenStore.Load() error = %v", err)
+	}
+	if len(seen.Items) != 2 {
+		t.Fatalf("len(seen.Items) = %d, want 2; items=%#v", len(seen.Items), seen.Items)
+	}
+	item := seen.Items[1]
+	if item.EventType != "content_changed" {
+		t.Fatalf("item.EventType = %q, want content_changed", item.EventType)
+	}
+	if item.Body == "旧正文" || item.DetectedAt.IsZero() {
+		t.Fatalf("item = %#v", item)
+	}
+}
