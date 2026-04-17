@@ -180,6 +180,26 @@ watch:
         - 风控
         - 团队
         - 企业
+    - name: Anthropic News
+      type: announcement_page
+      home_url: https://www.anthropic.com/news
+      briefing_category: AI/科技
+      high_value_keywords:
+        - Claude
+        - Opus
+        - Sonnet
+        - model
+        - API
+    - name: Claude Platform Release Notes
+      type: announcement_page
+      home_url: https://platform.claude.com/docs/en/release-notes/overview
+      briefing_category: AI/科技
+      high_value_keywords:
+        - Claude
+        - Opus
+        - Sonnet
+        - API
+        - release
 
 email:
   smtp_host: smtp.example.com

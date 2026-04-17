@@ -46,3 +46,25 @@ func TestRenderWatchMarkdownShowsNoChangesMessage(t *testing.T) {
 		t.Fatalf("text = %q", text)
 	}
 }
+
+func TestRenderWatchMarkdownShowsSiteErrorsInFullChanges(t *testing.T) {
+	text := RenderWatchMarkdown(&model.WatchReport{
+		GeneratedAt: time.Date(2026, 4, 15, 16, 0, 0, 0, time.UTC),
+		Events: []model.WatchEvent{{
+			EventType:         "site_error",
+			Source:            "Claude Platform Release Notes",
+			Category:          "Claude Platform Release Notes",
+			Reason:            "抓取失败：EOF",
+			IncludeInBriefing: false,
+		}},
+	}, "26.04.15", "1600")
+	if !strings.Contains(text, "site_error") {
+		t.Fatalf("text = %q", text)
+	}
+	if !strings.Contains(text, "抓取失败：EOF") {
+		t.Fatalf("text = %q", text)
+	}
+	if !strings.Contains(text, "Claude Platform Release Notes / Claude Platform Release Notes") {
+		t.Fatalf("text = %q", text)
+	}
+}

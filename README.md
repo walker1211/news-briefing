@@ -34,11 +34,6 @@ Fill in `configs/config.yaml` before running non-help commands. Add `.env` only 
 ./news-briefing serve
 ```
 
-## Full Documentation
-
-- [中文完整文档](./README.zh-CN.md)
-- [English full documentation](./README.en.md)
-
 ## License
 
 Licensed under the MIT License. See [LICENSE](./LICENSE).

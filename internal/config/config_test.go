@@ -567,18 +567,68 @@ func TestProjectConfigIncludesAnthropicSupportWatch(t *testing.T) {
 			if err != nil {
 				t.Fatalf("Load() error = %v", err)
 			}
-			if len(cfg.Watch.Sites) != 1 {
-				t.Fatalf("len(cfg.Watch.Sites) = %d, want 1", len(cfg.Watch.Sites))
+			found := false
+			for _, site := range cfg.Watch.Sites {
+				if site.Name != "Anthropic Claude Support" || site.Type != "anthropic_support" {
+					continue
+				}
+				found = true
+				if site.BriefingCategory != "AI/科技" {
+					t.Fatalf("site.BriefingCategory = %q", site.BriefingCategory)
+				}
+				if len(site.CategoryAllowlist) == 0 || len(site.HighValueKeywords) == 0 {
+					t.Fatalf("site = %#v", site)
+				}
 			}
-			site := cfg.Watch.Sites[0]
-			if site.Name != "Anthropic Claude Support" || site.Type != "anthropic_support" {
-				t.Fatalf("site = %#v", site)
+			if !found {
+				t.Fatalf("Anthropic Claude Support site not found in %#v", cfg.Watch.Sites)
 			}
-			if site.BriefingCategory != "AI/科技" {
-				t.Fatalf("site.BriefingCategory = %q", site.BriefingCategory)
+		})
+	}
+}
+
+func TestProjectConfigIncludesAnthropicOfficialAnnouncementWatchSites(t *testing.T) {
+	configPaths := map[string]string{
+		"project": filepath.Join("..", "..", "configs", "config.yaml"),
+		"example": filepath.Join("..", "..", "configs", "config.example.yaml"),
+	}
+	want := []WatchSite{
+		{
+			Name:             "Anthropic News",
+			Type:             "announcement_page",
+			HomeURL:          "https://www.anthropic.com/news",
+			BriefingCategory: "AI/科技",
+		},
+		{
+			Name:             "Claude Platform Release Notes",
+			Type:             "announcement_page",
+			HomeURL:          "https://platform.claude.com/docs/en/release-notes/overview",
+			BriefingCategory: "AI/科技",
+		},
+	}
+
+	for name, configPath := range configPaths {
+		t.Run(name, func(t *testing.T) {
+			cfg, err := Load(configPath)
+			if err != nil {
+				t.Fatalf("Load() error = %v", err)
 			}
-			if len(site.CategoryAllowlist) == 0 || len(site.HighValueKeywords) == 0 {
-				t.Fatalf("site = %#v", site)
+
+			got := make(map[string]WatchSite, len(cfg.Watch.Sites))
+			for _, site := range cfg.Watch.Sites {
+				key := site.Name + "|" + site.Type + "|" + site.HomeURL + "|" + site.BriefingCategory
+				got[key] = site
+			}
+
+			for _, site := range want {
+				key := site.Name + "|" + site.Type + "|" + site.HomeURL + "|" + site.BriefingCategory
+				gotSite, exists := got[key]
+				if !exists {
+					t.Fatalf("missing Anthropic official watch site: %+v", site)
+				}
+				if len(gotSite.HighValueKeywords) == 0 {
+					t.Fatalf("site.HighValueKeywords for %q = empty", gotSite.Name)
+				}
 			}
 		})
 	}

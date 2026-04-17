@@ -21,7 +21,7 @@ var fetchWatchHTML = func(url string) (string, error) {
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
-		return "", fmt.Errorf("fetch watch page: unexpected status %d", resp.StatusCode)
+		return "", fmt.Errorf("fetch watch page %s: unexpected status %d", url, resp.StatusCode)
 	}
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
@@ -52,6 +52,17 @@ func Run(cfg *config.Config, now time.Time) ([]model.Article, *model.WatchReport
 	for _, site := range cfg.Watch.Sites {
 		siteArticles, siteSeenItems, events, err := runSite(site, now, indexState, articleState)
 		if err != nil {
+			if site.Type == "announcement_page" {
+				report.Events = append(report.Events, model.WatchEvent{
+					EventType:         "site_error",
+					Source:            site.Name,
+					Category:          site.Name,
+					DetectedAt:        now,
+					Reason:            fmt.Sprintf("抓取失败：%v", err),
+					IncludeInBriefing: false,
+				})
+				continue
+			}
 			return nil, nil, err
 		}
 		report.Events = append(report.Events, events...)
@@ -72,10 +83,17 @@ func Run(cfg *config.Config, now time.Time) ([]model.Article, *model.WatchReport
 }
 
 func runSite(site config.WatchSite, now time.Time, indexState IndexState, articleState ArticleState) ([]model.Article, []model.WatchSeenArticle, []model.WatchEvent, error) {
-	if site.Type != "anthropic_support" {
+	switch site.Type {
+	case "anthropic_support":
+		return runAnthropicSupportSite(site, now, indexState, articleState)
+	case "announcement_page":
+		return runAnnouncementSite(site, now, indexState, articleState)
+	default:
 		return nil, nil, nil, nil
 	}
+}
 
+func runAnthropicSupportSite(site config.WatchSite, now time.Time, indexState IndexState, articleState ArticleState) ([]model.Article, []model.WatchSeenArticle, []model.WatchEvent, error) {
 	type seenPayload struct {
 		summary string
 		body    string

@@ -202,6 +202,7 @@ func (app *app) runBriefing(commandPath string, period string, showRaw bool, sen
 			return err
 		}
 		articles = append(articles, watchArticles...)
+		app.printWatchSiteErrors(report)
 		if app.writeWatchMarkdown != nil && report != nil {
 			if _, err := app.writeWatchMarkdown(report, app.cfg.Output.Dir, now.Format("06.01.02"), period); err != nil {
 				return err
@@ -230,6 +231,7 @@ func (app *app) runScheduledBriefing(window scheduler.Window, sendEmail bool) er
 			return err
 		}
 		articles = append(articles, watchArticles...)
+		app.printWatchSiteErrors(report)
 		if app.writeWatchMarkdown != nil && report != nil {
 			if _, err := app.writeWatchMarkdown(report, app.cfg.Output.Dir, window.To.In(loc).Format("06.01.02"), window.Period); err != nil {
 				return err
@@ -637,4 +639,16 @@ func (app *app) currentTime() time.Time {
 		return app.now()
 	}
 	return time.Now()
+}
+
+func (app *app) printWatchSiteErrors(report *model.WatchReport) {
+	if report == nil || app.printText == nil {
+		return
+	}
+	for _, event := range report.Events {
+		if event.EventType != "site_error" {
+			continue
+		}
+		app.printText(fmt.Sprintf("Watch 站点异常：%s — %s", event.Source, event.Reason))
+	}
 }

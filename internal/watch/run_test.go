@@ -1,12 +1,37 @@
 package watch
 
 import (
+	"fmt"
+	"net/http"
+	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/walker1211/news-briefing/internal/config"
+	"github.com/walker1211/news-briefing/internal/fetcher"
 	"github.com/walker1211/news-briefing/internal/model"
 )
+
+func TestFetchWatchHTMLIncludesURLOnUnexpectedStatus(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "bad gateway", http.StatusBadGateway)
+	}))
+	defer server.Close()
+
+	fetcher.InitHTTPClient(config.Proxy{})
+
+	_, err := fetchWatchHTML(server.URL + "/release-notes")
+	if err == nil {
+		t.Fatal("fetchWatchHTML() error = nil, want unexpected status error")
+	}
+	if !strings.Contains(err.Error(), server.URL+"/release-notes") {
+		t.Fatalf("fetchWatchHTML() error = %q, want URL in error", err)
+	}
+	if !strings.Contains(err.Error(), "unexpected status 502") {
+		t.Fatalf("fetchWatchHTML() error = %q, want status in error", err)
+	}
+}
 
 func TestRunBootstrapsCategoryBaselineWithoutBriefingArticles(t *testing.T) {
 	oldFetch := fetchWatchHTML
@@ -50,6 +75,268 @@ func TestRunBootstrapsCategoryBaselineWithoutBriefingArticles(t *testing.T) {
 	snapshot, ok := indexState.Categories["Anthropic Claude Support::安全保障"]
 	if !ok || snapshot.ItemCount == 0 {
 		t.Fatalf("bootstrap category snapshot missing: %#v", indexState.Categories)
+	}
+}
+
+func TestRunAnnouncementSiteBootstrapsWithoutBriefingOutput(t *testing.T) {
+	oldFetch := fetchWatchHTML
+	defer func() { fetchWatchHTML = oldFetch }()
+
+	responses := map[string]string{
+		"https://www.anthropic.com/news":                   mustReadAnnouncementFixture(t, "anthropic_news_home.html"),
+		"https://www.anthropic.com/news/claude-opus-4-7":   mustReadAnnouncementFixture(t, "anthropic_news_opus47.html"),
+		"https://www.anthropic.com/news/claude-sonnet-4-6": mustReadAnnouncementFixture(t, "anthropic_news_opus47.html"),
+	}
+	fetchWatchHTML = func(url string) (string, error) { return responses[url], nil }
+
+	cfg := &config.Config{
+		Output: config.OutputCfg{Dir: t.TempDir()},
+		Watch: config.WatchConfig{Sites: []config.WatchSite{{
+			Name:             "Anthropic News",
+			Type:             "announcement_page",
+			HomeURL:          "https://www.anthropic.com/news",
+			BriefingCategory: "AI/科技",
+			HighValueKeywords: []string{
+				"Anthropic", "Claude", "Opus", "Sonnet",
+			},
+		}}},
+	}
+
+	articles, report, err := Run(cfg, time.Date(2026, 4, 17, 9, 0, 0, 0, time.UTC))
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if len(report.Events) != 0 {
+		t.Fatalf("report.Events = %#v, want bootstrap to stay silent", report.Events)
+	}
+	if len(articles) != 0 {
+		t.Fatalf("articles = %#v, want bootstrap to avoid briefing output", articles)
+	}
+
+	indexStore := NewIndexStore(cfg.Output.Dir)
+	indexState, err := indexStore.Load()
+	if err != nil {
+		t.Fatalf("indexStore.Load() error = %v", err)
+	}
+	snapshot, ok := indexState.Categories["Anthropic News::Anthropic News"]
+	if !ok || snapshot.ItemCount == 0 {
+		t.Fatalf("bootstrap announcement snapshot missing: %#v", indexState.Categories)
+	}
+}
+
+func TestRunAnnouncementSiteIncludesNewArticleInBriefing(t *testing.T) {
+	oldFetch := fetchWatchHTML
+	defer func() { fetchWatchHTML = oldFetch }()
+
+	oldHome := `<html><body><main><a href="/news/claude-sonnet-4-6"><h2>Introducing Claude Sonnet 4.6</h2><p>Feb 17, 2026</p></a></main></body></html>`
+	responses := map[string]string{
+		"https://www.anthropic.com/news":                   mustReadAnnouncementFixture(t, "anthropic_news_home.html"),
+		"https://www.anthropic.com/news/claude-opus-4-7":   mustReadAnnouncementFixture(t, "anthropic_news_opus47.html"),
+		"https://www.anthropic.com/news/claude-sonnet-4-6": mustReadAnnouncementFixture(t, "anthropic_news_sonnet46.html"),
+	}
+	fetchWatchHTML = func(url string) (string, error) { return responses[url], nil }
+
+	cfg := &config.Config{
+		Output: config.OutputCfg{Dir: t.TempDir()},
+		Watch: config.WatchConfig{Sites: []config.WatchSite{{
+			Name:             "Anthropic News",
+			Type:             "announcement_page",
+			HomeURL:          "https://www.anthropic.com/news",
+			BriefingCategory: "AI/科技",
+			HighValueKeywords: []string{
+				"Anthropic", "Claude", "Opus", "Sonnet",
+			},
+		}}},
+	}
+
+	indexStore := NewIndexStore(cfg.Output.Dir)
+	articleStore := NewArticleStore(cfg.Output.Dir)
+	baseline, err := parseAnthropicAnnouncementIndex("Anthropic News", "https://www.anthropic.com/news", oldHome)
+	if err != nil {
+		t.Fatalf("parseAnthropicAnnouncementIndex() error = %v", err)
+	}
+	if err := indexStore.Save(IndexState{Categories: map[string]model.WatchIndexSnapshot{
+		"Anthropic News::Anthropic News": baseline,
+	}}); err != nil {
+		t.Fatalf("indexStore.Save() error = %v", err)
+	}
+	if err := articleStore.Save(ArticleState{
+		"https://www.anthropic.com/news/claude-sonnet-4-6": {
+			URL:         "https://www.anthropic.com/news/claude-sonnet-4-6",
+			Title:       "Introducing Claude Sonnet 4.6",
+			SummaryHash: hashWatchContent("Claude Sonnet 4.6 balances speed and intelligence for everyday tasks."),
+			BodyHash:    hashWatchContent("Claude Sonnet 4.6 balances speed and intelligence for everyday tasks. It improves latency and reliability for production use cases."),
+		},
+	}); err != nil {
+		t.Fatalf("articleStore.Save() error = %v", err)
+	}
+
+	articles, report, err := Run(cfg, time.Date(2026, 4, 17, 10, 0, 0, 0, time.UTC))
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	found := false
+	for _, event := range report.Events {
+		if event.EventType == "new_article" && event.ArticleURL == "https://www.anthropic.com/news/claude-opus-4-7" {
+			found = true
+			if !event.IncludeInBriefing {
+				t.Fatalf("event should be included in briefing: %#v", event)
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("report.Events = %#v", report.Events)
+	}
+	if len(articles) != 1 {
+		t.Fatalf("len(articles) = %d, want 1; articles=%#v", len(articles), articles)
+	}
+}
+
+func TestRunClaudeReleaseNotesIncludesNewArticleInBriefing(t *testing.T) {
+	oldFetch := fetchWatchHTML
+	defer func() { fetchWatchHTML = oldFetch }()
+
+	oldHome := `<html><body><main><h3><div id="february-17-2026"><div>February 17, 2026</div></div></h3><ul><li>We've launched <a href="https://www.anthropic.com/news/claude-sonnet-4-6">Claude Sonnet 4.6</a>, our latest balanced model combining speed and intelligence for everyday tasks. Sonnet 4.6 delivers improved agentic search performance while consuming fewer tokens.</li></ul></main></body></html>`
+	responses := map[string]string{
+		"https://platform.claude.com/docs/en/release-notes/overview":                  mustReadAnnouncementFixture(t, "claude_release_notes_home.html"),
+		"https://platform.claude.com/docs/en/release-notes/overview#april-16-2026":    mustReadAnnouncementFixture(t, "claude_release_notes_home.html"),
+		"https://platform.claude.com/docs/en/release-notes/overview#february-17-2026": mustReadAnnouncementFixture(t, "claude_release_notes_home.html"),
+		"https://platform.claude.com/docs/en/release-notes/claude-opus-4-7":           mustReadAnnouncementFixture(t, "claude_release_notes_opus47.html"),
+		"https://platform.claude.com/docs/en/release-notes/claude-sonnet-4-6":         mustReadAnnouncementFixture(t, "claude_release_notes_sonnet46.html"),
+	}
+	fetchWatchHTML = func(url string) (string, error) { return responses[url], nil }
+
+	cfg := &config.Config{
+		Output: config.OutputCfg{Dir: t.TempDir()},
+		Watch: config.WatchConfig{Sites: []config.WatchSite{{
+			Name:             "Claude Platform Release Notes",
+			Type:             "announcement_page",
+			HomeURL:          "https://platform.claude.com/docs/en/release-notes/overview",
+			BriefingCategory: "AI/科技",
+			HighValueKeywords: []string{
+				"Claude", "Opus", "Sonnet", "API", "release",
+			},
+		}}},
+	}
+
+	indexStore := NewIndexStore(cfg.Output.Dir)
+	articleStore := NewArticleStore(cfg.Output.Dir)
+	baseline, err := parseAnthropicAnnouncementIndex("Claude Platform Release Notes", "https://platform.claude.com/docs/en/release-notes/overview", oldHome)
+	if err != nil {
+		t.Fatalf("parseAnthropicAnnouncementIndex() error = %v", err)
+	}
+	if err := indexStore.Save(IndexState{Categories: map[string]model.WatchIndexSnapshot{
+		"Claude Platform Release Notes::Claude Platform Release Notes": baseline,
+	}}); err != nil {
+		t.Fatalf("indexStore.Save() error = %v", err)
+	}
+	if err := articleStore.Save(ArticleState{
+		"https://platform.claude.com/docs/en/release-notes/overview#february-17-2026": {
+			URL:         "https://platform.claude.com/docs/en/release-notes/overview#february-17-2026",
+			Title:       "We've launched Claude Sonnet 4.6",
+			SummaryHash: hashWatchContent("We've launched Claude Sonnet 4.6, our latest balanced model combining speed and intelligence for everyday tasks. Sonnet 4.6 delivers improved agentic search performance while consuming fewer tokens."),
+			BodyHash:    hashWatchContent("We've launched Claude Sonnet 4.6, our latest balanced model combining speed and intelligence for everyday tasks. Sonnet 4.6 delivers improved agentic search performance while consuming fewer tokens. API code execution is now free when used with web search or web fetch."),
+		},
+	}); err != nil {
+		t.Fatalf("articleStore.Save() error = %v", err)
+	}
+
+	articles, report, err := Run(cfg, time.Date(2026, 4, 17, 10, 0, 0, 0, time.UTC))
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	found := false
+	for _, event := range report.Events {
+		if event.EventType == "new_article" && event.ArticleURL == "https://platform.claude.com/docs/en/release-notes/overview#april-16-2026" {
+			found = true
+			if !event.IncludeInBriefing {
+				t.Fatalf("event should be included in briefing: %#v", event)
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("report.Events = %#v", report.Events)
+	}
+	if len(articles) != 1 {
+		t.Fatalf("len(articles) = %d, want 1; articles=%#v", len(articles), articles)
+	}
+	if articles[0].Source != "Claude Platform Release Notes Watch" {
+		t.Fatalf("articles[0].Source = %q", articles[0].Source)
+	}
+}
+
+func TestRunSkipsFailedAnnouncementSiteAndKeepsOtherWatchSites(t *testing.T) {
+	oldFetch := fetchWatchHTML
+	defer func() { fetchWatchHTML = oldFetch }()
+
+	responses := map[string]string{
+		"https://support.claude.com/zh-CN":                                  mustReadFixture(t, "anthropic/home.html"),
+		"https://support.claude.com/zh-CN/collections/4078535-security":     mustReadFixture(t, "anthropic/category_security.html"),
+		"https://support.claude.com/zh-CN/articles/14328960-claude-上的-身份验证": mustReadFixture(t, "anthropic/article_identity_verification.html"),
+	}
+	fetchWatchHTML = func(url string) (string, error) {
+		if url == "https://platform.claude.com/docs/en/release-notes/overview" {
+			return "", fmt.Errorf("EOF")
+		}
+		return responses[url], nil
+	}
+
+	cfg := &config.Config{
+		Output: config.OutputCfg{Dir: t.TempDir()},
+		Watch: config.WatchConfig{Sites: []config.WatchSite{
+			{
+				Name:             "Claude Platform Release Notes",
+				Type:             "announcement_page",
+				HomeURL:          "https://platform.claude.com/docs/en/release-notes/overview",
+				BriefingCategory: "AI/科技",
+				HighValueKeywords: []string{
+					"Claude", "Opus", "API",
+				},
+			},
+			{
+				Name:              "Anthropic Claude Support",
+				Type:              "anthropic_support",
+				HomeURL:           "https://support.claude.com/zh-CN",
+				BriefingCategory:  "AI/科技",
+				CategoryAllowlist: []string{"安全保障"},
+				HighValueKeywords: []string{"身份验证", "电话验证"},
+			},
+		}},
+	}
+
+	articles, report, err := Run(cfg, time.Date(2026, 4, 15, 16, 0, 0, 0, time.UTC))
+	if err != nil {
+		t.Fatalf("Run() error = %v, want watch to continue when announcement site fails", err)
+	}
+	if len(report.Events) != 1 {
+		t.Fatalf("len(report.Events) = %d, want 1; events=%#v", len(report.Events), report.Events)
+	}
+	if report.Events[0].EventType != "site_error" {
+		t.Fatalf("report.Events[0].EventType = %q", report.Events[0].EventType)
+	}
+	if report.Events[0].Source != "Claude Platform Release Notes" {
+		t.Fatalf("report.Events[0].Source = %q", report.Events[0].Source)
+	}
+	if report.Events[0].IncludeInBriefing {
+		t.Fatalf("report.Events[0].IncludeInBriefing = true, want false")
+	}
+	if report.Events[0].Reason != "抓取失败：EOF" {
+		t.Fatalf("report.Events[0].Reason = %q", report.Events[0].Reason)
+	}
+	if len(articles) != 0 {
+		t.Fatalf("articles = %#v, want no briefing output on bootstrap", articles)
+	}
+
+	indexStore := NewIndexStore(cfg.Output.Dir)
+	indexState, err := indexStore.Load()
+	if err != nil {
+		t.Fatalf("indexStore.Load() error = %v", err)
+	}
+	if _, ok := indexState.Categories["Anthropic Claude Support::安全保障"]; !ok {
+		t.Fatalf("support snapshot missing after announcement failure: %#v", indexState.Categories)
+	}
+	if _, ok := indexState.Categories["Claude Platform Release Notes::Claude Platform Release Notes"]; ok {
+		t.Fatalf("release notes snapshot should not be written on fetch failure: %#v", indexState.Categories)
 	}
 }
 

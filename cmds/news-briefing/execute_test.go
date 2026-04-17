@@ -383,6 +383,100 @@ func TestRunScheduledBriefingMergesWatchArticlesAndWritesSidecar(t *testing.T) {
 	}
 }
 
+func TestRunBriefingPrintsWatchSiteErrors(t *testing.T) {
+	now := time.Date(2026, 4, 15, 16, 0, 0, 0, time.UTC)
+	var printed []string
+
+	app := &app{
+		cfg: &config.Config{Output: config.OutputCfg{Dir: t.TempDir(), Mode: model.OutputModeOriginalOnly}},
+		now: func() time.Time { return now },
+		fetchAll: func(cfg *config.Config, markSeen bool) ([]model.Article, []fetcher.FailedSource, error) {
+			return []model.Article{{Title: "news", Category: "AI/科技", Published: now.Add(-time.Hour)}}, nil, nil
+		},
+		fetchWatch: func(cfg *config.Config, gotNow time.Time) ([]model.Article, *model.WatchReport, error) {
+			return nil, &model.WatchReport{
+				GeneratedAt: gotNow,
+				Events: []model.WatchEvent{{
+					EventType:  "site_error",
+					Source:     "Claude Platform Release Notes",
+					Category:   "Claude Platform Release Notes",
+					DetectedAt: gotNow,
+					Reason:     "抓取失败：EOF",
+				}},
+			}, nil
+		},
+		composeBody: func(path string, mode model.OutputMode, content model.OutputContent) (string, error) {
+			return "ORIGINAL ONLY", nil
+		},
+		printText:          func(s string) { printed = append(printed, s) },
+		printCLI:           func(*model.Briefing) {},
+		printFailed:        func([]fetcher.FailedSource) {},
+		printArticles:      func([]model.Article) {},
+		writeMarkdown:      func(*model.Briefing, string) (string, error) { return "", nil },
+		writeWatchMarkdown: func(*model.WatchReport, string, string, string) (string, error) { return "", nil },
+	}
+
+	if err := app.runBriefing("run", "1600", false, false); err != nil {
+		t.Fatalf("runBriefing() error = %v", err)
+	}
+	if len(printed) != 1 {
+		t.Fatalf("len(printed) = %d, want 1; printed=%#v", len(printed), printed)
+	}
+	want := "Watch 站点异常：Claude Platform Release Notes — 抓取失败：EOF"
+	if printed[0] != want {
+		t.Fatalf("printed[0] = %q, want %q", printed[0], want)
+	}
+}
+
+func TestRunScheduledBriefingPrintsWatchSiteErrors(t *testing.T) {
+	loc := time.FixedZone("CST", 8*3600)
+	window := scheduler.Window{
+		Period: "1600",
+		From:   time.Date(2026, 4, 15, 7, 0, 0, 0, loc),
+		To:     time.Date(2026, 4, 15, 16, 0, 0, 0, loc),
+	}
+	var printed []string
+
+	app := &app{
+		cfg: &config.Config{ScheduleLocation: loc, Output: config.OutputCfg{Dir: t.TempDir(), Mode: model.OutputModeOriginalOnly}},
+		fetchWindow: func(cfg *config.Config, from, to time.Time, markSeen bool, ignoreSeen bool) ([]model.Article, []fetcher.FailedSource, error) {
+			return []model.Article{{Title: "news", Category: "AI/科技", Published: to.Add(-time.Hour)}}, nil, nil
+		},
+		fetchWatch: func(cfg *config.Config, gotNow time.Time) ([]model.Article, *model.WatchReport, error) {
+			return nil, &model.WatchReport{
+				GeneratedAt: gotNow,
+				Events: []model.WatchEvent{{
+					EventType:  "site_error",
+					Source:     "Claude Platform Release Notes",
+					Category:   "Claude Platform Release Notes",
+					DetectedAt: gotNow,
+					Reason:     "抓取失败：EOF",
+				}},
+			}, nil
+		},
+		composeBody: func(path string, mode model.OutputMode, content model.OutputContent) (string, error) {
+			return "ORIGINAL ONLY", nil
+		},
+		printText:          func(s string) { printed = append(printed, s) },
+		printCLI:           func(*model.Briefing) {},
+		printFailed:        func([]fetcher.FailedSource) {},
+		printArticles:      func([]model.Article) {},
+		writeMarkdown:      func(*model.Briefing, string) (string, error) { return "", nil },
+		writeWatchMarkdown: func(*model.WatchReport, string, string, string) (string, error) { return "", nil },
+	}
+
+	if err := app.runScheduledBriefing(window, false); err != nil {
+		t.Fatalf("runScheduledBriefing() error = %v", err)
+	}
+	if len(printed) != 1 {
+		t.Fatalf("len(printed) = %d, want 1; printed=%#v", len(printed), printed)
+	}
+	want := "Watch 站点异常：Claude Platform Release Notes — 抓取失败：EOF"
+	if printed[0] != want {
+		t.Fatalf("printed[0] = %q, want %q", printed[0], want)
+	}
+}
+
 func TestRunRegenSkipsWatch(t *testing.T) {
 	watchCalled := false
 	app := &app{
