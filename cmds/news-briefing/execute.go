@@ -23,6 +23,7 @@ type app struct {
 	waitForever         func()
 	fetchAll            func(*config.Config, bool) ([]model.Article, []fetcher.FailedSource, error)
 	fetchWindow         func(*config.Config, time.Time, time.Time, bool, bool) ([]model.Article, []fetcher.FailedSource, error)
+	markSeen            func([]model.Article) error
 	fetchWatch          func(*config.Config, time.Time) ([]model.Article, *model.WatchReport, error)
 	summarize           func([]model.Article, []string, *time.Location) (string, error)
 	translate           func([]model.Article, []string, *time.Location) (string, error)
@@ -51,6 +52,9 @@ func newApp(cfg *config.Config) *app {
 		},
 		fetchAll:    fetcher.FetchAll,
 		fetchWindow: fetcher.FetchWindow,
+		markSeen: func(articles []model.Article) error {
+			return fetcher.MarkArticlesSeen(cfg.Output.Dir, articles)
+		},
 		fetchWatch:  watch.Run,
 		summarize:   runner.Summarize,
 		translate:   runner.Translate,
@@ -192,10 +196,11 @@ func (app *app) runBriefing(commandPath string, period string, showRaw bool, sen
 		app.fetchAll = fetcher.FetchAll
 	}
 	now := app.currentTime()
-	articles, failed, err := app.fetchAll(app.cfg, true)
+	articles, failed, err := app.fetchAll(app.cfg, false)
 	if err != nil {
 		return err
 	}
+	seenArticles := append([]model.Article(nil), articles...)
 	if app.fetchWatch != nil {
 		watchArticles, report, err := app.fetchWatch(app.cfg, now)
 		if err != nil {
@@ -209,7 +214,7 @@ func (app *app) runBriefing(commandPath string, period string, showRaw bool, sen
 			}
 		}
 	}
-	return app.renderBriefing(commandPath, now.Format("06.01.02"), period, articles, failed, showRaw, sendEmail)
+	return app.renderBriefing(commandPath, now.Format("06.01.02"), period, articles, seenArticles, failed, showRaw, sendEmail)
 }
 
 func (app *app) runScheduledBriefing(window scheduler.Window, sendEmail bool) error {
@@ -217,10 +222,11 @@ func (app *app) runScheduledBriefing(window scheduler.Window, sendEmail bool) er
 	if app.fetchWindow == nil {
 		app.fetchWindow = fetcher.FetchWindow
 	}
-	articles, failed, err := app.fetchWindow(app.cfg, window.From, window.To, true, false)
+	articles, failed, err := app.fetchWindow(app.cfg, window.From, window.To, false, false)
 	if err != nil {
 		return err
 	}
+	seenArticles := append([]model.Article(nil), articles...)
 	loc := app.cfg.ScheduleLocation
 	if loc == nil {
 		loc = time.Local
@@ -238,7 +244,7 @@ func (app *app) runScheduledBriefing(window scheduler.Window, sendEmail bool) er
 			}
 		}
 	}
-	return app.renderBriefing("serve", window.To.In(loc).Format("06.01.02"), window.Period, articles, failed, false, sendEmail)
+	return app.renderBriefing("serve", window.To.In(loc).Format("06.01.02"), window.Period, articles, seenArticles, failed, false, sendEmail)
 }
 
 func (app *app) runRegen(cmd regenCommand) error {
@@ -270,10 +276,10 @@ func (app *app) runRegen(cmd regenCommand) error {
 	if err != nil {
 		return err
 	}
-	return app.renderBriefing("regen", to.Format("06.01.02"), period, articles, failed, cmd.raw, cmd.sendEmail)
+	return app.renderBriefing("regen", to.Format("06.01.02"), period, articles, nil, failed, cmd.raw, cmd.sendEmail)
 }
 
-func (app *app) renderBriefing(commandPath string, date string, period string, articles []model.Article, failed []fetcher.FailedSource, showRaw bool, sendEmail bool) error {
+func (app *app) renderBriefing(commandPath string, date string, period string, articles []model.Article, seenArticles []model.Article, failed []fetcher.FailedSource, showRaw bool, sendEmail bool) error {
 	fmt.Printf("Found %d articles after filtering.\n", len(articles))
 	app.printFailed(failed)
 	if app.composeBody == nil {
@@ -318,9 +324,14 @@ func (app *app) renderBriefing(commandPath string, date string, period string, a
 
 	path, err := app.writeMarkdown(briefing, app.cfg.Output.Dir)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error writing markdown: %v\n", err)
-	} else {
-		fmt.Printf("Markdown saved: %s\n", path)
+		return fmt.Errorf("write markdown: %w", err)
+	}
+	fmt.Printf("Markdown saved: %s\n", path)
+
+	if app.markSeen != nil && len(seenArticles) > 0 {
+		if err := app.markSeen(seenArticles); err != nil {
+			return fmt.Errorf("mark seen: %w", err)
+		}
 	}
 
 	if !sendEmail {

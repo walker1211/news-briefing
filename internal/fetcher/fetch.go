@@ -153,6 +153,14 @@ func FetchWindow(cfg *config.Config, from, to time.Time, markSeen bool, ignoreSe
 	return outcome.Articles, failed, nil
 }
 
+func MarkArticlesSeen(outputDir string, articles []model.Article) error {
+	if len(articles) == 0 {
+		return nil
+	}
+	_, err := Dedup(articles, true, NewSeenStore(outputDir))
+	return err
+}
+
 func articleWithinWindow(a model.Article, from, to time.Time) bool {
 	return a.Published.After(from) && !a.Published.After(to)
 }

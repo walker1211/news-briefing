@@ -159,6 +159,236 @@ func TestRunnerUsesConfiguredCommandAndArgs(t *testing.T) {
 	}
 }
 
+func TestCallClaudeIncludesStdoutAndStderrOnExitError(t *testing.T) {
+	dir := t.TempDir()
+	oldPath := os.Getenv("PATH")
+	t.Cleanup(func() {
+		_ = os.Setenv("PATH", oldPath)
+		ResetCommandForTest()
+	})
+
+	commandName := "failing-ai"
+	if runtime.GOOS == "windows" {
+		commandName += ".bat"
+	}
+	commandPath := filepath.Join(dir, commandName)
+	if err := os.WriteFile(commandPath, []byte("#!/bin/sh\nprintf 'partial output'\n>&2 printf 'stderr detail'\nexit 1\n"), 0o755); err != nil {
+		t.Fatalf("write fake cli: %v", err)
+	}
+	if err := os.Setenv("PATH", dir+string(os.PathListSeparator)+oldPath); err != nil {
+		t.Fatalf("set PATH: %v", err)
+	}
+
+	runner := NewRunner("failing-ai", nil, nil, true, "", "")
+	_, err := runner.callClaude("hello world")
+	if err == nil {
+		t.Fatal("callClaude() error = nil, want exit error")
+	}
+	for _, want := range []string{"ai cli failed after 1 attempts:", "stdout: partial output", "stderr: stderr detail"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("callClaude() error = %q, want substring %q", err.Error(), want)
+		}
+	}
+}
+
+func TestCallClaudeRetriesRetryableFailureAndEventuallySucceeds(t *testing.T) {
+	dir := t.TempDir()
+	oldPath := os.Getenv("PATH")
+	oldRetrySleep := retrySleep
+	retrySleep = func(time.Duration) {}
+	t.Cleanup(func() {
+		retrySleep = oldRetrySleep
+		_ = os.Setenv("PATH", oldPath)
+		ResetCommandForTest()
+	})
+
+	statePath := filepath.Join(dir, "attempts.txt")
+	commandName := "flaky-ai"
+	if runtime.GOOS == "windows" {
+		commandName += ".bat"
+	}
+	commandPath := filepath.Join(dir, commandName)
+	script := "#!/bin/sh\n" +
+		"COUNT=0\n" +
+		"if [ -f \"" + statePath + "\" ]; then COUNT=$(cat \"" + statePath + "\"); fi\n" +
+		"COUNT=$((COUNT+1))\n" +
+		"printf '%s' \"$COUNT\" > \"" + statePath + "\"\n" +
+		"if [ \"$COUNT\" -lt 3 ]; then\n" +
+		"  >&2 printf 'server_error request req-%s' \"$COUNT\"\n" +
+		"  exit 1\n" +
+		"fi\n" +
+		"printf 'final body'\n"
+	if err := os.WriteFile(commandPath, []byte(script), 0o755); err != nil {
+		t.Fatalf("write fake cli: %v", err)
+	}
+	if err := os.Setenv("PATH", dir+string(os.PathListSeparator)+oldPath); err != nil {
+		t.Fatalf("set PATH: %v", err)
+	}
+
+	runner := NewRunner("flaky-ai", nil, nil, true, "", "")
+	got, err := runner.callClaudeWithKind(callKindSummarize, "hello world")
+	if err != nil {
+		t.Fatalf("callClaudeWithKind() error = %v", err)
+	}
+	if got != "final body" {
+		t.Fatalf("callClaudeWithKind() = %q, want %q", got, "final body")
+	}
+	data, err := os.ReadFile(statePath)
+	if err != nil {
+		t.Fatalf("ReadFile() attempts error = %v", err)
+	}
+	if strings.TrimSpace(string(data)) != "3" {
+		t.Fatalf("attempt count = %q, want %q", strings.TrimSpace(string(data)), "3")
+	}
+}
+
+func TestIsRetryableAICLIErrorRejectsNonRetryableFailure(t *testing.T) {
+	err := fmt.Errorf("ai cli: exit status 1")
+	if isRetryableAICLIError(err, "", "flag provided but not defined") {
+		t.Fatal("isRetryableAICLIError() = true, want false for argument error")
+	}
+}
+
+func TestCallClaudeReturnsAggregatedErrorAfterRetryExhaustion(t *testing.T) {
+	dir := t.TempDir()
+	oldPath := os.Getenv("PATH")
+	oldRetrySleep := retrySleep
+	retrySleep = func(time.Duration) {}
+	t.Cleanup(func() {
+		retrySleep = oldRetrySleep
+		_ = os.Setenv("PATH", oldPath)
+		ResetCommandForTest()
+	})
+
+	statePath := filepath.Join(dir, "attempts.txt")
+	commandName := "always-fail-ai"
+	if runtime.GOOS == "windows" {
+		commandName += ".bat"
+	}
+	commandPath := filepath.Join(dir, commandName)
+	script := "#!/bin/sh\n" +
+		"COUNT=0\n" +
+		"if [ -f \"" + statePath + "\" ]; then COUNT=$(cat \"" + statePath + "\"); fi\n" +
+		"COUNT=$((COUNT+1))\n" +
+		"printf '%s' \"$COUNT\" > \"" + statePath + "\"\n" +
+		"printf 'stdout attempt %s' \"$COUNT\"\n" +
+		" >&2 printf 'server_error request req-%s' \"$COUNT\"\n" +
+		"exit 1\n"
+	if err := os.WriteFile(commandPath, []byte(script), 0o755); err != nil {
+		t.Fatalf("write fake cli: %v", err)
+	}
+	if err := os.Setenv("PATH", dir+string(os.PathListSeparator)+oldPath); err != nil {
+		t.Fatalf("set PATH: %v", err)
+	}
+
+	runner := NewRunner("always-fail-ai", nil, nil, true, "", "")
+	_, err := runner.callClaudeWithKind(callKindSummarize, "hello world")
+	if err == nil {
+		t.Fatal("callClaudeWithKind() error = nil, want retry exhaustion")
+	}
+	for _, want := range []string{"after 3 attempts", "stdout attempt 3", "req-3"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("callClaudeWithKind() error = %q, want substring %q", err.Error(), want)
+		}
+	}
+}
+
+func TestExtractRequestIDFindsOpenAIStyleRequestID(t *testing.T) {
+	stderr := "server_error request ID 19318a28-85ad-423c-a7cd-9b262bcb6741"
+	got := extractRequestID("", stderr)
+	if got != "19318a28-85ad-423c-a7cd-9b262bcb6741" {
+		t.Fatalf("extractRequestID() = %q", got)
+	}
+}
+
+func TestCallClaudeWritesFailureLogAfterRetryExhaustion(t *testing.T) {
+	dir := t.TempDir()
+	logPath := filepath.Join(dir, "ai-cli-failures.log")
+	oldLogPath := aiCLIFailureLogPath
+	oldPath := os.Getenv("PATH")
+	oldRetrySleep := retrySleep
+	retrySleep = func(time.Duration) {}
+	t.Cleanup(func() {
+		aiCLIFailureLogPath = oldLogPath
+		retrySleep = oldRetrySleep
+		_ = os.Setenv("PATH", oldPath)
+		ResetCommandForTest()
+	})
+	aiCLIFailureLogPath = logPath
+
+	commandName := "log-fail-ai"
+	if runtime.GOOS == "windows" {
+		commandName += ".bat"
+	}
+	commandPath := filepath.Join(dir, commandName)
+	script := "#!/bin/sh\nprintf 'stdout body'\n>&2 printf 'server_error request ID 19318a28-85ad-423c-a7cd-9b262bcb6741'\nexit 1\n"
+	if err := os.WriteFile(commandPath, []byte(script), 0o755); err != nil {
+		t.Fatalf("write fake cli: %v", err)
+	}
+	if err := os.Setenv("PATH", dir+string(os.PathListSeparator)+oldPath); err != nil {
+		t.Fatalf("set PATH: %v", err)
+	}
+
+	runner := NewRunner("log-fail-ai", nil, nil, true, "", "")
+	_, err := runner.callClaudeWithKind(callKindTranslate, "hello world")
+	if err == nil {
+		t.Fatal("callClaudeWithKind() error = nil, want failure")
+	}
+	data, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatalf("ReadFile() log error = %v", err)
+	}
+	for _, want := range []string{"translate", "19318a28-85ad-423c-a7cd-9b262bcb6741", "attempts=3"} {
+		if !strings.Contains(string(data), want) {
+			t.Fatalf("failure log = %q, want substring %q", string(data), want)
+		}
+	}
+}
+
+func TestCallClaudeRetrySuccessStillSanitizesCCSOutput(t *testing.T) {
+	dir := t.TempDir()
+	oldPath := os.Getenv("PATH")
+	oldRetrySleep := retrySleep
+	retrySleep = func(time.Duration) {}
+	t.Cleanup(func() {
+		retrySleep = oldRetrySleep
+		_ = os.Setenv("PATH", oldPath)
+		ResetCommandForTest()
+	})
+
+	statePath := filepath.Join(dir, "attempts.txt")
+	commandName := "ccs"
+	if runtime.GOOS == "windows" {
+		commandName += ".bat"
+	}
+	commandPath := filepath.Join(dir, commandName)
+	script := "#!/bin/sh\n" +
+		"COUNT=0\n" +
+		"if [ -f \"" + statePath + "\" ]; then COUNT=$(cat \"" + statePath + "\"); fi\n" +
+		"COUNT=$((COUNT+1))\n" +
+		"printf '%s' \"$COUNT\" > \"" + statePath + "\"\n" +
+		"if [ \"$COUNT\" -lt 2 ]; then\n" +
+		"  >&2 printf 'server_error request ID 19318a28-85ad-423c-a7cd-9b262bcb6741'\n" +
+		"  exit 1\n" +
+		"fi\n" +
+		"printf '[i] Joined existing CLIProxy on port 8317 (http)\n最终正文'\n"
+	if err := os.WriteFile(commandPath, []byte(script), 0o755); err != nil {
+		t.Fatalf("write fake cli: %v", err)
+	}
+	if err := os.Setenv("PATH", dir+string(os.PathListSeparator)+oldPath); err != nil {
+		t.Fatalf("set PATH: %v", err)
+	}
+
+	runner := NewRunner("ccs", []string{"codex"}, nil, true, "", "")
+	got, err := runner.callClaudeWithKind(callKindSummarize, "hello world")
+	if err != nil {
+		t.Fatalf("callClaudeWithKind() error = %v", err)
+	}
+	if got != "最终正文" {
+		t.Fatalf("callClaudeWithKind() = %q, want %q", got, "最终正文")
+	}
+}
+
 func TestRunnerUsesConfiguredExtraFlagsForSummarize(t *testing.T) {
 	setupFakeCLI(t, "claude")
 	runner := NewRunner("claude", []string{"--model", "claude-opus-4-6"}, []string{"--bare", "--disable-slash-commands"}, true, "", "")

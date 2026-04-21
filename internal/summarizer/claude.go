@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -87,6 +89,14 @@ type Runner struct {
 	proxyEnv           []string
 }
 
+type callKind string
+
+const (
+	callKindSummarize callKind = "summarize"
+	callKindTranslate callKind = "translate"
+	callKindDeepDive  callKind = "deep"
+)
+
 var (
 	defaultCommand            = "ccs"
 	defaultCommandArgs        = []string{"codex"}
@@ -96,6 +106,8 @@ var (
 	defaultRunner             = NewRunner(defaultCommand, defaultCommandArgs, defaultExtraFlags, defaultAppendSystemPrompt, "", "")
 	defaultHTTPProxy          string
 	defaultSocks5Proxy        string
+	aiCLIFailureLogPath       = filepath.Join("logs", "ai-cli-failures.log")
+	requestIDPattern          = regexp.MustCompile(`[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}`)
 )
 
 func NewRunner(command string, args []string, extraFlags []string, appendSystemPrompt bool, httpProxy, socks5Proxy string) *Runner {
@@ -156,7 +168,64 @@ func ResetCommandForTest() {
 	defaultRunner = NewRunner(defaultCommand, defaultCommandArgs, defaultExtraFlags, defaultAppendSystemPrompt, "", "")
 }
 
+func isRetryableAICLIError(err error, stdout string, stderr string) bool {
+	if err == nil {
+		return false
+	}
+	combined := strings.ToLower(strings.Join([]string{err.Error(), stdout, stderr}, "\n"))
+	for _, marker := range []string{
+		"server_error",
+		"status: 500",
+		"status: 502",
+		"status: 503",
+		"status: 504",
+		"context canceled",
+		"timeout",
+		"i/o timeout",
+		"connection reset",
+		"eof",
+	} {
+		if strings.Contains(combined, marker) {
+			return true
+		}
+	}
+	return false
+}
+
+var retrySleep = time.Sleep
+
+func (r *Runner) callClaudeWithKind(kind callKind, prompt string, extraFlags ...string) (string, error) {
+	attemptDelays := []time.Duration{0, time.Second, 3 * time.Second}
+	var lastErr error
+	for attempt, delay := range attemptDelays {
+		if delay > 0 {
+			retrySleep(delay)
+		}
+		out, stdoutText, stderrText, err := r.runClaudeCommand(prompt, extraFlags...)
+		if err == nil {
+			if attempt > 0 {
+				fmt.Fprintf(os.Stderr, "AI CLI retry succeeded on attempt %d\n", attempt+1)
+			}
+			if r.shouldSanitizeCLIOutput() {
+				return sanitizeCLIOutput(out), nil
+			}
+			return strings.TrimSpace(out), nil
+		}
+		lastErr = buildRetryableCallError(attempt+1, err, stdoutText, stderrText)
+		if !isRetryableAICLIError(err, stdoutText, stderrText) || attempt == len(attemptDelays)-1 {
+			finalErr := fmt.Errorf("ai cli failed after %d attempts: %w", attempt+1, lastErr)
+			appendAICLIFailureLog(kind, attempt+1, stdoutText, stderrText, finalErr)
+			return "", finalErr
+		}
+	}
+	return "", lastErr
+}
+
 func (r *Runner) callClaude(prompt string, extraFlags ...string) (string, error) {
+	return r.callClaudeWithKind(callKindSummarize, prompt, extraFlags...)
+}
+
+func (r *Runner) runClaudeCommand(prompt string, extraFlags ...string) (string, string, string, error) {
 	args := append([]string{}, r.commandArgs...)
 	args = append(args, extraFlags...)
 	args = append(args, "-p", prompt)
@@ -169,14 +238,42 @@ func (r *Runner) callClaude(prompt string, extraFlags ...string) (string, error)
 	cmd.Stderr = &stderr
 
 	if err := cmd.Run(); err != nil {
-		return "", fmt.Errorf("ai cli: %w\nstderr: %s", err, stderr.String())
+		return "", strings.TrimSpace(stdout.String()), strings.TrimSpace(stderr.String()), err
 	}
 
-	out := stdout.String()
-	if r.shouldSanitizeCLIOutput() {
-		return sanitizeCLIOutput(out), nil
+	return stdout.String(), strings.TrimSpace(stdout.String()), strings.TrimSpace(stderr.String()), nil
+}
+
+func buildRetryableCallError(attempt int, err error, stdout string, stderr string) error {
+	return fmt.Errorf("attempt %d: %w\nstdout: %s\nstderr: %s", attempt, err, stdout, stderr)
+}
+
+func extractRequestID(stdout string, stderr string) string {
+	combined := strings.ToLower(strings.Join([]string{stdout, stderr}, "\n"))
+	return requestIDPattern.FindString(combined)
+}
+
+func appendAICLIFailureLog(kind callKind, attempts int, stdout string, stderr string, err error) {
+	if aiCLIFailureLogPath == "" {
+		return
 	}
-	return strings.TrimSpace(out), nil
+	if logErr := os.MkdirAll(filepath.Dir(aiCLIFailureLogPath), 0o755); logErr != nil {
+		return
+	}
+	entry := fmt.Sprintf(
+		"time=%s kind=%s attempts=%d request_id=%s error=%q\n",
+		time.Now().Format(time.RFC3339),
+		kind,
+		attempts,
+		extractRequestID(stdout, stderr),
+		err.Error(),
+	)
+	f, logErr := os.OpenFile(aiCLIFailureLogPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+	if logErr != nil {
+		return
+	}
+	defer f.Close()
+	_, _ = f.WriteString(entry)
 }
 
 func (r *Runner) shouldSanitizeCLIOutput() bool {

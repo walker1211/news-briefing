@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -199,7 +200,7 @@ func TestRenderBriefingUsesComposedBodyForRun(t *testing.T) {
 		sendEmail:     func(*model.Briefing, *config.Config, []fetcher.FailedSource) error { return nil },
 	}
 
-	err := app.renderBriefing("run", "26.03.27", "1400", articles, nil, false, false)
+	err := app.renderBriefing("run", "26.03.27", "1400", articles, nil, nil, false, false)
 	if err != nil {
 		t.Fatalf("renderBriefing() error = %v", err)
 	}
@@ -240,7 +241,7 @@ func TestRenderBriefingUsesComposedBodyForRegen(t *testing.T) {
 		printFailed:   func([]fetcher.FailedSource) {},
 	}
 
-	err := app.renderBriefing("regen", "26.03.27", "1400", articles, nil, false, false)
+	err := app.renderBriefing("regen", "26.03.27", "1400", articles, nil, nil, false, false)
 	if err != nil {
 		t.Fatalf("renderBriefing() error = %v", err)
 	}
@@ -257,11 +258,12 @@ func TestRunBriefingUsesFetchAll(t *testing.T) {
 		cfg: &config.Config{Output: config.OutputCfg{Dir: t.TempDir(), Mode: model.OutputModeOriginalOnly}},
 		fetchAll: func(cfg *config.Config, markSeen bool) ([]model.Article, []fetcher.FailedSource, error) {
 			fetchCalled = true
-			if !markSeen {
-				t.Fatalf("fetchAll() markSeen=%v, want true", markSeen)
+			if markSeen {
+				t.Fatalf("fetchAll() markSeen=%v, want false", markSeen)
 			}
 			return articles, nil, nil
 		},
+		markSeen: func([]model.Article) error { return nil },
 		composeBody: func(path string, mode model.OutputMode, content model.OutputContent) (string, error) {
 			return "ORIGINAL ONLY", nil
 		},
@@ -276,6 +278,78 @@ func TestRunBriefingUsesFetchAll(t *testing.T) {
 	}
 	if !fetchCalled {
 		t.Fatal("fetchAll() was not called")
+	}
+}
+
+func TestRunBriefingSkipsMarkSeenWhenSummarizeFails(t *testing.T) {
+	outputDir := t.TempDir()
+	app := &app{
+		cfg: &config.Config{Output: config.OutputCfg{Dir: outputDir, Mode: model.OutputModeTranslatedOnly}},
+		fetchAll: func(cfg *config.Config, markSeen bool) ([]model.Article, []fetcher.FailedSource, error) {
+			if markSeen {
+				t.Fatalf("fetchAll() markSeen=%v, want false", markSeen)
+			}
+			return sampleExecuteArticles(), nil, nil
+		},
+		summarize: func([]model.Article, []string, *time.Location) (string, error) {
+			return "", errors.New("ai cli failed")
+		},
+		markSeen: func(articles []model.Article) error {
+			return fetcher.MarkArticlesSeen(outputDir, articles)
+		},
+		printFailed:   func([]fetcher.FailedSource) {},
+		printArticles: func([]model.Article) {},
+		printCLI:      func(*model.Briefing) {},
+		writeMarkdown: func(*model.Briefing, string) (string, error) { return "", nil },
+	}
+
+	err := app.runBriefing("run", "0700", false, false)
+	if err == nil || !strings.Contains(err.Error(), "ai cli failed") {
+		t.Fatalf("runBriefing() error = %v, want ai cli failed", err)
+	}
+	if _, err := os.Stat(filepath.Join(outputDir, "state", "seen.json")); !os.IsNotExist(err) {
+		t.Fatalf("seen.json exists after failed summarize, err=%v", err)
+	}
+}
+
+func TestRunBriefingMarksSeenAfterWriteMarkdownSucceeds(t *testing.T) {
+	articles := sampleExecuteArticles()
+	marked := false
+	app := &app{
+		cfg: &config.Config{Output: config.OutputCfg{Dir: t.TempDir(), Mode: model.OutputModeTranslatedOnly}},
+		fetchAll: func(cfg *config.Config, markSeen bool) ([]model.Article, []fetcher.FailedSource, error) {
+			if markSeen {
+				t.Fatalf("fetchAll() markSeen=%v, want false", markSeen)
+			}
+			return articles, nil, nil
+		},
+		summarize: func([]model.Article, []string, *time.Location) (string, error) { return "summary", nil },
+		composeBody: func(path string, mode model.OutputMode, content model.OutputContent) (string, error) {
+			return "COMPOSED", nil
+		},
+		printCLI: func(*model.Briefing) {},
+		writeMarkdown: func(*model.Briefing, string) (string, error) {
+			if marked {
+				t.Fatal("markSeen() ran before writeMarkdown() finished")
+			}
+			return "output/26.04.21-早间-0700.md", nil
+		},
+		markSeen: func(got []model.Article) error {
+			marked = true
+			if len(got) != len(articles) || got[0].Link != articles[0].Link {
+				t.Fatalf("markSeen() articles = %#v, want %#v", got, articles)
+			}
+			return nil
+		},
+		printFailed:   func([]fetcher.FailedSource) {},
+		printArticles: func([]model.Article) {},
+	}
+
+	if err := app.runBriefing("run", "0700", false, false); err != nil {
+		t.Fatalf("runBriefing() error = %v", err)
+	}
+	if !marked {
+		t.Fatal("markSeen() was not called after successful briefing")
 	}
 }
 
@@ -344,7 +418,16 @@ func TestRunScheduledBriefingMergesWatchArticlesAndWritesSidecar(t *testing.T) {
 	app := &app{
 		cfg: &config.Config{ScheduleLocation: loc, Output: config.OutputCfg{Dir: outputDir, Mode: model.OutputModeOriginalOnly}},
 		fetchWindow: func(cfg *config.Config, from, to time.Time, markSeen bool, ignoreSeen bool) ([]model.Article, []fetcher.FailedSource, error) {
+			if markSeen {
+				t.Fatalf("fetchWindow() markSeen=%v, want false", markSeen)
+			}
 			return []model.Article{{Title: "news", Category: "AI/科技", Published: to.Add(-time.Hour)}}, nil, nil
+		},
+		markSeen: func(got []model.Article) error {
+			if len(got) != 1 || got[0].Title != "news" {
+				t.Fatalf("markSeen() articles = %#v", got)
+			}
+			return nil
 		},
 		fetchWatch: func(cfg *config.Config, gotNow time.Time) ([]model.Article, *model.WatchReport, error) {
 			watchCalled = gotNow.Equal(window.To)
@@ -598,7 +681,7 @@ func TestRenderBriefingOriginalOnlySkipsSummarize(t *testing.T) {
 		printArticles: func([]model.Article) {},
 	}
 
-	if err := app.renderBriefing("run", "26.03.27", "1400", articles, nil, false, false); err != nil {
+	if err := app.renderBriefing("run", "26.03.27", "1400", articles, nil, nil, false, false); err != nil {
 		t.Fatalf("renderBriefing() error = %v", err)
 	}
 	if summarizeCalled {
@@ -606,6 +689,43 @@ func TestRenderBriefingOriginalOnlySkipsSummarize(t *testing.T) {
 	}
 	if gotContent.Translated != "" {
 		t.Fatalf("composeBody() translated = %q, want empty", gotContent.Translated)
+	}
+}
+
+func TestRenderBriefingReturnsWriteMarkdownErrorBeforeMarkSeenAndEmail(t *testing.T) {
+	articles := sampleExecuteArticles()
+	marked := false
+	emailed := false
+	app := &app{
+		cfg: &config.Config{Email: config.Email{To: "test@example.com"}, Output: config.OutputCfg{Dir: t.TempDir(), Mode: model.OutputModeOriginalOnly}},
+		composeBody: func(path string, mode model.OutputMode, content model.OutputContent) (string, error) {
+			return "ORIGINAL ONLY", nil
+		},
+		printCLI: func(*model.Briefing) {},
+		writeMarkdown: func(*model.Briefing, string) (string, error) {
+			return "", errors.New("disk full")
+		},
+		markSeen: func([]model.Article) error {
+			marked = true
+			return nil
+		},
+		sendEmail: func(*model.Briefing, *config.Config, []fetcher.FailedSource) error {
+			emailed = true
+			return nil
+		},
+		printFailed:   func([]fetcher.FailedSource) {},
+		printArticles: func([]model.Article) {},
+	}
+
+	err := app.renderBriefing("run", "26.03.27", "1400", articles, articles, nil, false, true)
+	if err == nil || !strings.Contains(err.Error(), "write markdown: disk full") {
+		t.Fatalf("renderBriefing() error = %v, want wrapped write markdown error", err)
+	}
+	if marked {
+		t.Fatal("markSeen() should not be called when writeMarkdown fails")
+	}
+	if emailed {
+		t.Fatal("sendEmail() should not be called when writeMarkdown fails")
 	}
 }
 
