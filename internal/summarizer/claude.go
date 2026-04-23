@@ -184,6 +184,7 @@ func isRetryableAICLIError(err error, stdout string, stderr string) bool {
 		"i/o timeout",
 		"connection reset",
 		"eof",
+		"ai cli returned empty content",
 	} {
 		if strings.Contains(combined, marker) {
 			return true
@@ -203,13 +204,18 @@ func (r *Runner) callClaudeWithKind(kind callKind, prompt string, extraFlags ...
 		}
 		out, stdoutText, stderrText, err := r.runClaudeCommand(prompt, extraFlags...)
 		if err == nil {
-			if attempt > 0 {
-				fmt.Fprintf(os.Stderr, "AI CLI retry succeeded on attempt %d\n", attempt+1)
-			}
+			body := strings.TrimSpace(out)
 			if r.shouldSanitizeCLIOutput() {
-				return sanitizeCLIOutput(out), nil
+				body = sanitizeCLIOutput(out)
 			}
-			return strings.TrimSpace(out), nil
+			if body != "" {
+				if attempt > 0 {
+					fmt.Fprintf(os.Stderr, "AI CLI retry succeeded on attempt %d\n", attempt+1)
+				}
+				return body, nil
+			}
+			err = fmt.Errorf("ai cli returned empty content")
+			stdoutText = strings.TrimSpace(out)
 		}
 		lastErr = buildRetryableCallError(attempt+1, err, stdoutText, stderrText)
 		if !isRetryableAICLIError(err, stdoutText, stderrText) || attempt == len(attemptDelays)-1 {
@@ -347,7 +353,7 @@ func (r *Runner) DeepDive(topic string, articles []model.Article, loc *time.Loca
 	input := output.ArticleListView(articles, loc)
 	prompt := fmt.Sprintf(deepDivePrompt, topic) + "\n\n---\n话题: " + topic + "\n\n相关新闻:\n" + input
 
-	return r.callClaude(prompt, r.deepDiveExtraFlags()...)
+	return r.callClaudeWithKind(callKindDeepDive, prompt, r.deepDiveExtraFlags()...)
 }
 
 func (r *Runner) deepDiveExtraFlags() []string {
@@ -369,7 +375,7 @@ func (r *Runner) Translate(articles []model.Article, categoryOrder []string, loc
 	}
 	input := output.GroupedArticleListView(articles, categoryOrder, loc)
 	prompt := translatePrompt + "\n\n" + input
-	return r.callClaude(prompt, r.translateExtraFlags()...)
+	return r.callClaudeWithKind(callKindTranslate, prompt, r.translateExtraFlags()...)
 }
 
 func (r *Runner) translateExtraFlags() []string {
