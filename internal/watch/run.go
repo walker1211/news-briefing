@@ -103,7 +103,7 @@ func runContext(ctx context.Context, cfg *config.Config, now time.Time, fetchHTM
 			if ctxErr := ctx.Err(); ctxErr != nil {
 				return nil, nil, ctxErr
 			}
-			if site.Type == "announcement_page" {
+			if site.Type == config.WatchTypeAnnouncementPage {
 				report.Events = append(report.Events, model.WatchEvent{
 					EventType:         "site_error",
 					Source:            site.Name,
@@ -135,9 +135,9 @@ func runContext(ctx context.Context, cfg *config.Config, now time.Time, fetchHTM
 
 func runSite(ctx context.Context, site config.WatchSite, now time.Time, indexState IndexState, articleState ArticleState, fetchHTML fetchHTMLFunc) ([]model.Article, []model.WatchSeenArticle, []model.WatchEvent, error) {
 	switch site.Type {
-	case "anthropic_support":
+	case config.WatchTypeAnthropicSupport:
 		return runAnthropicSupportSite(ctx, site, now, indexState, articleState, fetchHTML)
-	case "announcement_page":
+	case config.WatchTypeAnnouncementPage:
 		return runAnnouncementSite(ctx, site, now, indexState, articleState, fetchHTML)
 	default:
 		return nil, nil, nil, nil

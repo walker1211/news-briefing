@@ -27,10 +27,21 @@ type Config struct {
 	AI               AICfg          `yaml:"ai"`
 }
 
+const (
+	SourceTypeRSS        = "rss"
+	SourceTypeHackerNews = "hackernews"
+	SourceTypeReddit     = "reddit"
+	SourceTypeDocsPage   = "docs_page"
+	SourceTypeRepoPage   = "repo_page"
+
+	WatchTypeAnthropicSupport = "anthropic_support"
+	WatchTypeAnnouncementPage = "announcement_page"
+)
+
 type Source struct {
 	Name     string   `yaml:"name"`
 	URL      string   `yaml:"url"`
-	Type     string   `yaml:"type"` // 如 "rss"、"hackernews"、"reddit"、"docs_page"、"repo_page"
+	Type     string   `yaml:"type"`
 	Category string   `yaml:"category"`
 	Keywords []string `yaml:"keywords"`
 	PageKind string   `yaml:"page_kind"`
@@ -101,16 +112,16 @@ func resolveScheduleLocation(name string) (*time.Location, error) {
 }
 
 var supportedSourceTypes = map[string]struct{}{
-	"rss":        {},
-	"hackernews": {},
-	"reddit":     {},
-	"docs_page":  {},
-	"repo_page":  {},
+	SourceTypeRSS:        {},
+	SourceTypeHackerNews: {},
+	SourceTypeReddit:     {},
+	SourceTypeDocsPage:   {},
+	SourceTypeRepoPage:   {},
 }
 
 var supportedWatchTypes = map[string]struct{}{
-	"anthropic_support": {},
-	"announcement_page": {},
+	WatchTypeAnthropicSupport: {},
+	WatchTypeAnnouncementPage: {},
 }
 
 func applyEmailDefaults(email *Email) error {
@@ -214,7 +225,7 @@ func validateSource(index int, source Source) error {
 		return fmt.Errorf("validate %s.type: unsupported source type %q", prefix, source.Type)
 	}
 	if strings.TrimSpace(source.URL) == "" {
-		if kind == "hackernews" {
+		if kind == SourceTypeHackerNews {
 			return nil
 		}
 		return fmt.Errorf("validate %s.url: must not be empty", prefix)

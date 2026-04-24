@@ -747,7 +747,7 @@ proxy: {}
 		t.Fatalf("len(cfg.Watch.Sites) = %d, want 1", len(cfg.Watch.Sites))
 	}
 	site := cfg.Watch.Sites[0]
-	if site.Type != "anthropic_support" {
+	if site.Type != WatchTypeAnthropicSupport {
 		t.Fatalf("site.Type = %q", site.Type)
 	}
 	if !reflect.DeepEqual(site.CategoryAllowlist, []string{"Claude", "安全保障"}) {
@@ -812,7 +812,7 @@ func TestProjectConfigIncludesAnthropicSupportWatch(t *testing.T) {
 			}
 			found := false
 			for _, site := range cfg.Watch.Sites {
-				if site.Name != "Anthropic Claude Support" || site.Type != "anthropic_support" {
+				if site.Name != "Anthropic Claude Support" || site.Type != WatchTypeAnthropicSupport {
 					continue
 				}
 				found = true
@@ -838,13 +838,13 @@ func TestProjectConfigIncludesAnthropicOfficialAnnouncementWatchSites(t *testing
 	want := []WatchSite{
 		{
 			Name:             "Anthropic News",
-			Type:             "announcement_page",
+			Type:             WatchTypeAnnouncementPage,
 			HomeURL:          "https://www.anthropic.com/news",
 			BriefingCategory: "AI/科技",
 		},
 		{
 			Name:             "Claude Platform Release Notes",
-			Type:             "announcement_page",
+			Type:             WatchTypeAnnouncementPage,
 			HomeURL:          "https://platform.claude.com/docs/en/release-notes/overview",
 			BriefingCategory: "AI/科技",
 		},
@@ -883,9 +883,9 @@ func TestProjectConfigIncludesDiscoveryEnhancementAISources(t *testing.T) {
 		"example": filepath.Join("..", "..", "configs", "config.example.yaml"),
 	}
 	want := []Source{
-		{Name: "AllenAI Blog", URL: "https://allenai.org/rss.xml", Type: "rss", Category: "AI/科技"},
-		{Name: "Cognition Blog", URL: "https://cognition.ai/rss.xml", Type: "rss", Category: "AI/科技"},
-		{Name: "Bing / Microsoft Search Blog", URL: "https://blogs.bing.com/Home/feed", Type: "rss", Category: "AI/科技"},
+		{Name: "AllenAI Blog", URL: "https://allenai.org/rss.xml", Type: SourceTypeRSS, Category: "AI/科技"},
+		{Name: "Cognition Blog", URL: "https://cognition.ai/rss.xml", Type: SourceTypeRSS, Category: "AI/科技"},
+		{Name: "Bing / Microsoft Search Blog", URL: "https://blogs.bing.com/Home/feed", Type: SourceTypeRSS, Category: "AI/科技"},
 	}
 
 	for name, configPath := range configPaths {

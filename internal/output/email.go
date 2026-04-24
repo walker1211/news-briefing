@@ -21,13 +21,33 @@ import (
 	"gopkg.in/gomail.v2"
 )
 
-var smtpSend = deliverSMTPMessage
 var briefingMarkdownPattern = regexp.MustCompile(`^(\d{2}\.\d{2}\.\d{2})-(凌晨|早间|午间|晚间)-(\d{4})\.md$`)
-var newDirectEmailDialContext = func(timeout time.Duration) func(context.Context, string, string) (net.Conn, error) {
+
+type smtpSendFunc func(*config.Config, string, string, string) error
+type directEmailDialContextFactory func(time.Duration) func(context.Context, string, string) (net.Conn, error)
+type socks5EmailDialContextFactory func(string, time.Duration) (func(context.Context, string, string) (net.Conn, error), error)
+
+type EmailSender struct {
+	smtpSend                  smtpSendFunc
+	newDirectEmailDialContext directEmailDialContextFactory
+	newSocks5EmailDialContext socks5EmailDialContextFactory
+	sleep                     func(time.Duration)
+}
+
+func NewEmailSender() *EmailSender {
+	return &EmailSender{
+		newDirectEmailDialContext: defaultDirectEmailDialContext,
+		newSocks5EmailDialContext: defaultSocks5EmailDialContext,
+		sleep:                     time.Sleep,
+	}
+}
+
+func defaultDirectEmailDialContext(timeout time.Duration) func(context.Context, string, string) (net.Conn, error) {
 	baseDialer := &net.Dialer{Timeout: timeout}
 	return baseDialer.DialContext
 }
-var newSocks5EmailDialContext = func(proxyAddr string, timeout time.Duration) (func(context.Context, string, string) (net.Conn, error), error) {
+
+func defaultSocks5EmailDialContext(proxyAddr string, timeout time.Duration) (func(context.Context, string, string) (net.Conn, error), error) {
 	parsed, err := url.Parse(proxyAddr)
 	if err != nil {
 		return nil, fmt.Errorf("parse proxy.socks5: %w", err)
@@ -46,28 +66,52 @@ var newSocks5EmailDialContext = func(proxyAddr string, timeout time.Duration) (f
 }
 
 func newEmailDialContext(cfg *config.Config) (func(context.Context, string, string) (net.Conn, error), error) {
+	return NewEmailSender().newEmailDialContext(cfg)
+}
+
+func (s *EmailSender) newEmailDialContext(cfg *config.Config) (func(context.Context, string, string) (net.Conn, error), error) {
 	if cfg == nil {
 		return nil, fmt.Errorf("config is nil")
 	}
 	if !cfg.Email.UseProxy {
-		return newDirectEmailDialContext(cfg.Email.Timeout), nil
+		factory := s.newDirectEmailDialContext
+		if factory == nil {
+			factory = defaultDirectEmailDialContext
+		}
+		return factory(cfg.Email.Timeout), nil
 	}
 	proxyAddr := strings.TrimSpace(cfg.Proxy.Socks5)
 	if proxyAddr == "" {
 		return nil, fmt.Errorf("email.use_proxy requires proxy.socks5")
 	}
-	return newSocks5EmailDialContext(proxyAddr, cfg.Email.Timeout)
+	factory := s.newSocks5EmailDialContext
+	if factory == nil {
+		factory = defaultSocks5EmailDialContext
+	}
+	return factory(proxyAddr, cfg.Email.Timeout)
 }
 
 func SendEmail(briefing *model.Briefing, cfg *config.Config, failed []fetcher.FailedSource) error {
-	return sendEmailWithContent(cfg, briefingEmailSubject(briefing.Date, briefing.Period), buildEmailBody(briefing, failed))
+	return NewEmailSender().SendEmail(briefing, cfg, failed)
+}
+
+func (s *EmailSender) SendEmail(briefing *model.Briefing, cfg *config.Config, failed []fetcher.FailedSource) error {
+	return s.sendEmailWithContent(cfg, briefingEmailSubject(briefing.Date, briefing.Period), buildEmailBody(briefing, failed))
 }
 
 func SendDeepEmail(topic string, briefing *model.Briefing, cfg *config.Config, failed []fetcher.FailedSource) error {
-	return sendEmailWithContent(cfg, deepEmailSubject(topic), buildDeepEmailBody(topic, briefing, failed))
+	return NewEmailSender().SendDeepEmail(topic, briefing, cfg, failed)
+}
+
+func (s *EmailSender) SendDeepEmail(topic string, briefing *model.Briefing, cfg *config.Config, failed []fetcher.FailedSource) error {
+	return s.sendEmailWithContent(cfg, deepEmailSubject(topic), buildDeepEmailBody(topic, briefing, failed))
 }
 
 func SendMarkdownFile(path string, cfg *config.Config) error {
+	return NewEmailSender().SendMarkdownFile(path, cfg)
+}
+
+func (s *EmailSender) SendMarkdownFile(path string, cfg *config.Config) error {
 	if cfg == nil {
 		return fmt.Errorf("config is nil")
 	}
@@ -121,7 +165,7 @@ func SendMarkdownFile(path string, cfg *config.Config) error {
 	if err != nil {
 		return fmt.Errorf("read markdown file: %w", err)
 	}
-	return sendEmailWithContent(cfg, subject, string(data))
+	return s.sendEmailWithContent(cfg, subject, string(data))
 }
 
 func briefingSubjectFromMarkdownFilename(path string) (string, error) {
@@ -130,22 +174,29 @@ func briefingSubjectFromMarkdownFilename(path string) (string, error) {
 	if len(matches) != 4 {
 		return "", fmt.Errorf("parse markdown filename %q: expected YY.MM.DD-<凌晨|早间|午间|晚间>-HHMM.md", base)
 	}
-	clock := matches[3][:2] + ":" + matches[3][2:]
-	return fmt.Sprintf("国际资讯简报 %s %s %s", matches[1], matches[2], clock), nil
+	return briefingTitle(matches[1], matches[3]), nil
 }
 
-func sendEmailWithContent(cfg *config.Config, subject string, body string) error {
+func (s *EmailSender) sendEmailWithContent(cfg *config.Config, subject string, body string) error {
 	password := os.Getenv("EMAIL_SMTP_AUTH_CODE")
 	if password == "" {
 		return fmt.Errorf("EMAIL_SMTP_AUTH_CODE not set in .env")
 	}
+	send := s.smtpSend
+	if send == nil {
+		send = s.deliverSMTPMessage
+	}
+	sleep := s.sleep
+	if sleep == nil {
+		sleep = time.Sleep
+	}
 
 	var lastErr error
 	for attempt := 1; attempt <= cfg.Email.RetryTimes; attempt++ {
-		if err := smtpSend(cfg, subject, body, password); err != nil {
+		if err := send(cfg, subject, body, password); err != nil {
 			lastErr = err
 			if attempt < cfg.Email.RetryTimes {
-				time.Sleep(cfg.Email.RetryWaitTime)
+				sleep(cfg.Email.RetryWaitTime)
 				continue
 			}
 			break
@@ -156,14 +207,14 @@ func sendEmailWithContent(cfg *config.Config, subject string, body string) error
 	return fmt.Errorf("send email after %d attempts: %w", cfg.Email.RetryTimes, lastErr)
 }
 
-func deliverSMTPMessage(cfg *config.Config, subject string, body string, password string) error {
+func (s *EmailSender) deliverSMTPMessage(cfg *config.Config, subject string, body string, password string) error {
 	m := gomail.NewMessage()
 	m.SetHeader("From", cfg.Email.From)
 	m.SetHeader("To", cfg.Email.To)
 	m.SetHeader("Subject", subject)
 	m.SetBody("text/plain", body)
 
-	dialContext, err := newEmailDialContext(cfg)
+	dialContext, err := s.newEmailDialContext(cfg)
 	if err != nil {
 		return err
 	}

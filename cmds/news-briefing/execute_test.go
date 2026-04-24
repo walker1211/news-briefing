@@ -25,12 +25,14 @@ func TestExecuteServeUsesScheduler(t *testing.T) {
 	waited := false
 	app := &app{
 		cfg: &config.Config{},
-		startCron: func(cfg *config.Config, run func(scheduler.Window)) error {
-			called = true
-			return nil
-		},
-		waitForever: func() {
-			waited = true
+		scheduler: schedulerDeps{
+			startCron: func(cfg *config.Config, run func(scheduler.Window)) error {
+				called = true
+				return nil
+			},
+			waitForever: func() {
+				waited = true
+			},
 		},
 	}
 
@@ -50,14 +52,18 @@ func TestExecuteServeDoesNotExitProcessOnScheduledRunError(t *testing.T) {
 		window := scheduler.Window{Period: "0800", From: time.Date(2026, 3, 18, 7, 0, 0, 0, time.UTC), To: time.Date(2026, 3, 18, 8, 0, 0, 0, time.UTC)}
 		app := &app{
 			cfg: &config.Config{},
-			startCron: func(cfg *config.Config, run func(scheduler.Window)) error {
-				run(window)
-				return nil
+			scheduler: schedulerDeps{
+				startCron: func(cfg *config.Config, run func(scheduler.Window)) error {
+					run(window)
+					return nil
+				},
+				waitForever: func() {},
 			},
-			fetchWindow: func(cfg *config.Config, from, to time.Time, markSeen bool, ignoreSeen bool) ([]model.Article, []fetcher.FailedSource, error) {
-				return nil, nil, errors.New("boom")
+			fetch: fetchDeps{
+				fetchWindow: func(cfg *config.Config, from, to time.Time, markSeen bool, ignoreSeen bool) ([]model.Article, []fetcher.FailedSource, error) {
+					return nil, nil, errors.New("boom")
+				},
 			},
-			waitForever: func() {},
 		}
 		_ = execute(app, serveCommand{})
 		os.Exit(0)
@@ -79,12 +85,16 @@ func TestExecuteContextFetchPassesContext(t *testing.T) {
 	called := false
 	app := &app{
 		cfg: &config.Config{Output: config.OutputCfg{Mode: model.OutputModeOriginalOnly}},
-		fetchAllContext: func(got context.Context, cfg *config.Config, markSeen bool) ([]model.Article, []fetcher.FailedSource, error) {
-			called = got.Value(contextTestKey{}) == "fetch"
-			return nil, nil, nil
+		fetch: fetchDeps{
+			fetchAllContext: func(got context.Context, cfg *config.Config, markSeen bool) ([]model.Article, []fetcher.FailedSource, error) {
+				called = got.Value(contextTestKey{}) == "fetch"
+				return nil, nil, nil
+			},
 		},
-		printArticles: func([]model.Article) {},
-		printFailed:   func([]fetcher.FailedSource) {},
+		output: outputDeps{
+			printArticles: func([]model.Article) {},
+			printFailed:   func([]fetcher.FailedSource) {},
+		},
 	}
 
 	if err := executeContext(ctx, app, fetchCommand{}); err != nil {
@@ -103,25 +113,33 @@ func TestExecuteContextServePassesContextToSchedulerAndRun(t *testing.T) {
 	waitCtxOK := false
 	app := &app{
 		cfg: &config.Config{Output: config.OutputCfg{Dir: t.TempDir(), Mode: model.OutputModeOriginalOnly}},
-		startCronContext: func(got context.Context, cfg *config.Config, run func(scheduler.Window)) error {
-			startCtxOK = got.Value(contextTestKey{}) == "serve"
-			run(window)
-			return nil
+		scheduler: schedulerDeps{
+			startCronContext: func(got context.Context, cfg *config.Config, run func(scheduler.Window)) error {
+				startCtxOK = got.Value(contextTestKey{}) == "serve"
+				run(window)
+				return nil
+			},
+			waitForeverContext: func(got context.Context) {
+				waitCtxOK = got.Value(contextTestKey{}) == "serve"
+			},
 		},
-		fetchWindowContext: func(got context.Context, cfg *config.Config, from, to time.Time, markSeen bool, ignoreSeen bool) ([]model.Article, []fetcher.FailedSource, error) {
-			fetchCtxOK = got.Value(contextTestKey{}) == "serve"
-			return sampleExecuteArticles(), nil, nil
+		fetch: fetchDeps{
+			fetchWindowContext: func(got context.Context, cfg *config.Config, from, to time.Time, markSeen bool, ignoreSeen bool) ([]model.Article, []fetcher.FailedSource, error) {
+				fetchCtxOK = got.Value(contextTestKey{}) == "serve"
+				return sampleExecuteArticles(), nil, nil
+			},
 		},
-		waitForeverContext: func(got context.Context) {
-			waitCtxOK = got.Value(contextTestKey{}) == "serve"
+		output: outputDeps{
+			composeBody: func(path string, mode model.OutputMode, content model.OutputContent) (string, error) {
+				return "ORIGINAL ONLY", nil
+			},
+			printCLI:      func(*model.Briefing) {},
+			printFailed:   func([]fetcher.FailedSource) {},
+			writeMarkdown: func(*model.Briefing, string) (string, error) { return "", nil },
 		},
-		composeBody: func(path string, mode model.OutputMode, content model.OutputContent) (string, error) {
-			return "ORIGINAL ONLY", nil
+		email: emailDeps{
+			sendEmail: func(*model.Briefing, *config.Config, []fetcher.FailedSource) error { return nil },
 		},
-		printCLI:      func(*model.Briefing) {},
-		printFailed:   func([]fetcher.FailedSource) {},
-		writeMarkdown: func(*model.Briefing, string) (string, error) { return "", nil },
-		sendEmail:     func(*model.Briefing, *config.Config, []fetcher.FailedSource) error { return nil },
 	}
 
 	if err := executeContext(ctx, app, serveCommand{}); err != nil {
@@ -137,14 +155,18 @@ func TestRenderBriefingContextPassesContextToSummarize(t *testing.T) {
 	called := false
 	app := &app{
 		cfg: &config.Config{Output: config.OutputCfg{Dir: t.TempDir(), Mode: model.OutputModeTranslatedOnly}},
-		summarizeContext: func(got context.Context, articles []model.Article, categoryOrder []string, loc *time.Location) (string, error) {
-			called = got.Value(contextTestKey{}) == "summarize"
-			return "summary", nil
+		ai: aiDeps{
+			summarizeContext: func(got context.Context, articles []model.Article, categoryOrder []string, loc *time.Location) (string, error) {
+				called = got.Value(contextTestKey{}) == "summarize"
+				return "summary", nil
+			},
 		},
-		composeBody:   func(string, model.OutputMode, model.OutputContent) (string, error) { return "COMPOSED", nil },
-		printCLI:      func(*model.Briefing) {},
-		printFailed:   func([]fetcher.FailedSource) {},
-		writeMarkdown: func(*model.Briefing, string) (string, error) { return "", nil },
+		output: outputDeps{
+			composeBody:   func(string, model.OutputMode, model.OutputContent) (string, error) { return "COMPOSED", nil },
+			printCLI:      func(*model.Briefing) {},
+			printFailed:   func([]fetcher.FailedSource) {},
+			writeMarkdown: func(*model.Briefing, string) (string, error) { return "", nil },
+		},
 	}
 
 	if err := app.renderBriefingContext(ctx, "run", "26.03.27", "1400", sampleExecuteArticles(), nil, nil, false, false); err != nil {
@@ -163,19 +185,27 @@ func TestRenderBriefingContextStopsBeforeSideEffectsWhenCancelled(t *testing.T) 
 	emailed := false
 	app := &app{
 		cfg: &config.Config{Output: config.OutputCfg{Dir: t.TempDir(), Mode: model.OutputModeTranslatedOnly}},
-		summarizeContext: func(context.Context, []model.Article, []string, *time.Location) (string, error) {
-			cancel()
-			return "summary", nil
+		fetch: fetchDeps{
+			markSeen: func([]model.Article) error { marked = true; return nil },
 		},
-		composeBody: func(string, model.OutputMode, model.OutputContent) (string, error) { return "COMPOSED", nil },
-		printCLI:    func(*model.Briefing) { printed = true },
-		writeMarkdown: func(*model.Briefing, string) (string, error) {
-			wrote = true
-			return "", nil
+		ai: aiDeps{
+			summarizeContext: func(context.Context, []model.Article, []string, *time.Location) (string, error) {
+				cancel()
+				return "summary", nil
+			},
 		},
-		markSeen:    func([]model.Article) error { marked = true; return nil },
-		sendEmail:   func(*model.Briefing, *config.Config, []fetcher.FailedSource) error { emailed = true; return nil },
-		printFailed: func([]fetcher.FailedSource) {},
+		output: outputDeps{
+			composeBody: func(string, model.OutputMode, model.OutputContent) (string, error) { return "COMPOSED", nil },
+			printCLI:    func(*model.Briefing) { printed = true },
+			writeMarkdown: func(*model.Briefing, string) (string, error) {
+				wrote = true
+				return "", nil
+			},
+			printFailed: func([]fetcher.FailedSource) {},
+		},
+		email: emailDeps{
+			sendEmail: func(*model.Briefing, *config.Config, []fetcher.FailedSource) error { emailed = true; return nil },
+		},
 	}
 
 	err := app.renderBriefingContext(ctx, "run", "26.03.27", "1400", sampleExecuteArticles(), sampleExecuteArticles(), nil, false, true)
@@ -192,16 +222,22 @@ func TestRenderBriefingContextStopsBeforeMarkSeenAndEmailWhenCancelledAfterWrite
 	marked := false
 	emailed := false
 	app := &app{
-		cfg:         &config.Config{Output: config.OutputCfg{Dir: t.TempDir(), Mode: model.OutputModeOriginalOnly}},
-		composeBody: func(string, model.OutputMode, model.OutputContent) (string, error) { return "COMPOSED", nil },
-		printCLI:    func(*model.Briefing) {},
-		writeMarkdown: func(*model.Briefing, string) (string, error) {
-			cancel()
-			return "output/test.md", nil
+		cfg: &config.Config{Output: config.OutputCfg{Dir: t.TempDir(), Mode: model.OutputModeOriginalOnly}},
+		fetch: fetchDeps{
+			markSeen: func([]model.Article) error { marked = true; return nil },
 		},
-		markSeen:    func([]model.Article) error { marked = true; return nil },
-		sendEmail:   func(*model.Briefing, *config.Config, []fetcher.FailedSource) error { emailed = true; return nil },
-		printFailed: func([]fetcher.FailedSource) {},
+		output: outputDeps{
+			composeBody: func(string, model.OutputMode, model.OutputContent) (string, error) { return "COMPOSED", nil },
+			printCLI:    func(*model.Briefing) {},
+			writeMarkdown: func(*model.Briefing, string) (string, error) {
+				cancel()
+				return "output/test.md", nil
+			},
+			printFailed: func([]fetcher.FailedSource) {},
+		},
+		email: emailDeps{
+			sendEmail: func(*model.Briefing, *config.Config, []fetcher.FailedSource) error { emailed = true; return nil },
+		},
 	}
 
 	err := app.renderBriefingContext(ctx, "run", "26.03.27", "1400", sampleExecuteArticles(), sampleExecuteArticles(), nil, false, true)
@@ -217,16 +253,22 @@ func TestRenderBriefingContextStopsBeforeEmailWhenCancelledAfterMarkSeen(t *test
 	ctx, cancel := context.WithCancel(context.Background())
 	emailed := false
 	app := &app{
-		cfg:           &config.Config{Output: config.OutputCfg{Dir: t.TempDir(), Mode: model.OutputModeOriginalOnly}},
-		composeBody:   func(string, model.OutputMode, model.OutputContent) (string, error) { return "COMPOSED", nil },
-		printCLI:      func(*model.Briefing) {},
-		writeMarkdown: func(*model.Briefing, string) (string, error) { return "output/test.md", nil },
-		markSeen: func([]model.Article) error {
-			cancel()
-			return nil
+		cfg: &config.Config{Output: config.OutputCfg{Dir: t.TempDir(), Mode: model.OutputModeOriginalOnly}},
+		fetch: fetchDeps{
+			markSeen: func([]model.Article) error {
+				cancel()
+				return nil
+			},
 		},
-		sendEmail:   func(*model.Briefing, *config.Config, []fetcher.FailedSource) error { emailed = true; return nil },
-		printFailed: func([]fetcher.FailedSource) {},
+		output: outputDeps{
+			composeBody:   func(string, model.OutputMode, model.OutputContent) (string, error) { return "COMPOSED", nil },
+			printCLI:      func(*model.Briefing) {},
+			writeMarkdown: func(*model.Briefing, string) (string, error) { return "output/test.md", nil },
+			printFailed:   func([]fetcher.FailedSource) {},
+		},
+		email: emailDeps{
+			sendEmail: func(*model.Briefing, *config.Config, []fetcher.FailedSource) error { emailed = true; return nil },
+		},
 	}
 
 	err := app.renderBriefingContext(ctx, "run", "26.03.27", "1400", sampleExecuteArticles(), sampleExecuteArticles(), nil, false, true)
@@ -244,18 +286,24 @@ func TestRunDeepDiveContextPassesContextToFetcherAndRunner(t *testing.T) {
 	deepCtxOK := false
 	app := &app{
 		cfg: &config.Config{Output: config.OutputCfg{Dir: t.TempDir(), Mode: model.OutputModeTranslatedOnly}},
-		fetchAllContext: func(got context.Context, cfg *config.Config, markSeen bool) ([]model.Article, []fetcher.FailedSource, error) {
-			fetchCtxOK = got.Value(contextTestKey{}) == "deep"
-			return []model.Article{{Title: "OpenAI release", Summary: "OpenAI ships model", Category: "AI/科技"}}, nil, nil
+		fetch: fetchDeps{
+			fetchAllContext: func(got context.Context, cfg *config.Config, markSeen bool) ([]model.Article, []fetcher.FailedSource, error) {
+				fetchCtxOK = got.Value(contextTestKey{}) == "deep"
+				return []model.Article{{Title: "OpenAI release", Summary: "OpenAI ships model", Category: "AI/科技"}}, nil, nil
+			},
 		},
-		deepDiveContext: func(got context.Context, topic string, articles []model.Article, loc *time.Location) (string, error) {
-			deepCtxOK = got.Value(contextTestKey{}) == "deep"
-			return "deep content", nil
+		ai: aiDeps{
+			deepDiveContext: func(got context.Context, topic string, articles []model.Article, loc *time.Location) (string, error) {
+				deepCtxOK = got.Value(contextTestKey{}) == "deep"
+				return "deep content", nil
+			},
 		},
-		printFailed:   func([]fetcher.FailedSource) {},
-		composeBody:   func(string, model.OutputMode, model.OutputContent) (string, error) { return "COMPOSED DEEP", nil },
-		writeDeepDive: func(string, string, string, string) (string, error) { return "", nil },
-		printText:     func(string) {},
+		output: outputDeps{
+			printFailed:   func([]fetcher.FailedSource) {},
+			composeBody:   func(string, model.OutputMode, model.OutputContent) (string, error) { return "COMPOSED DEEP", nil },
+			writeDeepDive: func(string, string, string, string) (string, error) { return "", nil },
+			printText:     func(string) {},
+		},
 	}
 
 	if err := app.runDeepDiveContext(ctx, deepCommand{topic: "OpenAI"}); err != nil {
@@ -270,15 +318,21 @@ func TestExecuteFetchTranslateUsesRunner(t *testing.T) {
 	called := false
 	app := &app{
 		cfg: &config.Config{Output: config.OutputCfg{Mode: model.OutputModeTranslatedOnly}},
-		fetchAll: func(cfg *config.Config, markSeen bool) ([]model.Article, []fetcher.FailedSource, error) {
-			return []model.Article{{Title: "a"}}, nil, nil
+		fetch: fetchDeps{
+			fetchAll: func(cfg *config.Config, markSeen bool) ([]model.Article, []fetcher.FailedSource, error) {
+				return []model.Article{{Title: "a"}}, nil, nil
+			},
 		},
-		translate: func(articles []model.Article, categoryOrder []string, loc *time.Location) (string, error) {
-			called = len(articles) == 1 && articles[0].Title == "a"
-			return "ok", nil
+		ai: aiDeps{
+			translate: func(articles []model.Article, categoryOrder []string, loc *time.Location) (string, error) {
+				called = len(articles) == 1 && articles[0].Title == "a"
+				return "ok", nil
+			},
 		},
-		printArticles: func([]model.Article) {},
-		printFailed:   func([]fetcher.FailedSource) {},
+		output: outputDeps{
+			printArticles: func([]model.Article) {},
+			printFailed:   func([]fetcher.FailedSource) {},
+		},
 	}
 
 	if err := execute(app, fetchCommand{zh: true}); err != nil {
@@ -305,18 +359,26 @@ func TestExecuteRegenUsesParsedWindowAndFlags(t *testing.T) {
 	emailCalled := false
 	app := &app{
 		cfg: &config.Config{Output: config.OutputCfg{Dir: t.TempDir(), Mode: model.OutputModeTranslatedOnly}},
-		fetchWindow: func(cfg *config.Config, gotFrom, gotTo time.Time, markSeen bool, ignoreSeen bool) ([]model.Article, []fetcher.FailedSource, error) {
-			called = gotFrom.Equal(from) && gotTo.Equal(to) && !markSeen && ignoreSeen
-			return []model.Article{{Title: "a"}}, nil, nil
+		fetch: fetchDeps{
+			fetchWindow: func(cfg *config.Config, gotFrom, gotTo time.Time, markSeen bool, ignoreSeen bool) ([]model.Article, []fetcher.FailedSource, error) {
+				called = gotFrom.Equal(from) && gotTo.Equal(to) && !markSeen && ignoreSeen
+				return []model.Article{{Title: "a"}}, nil, nil
+			},
 		},
-		summarize:     func([]model.Article, []string, *time.Location) (string, error) { return "summary", nil },
-		printFailed:   func([]fetcher.FailedSource) {},
-		printArticles: func([]model.Article) {},
-		printCLI:      func(*model.Briefing) {},
-		writeMarkdown: func(*model.Briefing, string) (string, error) { return "", nil },
-		sendEmail: func(*model.Briefing, *config.Config, []fetcher.FailedSource) error {
-			emailCalled = true
-			return nil
+		ai: aiDeps{
+			summarize: func([]model.Article, []string, *time.Location) (string, error) { return "summary", nil },
+		},
+		output: outputDeps{
+			printFailed:   func([]fetcher.FailedSource) {},
+			printArticles: func([]model.Article) {},
+			printCLI:      func(*model.Briefing) {},
+			writeMarkdown: func(*model.Briefing, string) (string, error) { return "", nil },
+		},
+		email: emailDeps{
+			sendEmail: func(*model.Briefing, *config.Config, []fetcher.FailedSource) error {
+				emailCalled = true
+				return nil
+			},
 		},
 	}
 
@@ -346,14 +408,18 @@ func TestExecuteRegenParsesRawWindowInConfiguredTimezone(t *testing.T) {
 			ScheduleLocation: loc,
 			Output:           config.OutputCfg{Dir: t.TempDir(), Mode: model.OutputModeOriginalOnly},
 		},
-		fetchWindow: func(cfg *config.Config, gotFrom, gotTo time.Time, markSeen bool, ignoreSeen bool) ([]model.Article, []fetcher.FailedSource, error) {
-			called = gotFrom.Equal(from) && gotTo.Equal(to) && !markSeen && ignoreSeen
-			return []model.Article{{Title: "a"}}, nil, nil
+		fetch: fetchDeps{
+			fetchWindow: func(cfg *config.Config, gotFrom, gotTo time.Time, markSeen bool, ignoreSeen bool) ([]model.Article, []fetcher.FailedSource, error) {
+				called = gotFrom.Equal(from) && gotTo.Equal(to) && !markSeen && ignoreSeen
+				return []model.Article{{Title: "a"}}, nil, nil
+			},
 		},
-		printFailed:   func([]fetcher.FailedSource) {},
-		printArticles: func([]model.Article) {},
-		printCLI:      func(*model.Briefing) {},
-		writeMarkdown: func(*model.Briefing, string) (string, error) { return "", nil },
+		output: outputDeps{
+			printFailed:   func([]fetcher.FailedSource) {},
+			printArticles: func([]model.Article) {},
+			printCLI:      func(*model.Briefing) {},
+			writeMarkdown: func(*model.Briefing, string) (string, error) { return "", nil },
+		},
 	}
 
 	if err := execute(app, regenCommand{fromRaw: "2026-03-18 08:00", toRaw: "2026-03-18 14:00", ignoreSeen: true}); err != nil {
@@ -369,7 +435,9 @@ func TestExecuteRegenRejectsToBeforeFromAfterTimezoneParsing(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadLocation() error = %v", err)
 	}
-	app := &app{cfg: &config.Config{ScheduleLocation: loc}}
+	app := &app{
+		cfg: &config.Config{ScheduleLocation: loc},
+	}
 	if err := execute(app, regenCommand{fromRaw: "2026-03-18 14:00", toRaw: "2026-03-18 08:00"}); err == nil || !strings.Contains(err.Error(), "after or equal") {
 		t.Fatalf("execute() error = %v, want to>=from validation after timezone parsing", err)
 	}
@@ -383,16 +451,22 @@ func TestRenderBriefingUsesComposedBodyForRun(t *testing.T) {
 	var printed *model.Briefing
 
 	app := &app{
-		cfg:       &config.Config{Output: config.OutputCfg{Dir: t.TempDir(), Mode: model.OutputModeBilingualOriginalFirst}},
-		summarize: func([]model.Article, []string, *time.Location) (string, error) { return "TRANSLATED", nil },
-		composeBody: func(path string, mode model.OutputMode, content model.OutputContent) (string, error) {
-			gotPath, gotMode, gotContent = path, mode, content
-			return "COMPOSED", nil
+		cfg: &config.Config{Output: config.OutputCfg{Dir: t.TempDir(), Mode: model.OutputModeBilingualOriginalFirst}},
+		ai: aiDeps{
+			summarize: func([]model.Article, []string, *time.Location) (string, error) { return "TRANSLATED", nil },
 		},
-		printCLI:      func(b *model.Briefing) { printed = b },
-		writeMarkdown: func(*model.Briefing, string) (string, error) { return "", nil },
-		printFailed:   func([]fetcher.FailedSource) {},
-		sendEmail:     func(*model.Briefing, *config.Config, []fetcher.FailedSource) error { return nil },
+		output: outputDeps{
+			composeBody: func(path string, mode model.OutputMode, content model.OutputContent) (string, error) {
+				gotPath, gotMode, gotContent = path, mode, content
+				return "COMPOSED", nil
+			},
+			printCLI:      func(b *model.Briefing) { printed = b },
+			writeMarkdown: func(*model.Briefing, string) (string, error) { return "", nil },
+			printFailed:   func([]fetcher.FailedSource) {},
+		},
+		email: emailDeps{
+			sendEmail: func(*model.Briefing, *config.Config, []fetcher.FailedSource) error { return nil },
+		},
 	}
 
 	err := app.renderBriefing("run", "26.03.27", "1400", articles, nil, nil, false, false)
@@ -425,15 +499,19 @@ func TestRenderBriefingUsesComposedBodyForRegen(t *testing.T) {
 	var gotPath string
 
 	app := &app{
-		cfg:       &config.Config{Output: config.OutputCfg{Dir: t.TempDir(), Mode: model.OutputModeTranslatedOnly}},
-		summarize: func([]model.Article, []string, *time.Location) (string, error) { return "TRANSLATED", nil },
-		composeBody: func(path string, mode model.OutputMode, content model.OutputContent) (string, error) {
-			gotPath = path
-			return "COMPOSED", nil
+		cfg: &config.Config{Output: config.OutputCfg{Dir: t.TempDir(), Mode: model.OutputModeTranslatedOnly}},
+		ai: aiDeps{
+			summarize: func([]model.Article, []string, *time.Location) (string, error) { return "TRANSLATED", nil },
 		},
-		printCLI:      func(*model.Briefing) {},
-		writeMarkdown: func(*model.Briefing, string) (string, error) { return "", nil },
-		printFailed:   func([]fetcher.FailedSource) {},
+		output: outputDeps{
+			composeBody: func(path string, mode model.OutputMode, content model.OutputContent) (string, error) {
+				gotPath = path
+				return "COMPOSED", nil
+			},
+			printCLI:      func(*model.Briefing) {},
+			writeMarkdown: func(*model.Briefing, string) (string, error) { return "", nil },
+			printFailed:   func([]fetcher.FailedSource) {},
+		},
 	}
 
 	err := app.renderBriefing("regen", "26.03.27", "1400", articles, nil, nil, false, false)
@@ -451,21 +529,25 @@ func TestRunBriefingUsesFetchAll(t *testing.T) {
 
 	app := &app{
 		cfg: &config.Config{Output: config.OutputCfg{Dir: t.TempDir(), Mode: model.OutputModeOriginalOnly}},
-		fetchAll: func(cfg *config.Config, markSeen bool) ([]model.Article, []fetcher.FailedSource, error) {
-			fetchCalled = true
-			if markSeen {
-				t.Fatalf("fetchAll() markSeen=%v, want false", markSeen)
-			}
-			return articles, nil, nil
+		fetch: fetchDeps{
+			fetchAll: func(cfg *config.Config, markSeen bool) ([]model.Article, []fetcher.FailedSource, error) {
+				fetchCalled = true
+				if markSeen {
+					t.Fatalf("fetchAll() markSeen=%v, want false", markSeen)
+				}
+				return articles, nil, nil
+			},
+			markSeen: func([]model.Article) error { return nil },
 		},
-		markSeen: func([]model.Article) error { return nil },
-		composeBody: func(path string, mode model.OutputMode, content model.OutputContent) (string, error) {
-			return "ORIGINAL ONLY", nil
+		output: outputDeps{
+			composeBody: func(path string, mode model.OutputMode, content model.OutputContent) (string, error) {
+				return "ORIGINAL ONLY", nil
+			},
+			printCLI:      func(*model.Briefing) {},
+			printFailed:   func([]fetcher.FailedSource) {},
+			printArticles: func([]model.Article) {},
+			writeMarkdown: func(*model.Briefing, string) (string, error) { return "", nil },
 		},
-		printCLI:      func(*model.Briefing) {},
-		printFailed:   func([]fetcher.FailedSource) {},
-		printArticles: func([]model.Article) {},
-		writeMarkdown: func(*model.Briefing, string) (string, error) { return "", nil },
 	}
 
 	if err := app.runBriefing("run", "1400", false, false); err != nil {
@@ -480,22 +562,28 @@ func TestRunBriefingSkipsMarkSeenWhenSummarizeFails(t *testing.T) {
 	outputDir := t.TempDir()
 	app := &app{
 		cfg: &config.Config{Output: config.OutputCfg{Dir: outputDir, Mode: model.OutputModeTranslatedOnly}},
-		fetchAll: func(cfg *config.Config, markSeen bool) ([]model.Article, []fetcher.FailedSource, error) {
-			if markSeen {
-				t.Fatalf("fetchAll() markSeen=%v, want false", markSeen)
-			}
-			return sampleExecuteArticles(), nil, nil
+		fetch: fetchDeps{
+			fetchAll: func(cfg *config.Config, markSeen bool) ([]model.Article, []fetcher.FailedSource, error) {
+				if markSeen {
+					t.Fatalf("fetchAll() markSeen=%v, want false", markSeen)
+				}
+				return sampleExecuteArticles(), nil, nil
+			},
+			markSeen: func(articles []model.Article) error {
+				return fetcher.MarkArticlesSeen(outputDir, articles)
+			},
 		},
-		summarize: func([]model.Article, []string, *time.Location) (string, error) {
-			return "", errors.New("ai cli failed")
+		ai: aiDeps{
+			summarize: func([]model.Article, []string, *time.Location) (string, error) {
+				return "", errors.New("ai cli failed")
+			},
 		},
-		markSeen: func(articles []model.Article) error {
-			return fetcher.MarkArticlesSeen(outputDir, articles)
+		output: outputDeps{
+			printFailed:   func([]fetcher.FailedSource) {},
+			printArticles: func([]model.Article) {},
+			printCLI:      func(*model.Briefing) {},
+			writeMarkdown: func(*model.Briefing, string) (string, error) { return "", nil },
 		},
-		printFailed:   func([]fetcher.FailedSource) {},
-		printArticles: func([]model.Article) {},
-		printCLI:      func(*model.Briefing) {},
-		writeMarkdown: func(*model.Briefing, string) (string, error) { return "", nil },
 	}
 
 	err := app.runBriefing("run", "0700", false, false)
@@ -512,32 +600,38 @@ func TestRunBriefingMarksSeenAfterWriteMarkdownSucceeds(t *testing.T) {
 	marked := false
 	app := &app{
 		cfg: &config.Config{Output: config.OutputCfg{Dir: t.TempDir(), Mode: model.OutputModeTranslatedOnly}},
-		fetchAll: func(cfg *config.Config, markSeen bool) ([]model.Article, []fetcher.FailedSource, error) {
-			if markSeen {
-				t.Fatalf("fetchAll() markSeen=%v, want false", markSeen)
-			}
-			return articles, nil, nil
+		fetch: fetchDeps{
+			fetchAll: func(cfg *config.Config, markSeen bool) ([]model.Article, []fetcher.FailedSource, error) {
+				if markSeen {
+					t.Fatalf("fetchAll() markSeen=%v, want false", markSeen)
+				}
+				return articles, nil, nil
+			},
+			markSeen: func(got []model.Article) error {
+				marked = true
+				if len(got) != len(articles) || got[0].Link != articles[0].Link {
+					t.Fatalf("markSeen() articles = %#v, want %#v", got, articles)
+				}
+				return nil
+			},
 		},
-		summarize: func([]model.Article, []string, *time.Location) (string, error) { return "summary", nil },
-		composeBody: func(path string, mode model.OutputMode, content model.OutputContent) (string, error) {
-			return "COMPOSED", nil
+		ai: aiDeps{
+			summarize: func([]model.Article, []string, *time.Location) (string, error) { return "summary", nil },
 		},
-		printCLI: func(*model.Briefing) {},
-		writeMarkdown: func(*model.Briefing, string) (string, error) {
-			if marked {
-				t.Fatal("markSeen() ran before writeMarkdown() finished")
-			}
-			return "output/26.04.21-早间-0700.md", nil
+		output: outputDeps{
+			composeBody: func(path string, mode model.OutputMode, content model.OutputContent) (string, error) {
+				return "COMPOSED", nil
+			},
+			printCLI: func(*model.Briefing) {},
+			writeMarkdown: func(*model.Briefing, string) (string, error) {
+				if marked {
+					t.Fatal("markSeen() ran before writeMarkdown() finished")
+				}
+				return "output/26.04.21-早间-0700.md", nil
+			},
+			printFailed:   func([]fetcher.FailedSource) {},
+			printArticles: func([]model.Article) {},
 		},
-		markSeen: func(got []model.Article) error {
-			marked = true
-			if len(got) != len(articles) || got[0].Link != articles[0].Link {
-				t.Fatalf("markSeen() articles = %#v, want %#v", got, articles)
-			}
-			return nil
-		},
-		printFailed:   func([]fetcher.FailedSource) {},
-		printArticles: func([]model.Article) {},
 	}
 
 	if err := app.runBriefing("run", "0700", false, false); err != nil {
@@ -558,24 +652,30 @@ func TestRunBriefingMergesWatchArticlesAndWritesSidecar(t *testing.T) {
 	app := &app{
 		cfg: &config.Config{Output: config.OutputCfg{Dir: outputDir, Mode: model.OutputModeOriginalOnly}},
 		now: func() time.Time { return now },
-		fetchAll: func(cfg *config.Config, markSeen bool) ([]model.Article, []fetcher.FailedSource, error) {
-			return []model.Article{{Title: "news", Category: "AI/科技", Published: now.Add(-time.Hour)}}, nil, nil
+		fetch: fetchDeps{
+			fetchAll: func(cfg *config.Config, markSeen bool) ([]model.Article, []fetcher.FailedSource, error) {
+				return []model.Article{{Title: "news", Category: "AI/科技", Published: now.Add(-time.Hour)}}, nil, nil
+			},
 		},
-		fetchWatch: func(cfg *config.Config, gotNow time.Time) ([]model.Article, *model.WatchReport, error) {
-			watchCalled = gotNow.Equal(now)
-			return []model.Article{{Title: "watch", Category: "AI/科技", Published: gotNow}}, &model.WatchReport{GeneratedAt: gotNow}, nil
+		watch: watchDeps{
+			fetchWatch: func(cfg *config.Config, gotNow time.Time) ([]model.Article, *model.WatchReport, error) {
+				watchCalled = gotNow.Equal(now)
+				return []model.Article{{Title: "watch", Category: "AI/科技", Published: gotNow}}, &model.WatchReport{GeneratedAt: gotNow}, nil
+			},
 		},
-		composeBody: func(path string, mode model.OutputMode, content model.OutputContent) (string, error) {
-			return "ORIGINAL ONLY", nil
+		output: outputDeps{
+			composeBody: func(path string, mode model.OutputMode, content model.OutputContent) (string, error) {
+				return "ORIGINAL ONLY", nil
+			},
+			writeWatchMarkdown: func(report *model.WatchReport, gotOutputDir, date, period string) (string, error) {
+				watchWritten = report != nil && gotOutputDir == outputDir && date == "26.04.15" && period == "1600"
+				return "", nil
+			},
+			printCLI:      func(b *model.Briefing) { printed = b },
+			printFailed:   func([]fetcher.FailedSource) {},
+			printArticles: func([]model.Article) {},
+			writeMarkdown: func(*model.Briefing, string) (string, error) { return "", nil },
 		},
-		writeWatchMarkdown: func(report *model.WatchReport, gotOutputDir, date, period string) (string, error) {
-			watchWritten = report != nil && gotOutputDir == outputDir && date == "26.04.15" && period == "1600"
-			return "", nil
-		},
-		printCLI:      func(b *model.Briefing) { printed = b },
-		printFailed:   func([]fetcher.FailedSource) {},
-		printArticles: func([]model.Article) {},
-		writeMarkdown: func(*model.Briefing, string) (string, error) { return "", nil },
 	}
 
 	if err := app.runBriefing("run", "1600", false, false); err != nil {
@@ -612,33 +712,39 @@ func TestRunScheduledBriefingMergesWatchArticlesAndWritesSidecar(t *testing.T) {
 
 	app := &app{
 		cfg: &config.Config{ScheduleLocation: loc, Output: config.OutputCfg{Dir: outputDir, Mode: model.OutputModeOriginalOnly}},
-		fetchWindow: func(cfg *config.Config, from, to time.Time, markSeen bool, ignoreSeen bool) ([]model.Article, []fetcher.FailedSource, error) {
-			if markSeen {
-				t.Fatalf("fetchWindow() markSeen=%v, want false", markSeen)
-			}
-			return []model.Article{{Title: "news", Category: "AI/科技", Published: to.Add(-time.Hour)}}, nil, nil
+		fetch: fetchDeps{
+			fetchWindow: func(cfg *config.Config, from, to time.Time, markSeen bool, ignoreSeen bool) ([]model.Article, []fetcher.FailedSource, error) {
+				if markSeen {
+					t.Fatalf("fetchWindow() markSeen=%v, want false", markSeen)
+				}
+				return []model.Article{{Title: "news", Category: "AI/科技", Published: to.Add(-time.Hour)}}, nil, nil
+			},
+			markSeen: func(got []model.Article) error {
+				if len(got) != 1 || got[0].Title != "news" {
+					t.Fatalf("markSeen() articles = %#v", got)
+				}
+				return nil
+			},
 		},
-		markSeen: func(got []model.Article) error {
-			if len(got) != 1 || got[0].Title != "news" {
-				t.Fatalf("markSeen() articles = %#v", got)
-			}
-			return nil
+		watch: watchDeps{
+			fetchWatch: func(cfg *config.Config, gotNow time.Time) ([]model.Article, *model.WatchReport, error) {
+				watchCalled = gotNow.Equal(window.To)
+				return []model.Article{{Title: "watch", Category: "AI/科技", Published: gotNow}}, &model.WatchReport{GeneratedAt: gotNow}, nil
+			},
 		},
-		fetchWatch: func(cfg *config.Config, gotNow time.Time) ([]model.Article, *model.WatchReport, error) {
-			watchCalled = gotNow.Equal(window.To)
-			return []model.Article{{Title: "watch", Category: "AI/科技", Published: gotNow}}, &model.WatchReport{GeneratedAt: gotNow}, nil
+		output: outputDeps{
+			composeBody: func(path string, mode model.OutputMode, content model.OutputContent) (string, error) {
+				return "ORIGINAL ONLY", nil
+			},
+			writeWatchMarkdown: func(report *model.WatchReport, gotOutputDir, date, period string) (string, error) {
+				watchWritten = report != nil && gotOutputDir == outputDir && date == "26.04.15" && period == "1600"
+				return "", nil
+			},
+			printCLI:      func(b *model.Briefing) { printed = b },
+			printFailed:   func([]fetcher.FailedSource) {},
+			printArticles: func([]model.Article) {},
+			writeMarkdown: func(*model.Briefing, string) (string, error) { return "", nil },
 		},
-		composeBody: func(path string, mode model.OutputMode, content model.OutputContent) (string, error) {
-			return "ORIGINAL ONLY", nil
-		},
-		writeWatchMarkdown: func(report *model.WatchReport, gotOutputDir, date, period string) (string, error) {
-			watchWritten = report != nil && gotOutputDir == outputDir && date == "26.04.15" && period == "1600"
-			return "", nil
-		},
-		printCLI:      func(b *model.Briefing) { printed = b },
-		printFailed:   func([]fetcher.FailedSource) {},
-		printArticles: func([]model.Article) {},
-		writeMarkdown: func(*model.Briefing, string) (string, error) { return "", nil },
 	}
 
 	if err := app.runScheduledBriefing(window, false); err != nil {
@@ -668,30 +774,36 @@ func TestRunBriefingPrintsWatchSiteErrors(t *testing.T) {
 	app := &app{
 		cfg: &config.Config{Output: config.OutputCfg{Dir: t.TempDir(), Mode: model.OutputModeOriginalOnly}},
 		now: func() time.Time { return now },
-		fetchAll: func(cfg *config.Config, markSeen bool) ([]model.Article, []fetcher.FailedSource, error) {
-			return []model.Article{{Title: "news", Category: "AI/科技", Published: now.Add(-time.Hour)}}, nil, nil
+		fetch: fetchDeps{
+			fetchAll: func(cfg *config.Config, markSeen bool) ([]model.Article, []fetcher.FailedSource, error) {
+				return []model.Article{{Title: "news", Category: "AI/科技", Published: now.Add(-time.Hour)}}, nil, nil
+			},
 		},
-		fetchWatch: func(cfg *config.Config, gotNow time.Time) ([]model.Article, *model.WatchReport, error) {
-			return nil, &model.WatchReport{
-				GeneratedAt: gotNow,
-				Events: []model.WatchEvent{{
-					EventType:  "site_error",
-					Source:     "Claude Platform Release Notes",
-					Category:   "Claude Platform Release Notes",
-					DetectedAt: gotNow,
-					Reason:     "抓取失败：EOF",
-				}},
-			}, nil
+		watch: watchDeps{
+			fetchWatch: func(cfg *config.Config, gotNow time.Time) ([]model.Article, *model.WatchReport, error) {
+				return nil, &model.WatchReport{
+					GeneratedAt: gotNow,
+					Events: []model.WatchEvent{{
+						EventType:  "site_error",
+						Source:     "Claude Platform Release Notes",
+						Category:   "Claude Platform Release Notes",
+						DetectedAt: gotNow,
+						Reason:     "抓取失败：EOF",
+					}},
+				}, nil
+			},
 		},
-		composeBody: func(path string, mode model.OutputMode, content model.OutputContent) (string, error) {
-			return "ORIGINAL ONLY", nil
+		output: outputDeps{
+			composeBody: func(path string, mode model.OutputMode, content model.OutputContent) (string, error) {
+				return "ORIGINAL ONLY", nil
+			},
+			printText:          func(s string) { printed = append(printed, s) },
+			printCLI:           func(*model.Briefing) {},
+			printFailed:        func([]fetcher.FailedSource) {},
+			printArticles:      func([]model.Article) {},
+			writeMarkdown:      func(*model.Briefing, string) (string, error) { return "", nil },
+			writeWatchMarkdown: func(*model.WatchReport, string, string, string) (string, error) { return "", nil },
 		},
-		printText:          func(s string) { printed = append(printed, s) },
-		printCLI:           func(*model.Briefing) {},
-		printFailed:        func([]fetcher.FailedSource) {},
-		printArticles:      func([]model.Article) {},
-		writeMarkdown:      func(*model.Briefing, string) (string, error) { return "", nil },
-		writeWatchMarkdown: func(*model.WatchReport, string, string, string) (string, error) { return "", nil },
 	}
 
 	if err := app.runBriefing("run", "1600", false, false); err != nil {
@@ -717,30 +829,36 @@ func TestRunScheduledBriefingPrintsWatchSiteErrors(t *testing.T) {
 
 	app := &app{
 		cfg: &config.Config{ScheduleLocation: loc, Output: config.OutputCfg{Dir: t.TempDir(), Mode: model.OutputModeOriginalOnly}},
-		fetchWindow: func(cfg *config.Config, from, to time.Time, markSeen bool, ignoreSeen bool) ([]model.Article, []fetcher.FailedSource, error) {
-			return []model.Article{{Title: "news", Category: "AI/科技", Published: to.Add(-time.Hour)}}, nil, nil
+		fetch: fetchDeps{
+			fetchWindow: func(cfg *config.Config, from, to time.Time, markSeen bool, ignoreSeen bool) ([]model.Article, []fetcher.FailedSource, error) {
+				return []model.Article{{Title: "news", Category: "AI/科技", Published: to.Add(-time.Hour)}}, nil, nil
+			},
 		},
-		fetchWatch: func(cfg *config.Config, gotNow time.Time) ([]model.Article, *model.WatchReport, error) {
-			return nil, &model.WatchReport{
-				GeneratedAt: gotNow,
-				Events: []model.WatchEvent{{
-					EventType:  "site_error",
-					Source:     "Claude Platform Release Notes",
-					Category:   "Claude Platform Release Notes",
-					DetectedAt: gotNow,
-					Reason:     "抓取失败：EOF",
-				}},
-			}, nil
+		watch: watchDeps{
+			fetchWatch: func(cfg *config.Config, gotNow time.Time) ([]model.Article, *model.WatchReport, error) {
+				return nil, &model.WatchReport{
+					GeneratedAt: gotNow,
+					Events: []model.WatchEvent{{
+						EventType:  "site_error",
+						Source:     "Claude Platform Release Notes",
+						Category:   "Claude Platform Release Notes",
+						DetectedAt: gotNow,
+						Reason:     "抓取失败：EOF",
+					}},
+				}, nil
+			},
 		},
-		composeBody: func(path string, mode model.OutputMode, content model.OutputContent) (string, error) {
-			return "ORIGINAL ONLY", nil
+		output: outputDeps{
+			composeBody: func(path string, mode model.OutputMode, content model.OutputContent) (string, error) {
+				return "ORIGINAL ONLY", nil
+			},
+			printText:          func(s string) { printed = append(printed, s) },
+			printCLI:           func(*model.Briefing) {},
+			printFailed:        func([]fetcher.FailedSource) {},
+			printArticles:      func([]model.Article) {},
+			writeMarkdown:      func(*model.Briefing, string) (string, error) { return "", nil },
+			writeWatchMarkdown: func(*model.WatchReport, string, string, string) (string, error) { return "", nil },
 		},
-		printText:          func(s string) { printed = append(printed, s) },
-		printCLI:           func(*model.Briefing) {},
-		printFailed:        func([]fetcher.FailedSource) {},
-		printArticles:      func([]model.Article) {},
-		writeMarkdown:      func(*model.Briefing, string) (string, error) { return "", nil },
-		writeWatchMarkdown: func(*model.WatchReport, string, string, string) (string, error) { return "", nil },
 	}
 
 	if err := app.runScheduledBriefing(window, false); err != nil {
@@ -759,20 +877,26 @@ func TestRunRegenSkipsWatch(t *testing.T) {
 	watchCalled := false
 	app := &app{
 		cfg: &config.Config{Output: config.OutputCfg{Dir: t.TempDir(), Mode: model.OutputModeOriginalOnly}},
-		fetchWindow: func(cfg *config.Config, from, to time.Time, markSeen bool, ignoreSeen bool) ([]model.Article, []fetcher.FailedSource, error) {
-			return []model.Article{{Title: "news", Category: "AI/科技", Published: to}}, nil, nil
+		fetch: fetchDeps{
+			fetchWindow: func(cfg *config.Config, from, to time.Time, markSeen bool, ignoreSeen bool) ([]model.Article, []fetcher.FailedSource, error) {
+				return []model.Article{{Title: "news", Category: "AI/科技", Published: to}}, nil, nil
+			},
 		},
-		fetchWatch: func(cfg *config.Config, now time.Time) ([]model.Article, *model.WatchReport, error) {
-			watchCalled = true
-			return nil, nil, nil
+		watch: watchDeps{
+			fetchWatch: func(cfg *config.Config, now time.Time) ([]model.Article, *model.WatchReport, error) {
+				watchCalled = true
+				return nil, nil, nil
+			},
 		},
-		composeBody: func(path string, mode model.OutputMode, content model.OutputContent) (string, error) {
-			return "ORIGINAL ONLY", nil
+		output: outputDeps{
+			composeBody: func(path string, mode model.OutputMode, content model.OutputContent) (string, error) {
+				return "ORIGINAL ONLY", nil
+			},
+			printFailed:   func([]fetcher.FailedSource) {},
+			printArticles: func([]model.Article) {},
+			printCLI:      func(*model.Briefing) {},
+			writeMarkdown: func(*model.Briefing, string) (string, error) { return "", nil },
 		},
-		printFailed:   func([]fetcher.FailedSource) {},
-		printArticles: func([]model.Article) {},
-		printCLI:      func(*model.Briefing) {},
-		writeMarkdown: func(*model.Briefing, string) (string, error) { return "", nil },
 	}
 
 	if err := app.runRegen(regenCommand{fromRaw: "2026-04-15 07:00", toRaw: "2026-04-15 16:00", period: "1600"}); err != nil {
@@ -788,23 +912,33 @@ func TestExecuteServeScheduledBriefingUsesServePathForOutputMode(t *testing.T) {
 	window := scheduler.Window{Period: "0800", From: time.Date(2026, 3, 18, 7, 0, 0, 0, time.UTC), To: time.Date(2026, 3, 18, 8, 0, 0, 0, time.UTC)}
 	app := &app{
 		cfg: &config.Config{Output: config.OutputCfg{Dir: t.TempDir(), Mode: model.OutputModeTranslatedOnly}},
-		startCron: func(cfg *config.Config, run func(scheduler.Window)) error {
-			run(window)
-			return nil
+		scheduler: schedulerDeps{
+			startCron: func(cfg *config.Config, run func(scheduler.Window)) error {
+				run(window)
+				return nil
+			},
+			waitForever: func() {},
 		},
-		fetchWindow: func(cfg *config.Config, from, to time.Time, markSeen bool, ignoreSeen bool) ([]model.Article, []fetcher.FailedSource, error) {
-			return sampleExecuteArticles(), nil, nil
+		fetch: fetchDeps{
+			fetchWindow: func(cfg *config.Config, from, to time.Time, markSeen bool, ignoreSeen bool) ([]model.Article, []fetcher.FailedSource, error) {
+				return sampleExecuteArticles(), nil, nil
+			},
 		},
-		summarize: func([]model.Article, []string, *time.Location) (string, error) { return "TRANSLATED", nil },
-		composeBody: func(path string, mode model.OutputMode, content model.OutputContent) (string, error) {
-			gotPath = path
-			return "TRANSLATED", nil
+		ai: aiDeps{
+			summarize: func([]model.Article, []string, *time.Location) (string, error) { return "TRANSLATED", nil },
 		},
-		printCLI:      func(*model.Briefing) {},
-		writeMarkdown: func(*model.Briefing, string) (string, error) { return "", nil },
-		sendEmail:     func(*model.Briefing, *config.Config, []fetcher.FailedSource) error { return nil },
-		printFailed:   func([]fetcher.FailedSource) {},
-		waitForever:   func() {},
+		output: outputDeps{
+			composeBody: func(path string, mode model.OutputMode, content model.OutputContent) (string, error) {
+				gotPath = path
+				return "TRANSLATED", nil
+			},
+			printCLI:      func(*model.Briefing) {},
+			writeMarkdown: func(*model.Briefing, string) (string, error) { return "", nil },
+			printFailed:   func([]fetcher.FailedSource) {},
+		},
+		email: emailDeps{
+			sendEmail: func(*model.Briefing, *config.Config, []fetcher.FailedSource) error { return nil },
+		},
 	}
 
 	if err := execute(app, serveCommand{}); err != nil {
@@ -822,26 +956,36 @@ func TestExecuteServeOriginalOnlySkipsSummarize(t *testing.T) {
 	window := scheduler.Window{Period: "0800", From: time.Date(2026, 3, 18, 7, 0, 0, 0, time.UTC), To: time.Date(2026, 3, 18, 8, 0, 0, 0, time.UTC)}
 	app := &app{
 		cfg: &config.Config{Sources: []config.Source{{Category: "AI/科技"}}, Output: config.OutputCfg{Dir: t.TempDir(), Mode: model.OutputModeOriginalOnly}},
-		startCron: func(cfg *config.Config, run func(scheduler.Window)) error {
-			run(window)
-			return nil
+		scheduler: schedulerDeps{
+			startCron: func(cfg *config.Config, run func(scheduler.Window)) error {
+				run(window)
+				return nil
+			},
+			waitForever: func() {},
 		},
-		fetchWindow: func(cfg *config.Config, from, to time.Time, markSeen bool, ignoreSeen bool) ([]model.Article, []fetcher.FailedSource, error) {
-			return sampleExecuteArticles(), nil, nil
+		fetch: fetchDeps{
+			fetchWindow: func(cfg *config.Config, from, to time.Time, markSeen bool, ignoreSeen bool) ([]model.Article, []fetcher.FailedSource, error) {
+				return sampleExecuteArticles(), nil, nil
+			},
 		},
-		summarize: func([]model.Article, []string, *time.Location) (string, error) {
-			summarizeCalled = true
-			return "TRANSLATED", nil
+		ai: aiDeps{
+			summarize: func([]model.Article, []string, *time.Location) (string, error) {
+				summarizeCalled = true
+				return "TRANSLATED", nil
+			},
 		},
-		composeBody: func(path string, mode model.OutputMode, content model.OutputContent) (string, error) {
-			gotContent = content
-			return "ORIGINAL ONLY", nil
+		output: outputDeps{
+			composeBody: func(path string, mode model.OutputMode, content model.OutputContent) (string, error) {
+				gotContent = content
+				return "ORIGINAL ONLY", nil
+			},
+			printCLI:      func(*model.Briefing) {},
+			writeMarkdown: func(*model.Briefing, string) (string, error) { return "", nil },
+			printFailed:   func([]fetcher.FailedSource) {},
 		},
-		printCLI:      func(*model.Briefing) {},
-		writeMarkdown: func(*model.Briefing, string) (string, error) { return "", nil },
-		sendEmail:     func(*model.Briefing, *config.Config, []fetcher.FailedSource) error { return nil },
-		printFailed:   func([]fetcher.FailedSource) {},
-		waitForever:   func() {},
+		email: emailDeps{
+			sendEmail: func(*model.Briefing, *config.Config, []fetcher.FailedSource) error { return nil },
+		},
 	}
 
 	if err := execute(app, serveCommand{}); err != nil {
@@ -862,18 +1006,22 @@ func TestRenderBriefingOriginalOnlySkipsSummarize(t *testing.T) {
 
 	app := &app{
 		cfg: &config.Config{Sources: []config.Source{{Category: "AI/科技"}}, Output: config.OutputCfg{Dir: t.TempDir(), Mode: model.OutputModeOriginalOnly}},
-		summarize: func([]model.Article, []string, *time.Location) (string, error) {
-			summarizeCalled = true
-			return "TRANSLATED", nil
+		ai: aiDeps{
+			summarize: func([]model.Article, []string, *time.Location) (string, error) {
+				summarizeCalled = true
+				return "TRANSLATED", nil
+			},
 		},
-		composeBody: func(path string, mode model.OutputMode, content model.OutputContent) (string, error) {
-			gotContent = content
-			return "ORIGINAL ONLY", nil
+		output: outputDeps{
+			composeBody: func(path string, mode model.OutputMode, content model.OutputContent) (string, error) {
+				gotContent = content
+				return "ORIGINAL ONLY", nil
+			},
+			printCLI:      func(*model.Briefing) {},
+			writeMarkdown: func(*model.Briefing, string) (string, error) { return "", nil },
+			printFailed:   func([]fetcher.FailedSource) {},
+			printArticles: func([]model.Article) {},
 		},
-		printCLI:      func(*model.Briefing) {},
-		writeMarkdown: func(*model.Briefing, string) (string, error) { return "", nil },
-		printFailed:   func([]fetcher.FailedSource) {},
-		printArticles: func([]model.Article) {},
 	}
 
 	if err := app.renderBriefing("run", "26.03.27", "1400", articles, nil, nil, false, false); err != nil {
@@ -893,23 +1041,29 @@ func TestRenderBriefingReturnsWriteMarkdownErrorBeforeMarkSeenAndEmail(t *testin
 	emailed := false
 	app := &app{
 		cfg: &config.Config{Email: config.Email{To: "test@example.com"}, Output: config.OutputCfg{Dir: t.TempDir(), Mode: model.OutputModeOriginalOnly}},
-		composeBody: func(path string, mode model.OutputMode, content model.OutputContent) (string, error) {
-			return "ORIGINAL ONLY", nil
+		fetch: fetchDeps{
+			markSeen: func([]model.Article) error {
+				marked = true
+				return nil
+			},
 		},
-		printCLI: func(*model.Briefing) {},
-		writeMarkdown: func(*model.Briefing, string) (string, error) {
-			return "", errors.New("disk full")
+		output: outputDeps{
+			composeBody: func(path string, mode model.OutputMode, content model.OutputContent) (string, error) {
+				return "ORIGINAL ONLY", nil
+			},
+			printCLI: func(*model.Briefing) {},
+			writeMarkdown: func(*model.Briefing, string) (string, error) {
+				return "", errors.New("disk full")
+			},
+			printFailed:   func([]fetcher.FailedSource) {},
+			printArticles: func([]model.Article) {},
 		},
-		markSeen: func([]model.Article) error {
-			marked = true
-			return nil
+		email: emailDeps{
+			sendEmail: func(*model.Briefing, *config.Config, []fetcher.FailedSource) error {
+				emailed = true
+				return nil
+			},
 		},
-		sendEmail: func(*model.Briefing, *config.Config, []fetcher.FailedSource) error {
-			emailed = true
-			return nil
-		},
-		printFailed:   func([]fetcher.FailedSource) {},
-		printArticles: func([]model.Article) {},
 	}
 
 	err := app.renderBriefing("run", "26.03.27", "1400", articles, articles, nil, false, true)
@@ -932,19 +1086,25 @@ func TestExecuteFetchTranslateOriginalOnlySkipsTranslate(t *testing.T) {
 
 	app := &app{
 		cfg: &config.Config{Output: config.OutputCfg{Mode: model.OutputModeOriginalOnly}},
-		fetchAll: func(cfg *config.Config, markSeen bool) ([]model.Article, []fetcher.FailedSource, error) {
-			return articles, nil, nil
+		fetch: fetchDeps{
+			fetchAll: func(cfg *config.Config, markSeen bool) ([]model.Article, []fetcher.FailedSource, error) {
+				return articles, nil, nil
+			},
 		},
-		translate: func([]model.Article, []string, *time.Location) (string, error) {
-			translateCalled = true
-			return "TRANSLATED", nil
+		ai: aiDeps{
+			translate: func([]model.Article, []string, *time.Location) (string, error) {
+				translateCalled = true
+				return "TRANSLATED", nil
+			},
 		},
-		composeBody: func(path string, mode model.OutputMode, content model.OutputContent) (string, error) {
-			gotContent = content
-			return "ORIGINAL ONLY", nil
+		output: outputDeps{
+			composeBody: func(path string, mode model.OutputMode, content model.OutputContent) (string, error) {
+				gotContent = content
+				return "ORIGINAL ONLY", nil
+			},
+			printText:   func(s string) { printed = s },
+			printFailed: func([]fetcher.FailedSource) {},
 		},
-		printText:   func(s string) { printed = s },
-		printFailed: func([]fetcher.FailedSource) {},
 	}
 
 	if err := execute(app, fetchCommand{zh: true}); err != nil {
@@ -970,26 +1130,32 @@ func TestRunDeepDiveOriginalOnlySkipsDeepDiveAndKeepsOriginalBlock(t *testing.T)
 
 	app := &app{
 		cfg: &config.Config{Sources: []config.Source{{Category: "AI/科技"}}, Output: config.OutputCfg{Dir: t.TempDir(), Mode: model.OutputModeOriginalOnly}},
-		fetchAll: func(cfg *config.Config, markSeen bool) ([]model.Article, []fetcher.FailedSource, error) {
-			if markSeen {
-				t.Fatalf("fetchAll() markSeen=%v, want false", markSeen)
-			}
-			return relevant, nil, nil
+		fetch: fetchDeps{
+			fetchAll: func(cfg *config.Config, markSeen bool) ([]model.Article, []fetcher.FailedSource, error) {
+				if markSeen {
+					t.Fatalf("fetchAll() markSeen=%v, want false", markSeen)
+				}
+				return relevant, nil, nil
+			},
 		},
-		printFailed: func([]fetcher.FailedSource) {},
-		deepDive: func(string, []model.Article, *time.Location) (string, error) {
-			deepDiveCalled = true
-			return "DEEP TRANSLATED", nil
+		ai: aiDeps{
+			deepDive: func(string, []model.Article, *time.Location) (string, error) {
+				deepDiveCalled = true
+				return "DEEP TRANSLATED", nil
+			},
 		},
-		composeBody: func(path string, mode model.OutputMode, content model.OutputContent) (string, error) {
-			gotContent = content
-			return "ORIGINAL ONLY", nil
+		output: outputDeps{
+			printFailed: func([]fetcher.FailedSource) {},
+			composeBody: func(path string, mode model.OutputMode, content model.OutputContent) (string, error) {
+				gotContent = content
+				return "ORIGINAL ONLY", nil
+			},
+			writeDeepDive: func(topic, content, outputDir, date string) (string, error) {
+				wroteContent = content
+				return "", nil
+			},
+			printText: func(s string) { printed = s },
 		},
-		writeDeepDive: func(topic, content, outputDir, date string) (string, error) {
-			wroteContent = content
-			return "", nil
-		},
-		printText: func(s string) { printed = s },
 	}
 
 	if err := app.runDeepDive(deepCommand{topic: "OpenAI"}); err != nil {
@@ -1017,21 +1183,27 @@ func TestExecuteFetchTranslateUsesOutputModeComposedBody(t *testing.T) {
 
 	app := &app{
 		cfg: &config.Config{Sources: []config.Source{{Category: "国际政治"}, {Category: "AI/科技"}}, Output: config.OutputCfg{Mode: model.OutputModeBilingualTranslatedFirst}},
-		fetchAll: func(cfg *config.Config, markSeen bool) ([]model.Article, []fetcher.FailedSource, error) {
-			return articles, nil, nil
+		fetch: fetchDeps{
+			fetchAll: func(cfg *config.Config, markSeen bool) ([]model.Article, []fetcher.FailedSource, error) {
+				return articles, nil, nil
+			},
 		},
-		translate: func(articles []model.Article, categoryOrder []string, loc *time.Location) (string, error) {
-			if strings.Join(categoryOrder, ",") != "国际政治,AI/科技" {
-				t.Fatalf("translate() categoryOrder = %v", categoryOrder)
-			}
-			return "TRANSLATED", nil
+		ai: aiDeps{
+			translate: func(articles []model.Article, categoryOrder []string, loc *time.Location) (string, error) {
+				if strings.Join(categoryOrder, ",") != "国际政治,AI/科技" {
+					t.Fatalf("translate() categoryOrder = %v", categoryOrder)
+				}
+				return "TRANSLATED", nil
+			},
 		},
-		composeBody: func(path string, mode model.OutputMode, content model.OutputContent) (string, error) {
-			gotPath, gotContent = path, content
-			return "COMPOSED", nil
+		output: outputDeps{
+			composeBody: func(path string, mode model.OutputMode, content model.OutputContent) (string, error) {
+				gotPath, gotContent = path, content
+				return "COMPOSED", nil
+			},
+			printText:   func(s string) { printed = s },
+			printFailed: func([]fetcher.FailedSource) {},
 		},
-		printText:   func(s string) { printed = s },
-		printFailed: func([]fetcher.FailedSource) {},
 	}
 
 	if err := execute(app, fetchCommand{zh: true}); err != nil {
@@ -1057,15 +1229,19 @@ func TestExecuteFetchWithoutZhBypassesOutputModeComposer(t *testing.T) {
 	printedArticles := false
 	app := &app{
 		cfg: &config.Config{Output: config.OutputCfg{Mode: model.OutputModeTranslatedOnly}},
-		fetchAll: func(cfg *config.Config, markSeen bool) ([]model.Article, []fetcher.FailedSource, error) {
-			return sampleExecuteArticles(), nil, nil
+		fetch: fetchDeps{
+			fetchAll: func(cfg *config.Config, markSeen bool) ([]model.Article, []fetcher.FailedSource, error) {
+				return sampleExecuteArticles(), nil, nil
+			},
 		},
-		composeBody: func(path string, mode model.OutputMode, content model.OutputContent) (string, error) {
-			called = true
-			return "", nil
+		output: outputDeps{
+			composeBody: func(path string, mode model.OutputMode, content model.OutputContent) (string, error) {
+				called = true
+				return "", nil
+			},
+			printArticles: func([]model.Article) { printedArticles = true },
+			printFailed:   func([]fetcher.FailedSource) {},
 		},
-		printArticles: func([]model.Article) { printedArticles = true },
-		printFailed:   func([]fetcher.FailedSource) {},
 	}
 
 	if err := execute(app, fetchCommand{zh: false}); err != nil {
@@ -1088,22 +1264,28 @@ func TestRunDeepDiveUsesOutputModeComposedBody(t *testing.T) {
 
 	app := &app{
 		cfg: &config.Config{Output: config.OutputCfg{Dir: t.TempDir(), Mode: model.OutputModeBilingualOriginalFirst}},
-		fetchAll: func(cfg *config.Config, markSeen bool) ([]model.Article, []fetcher.FailedSource, error) {
-			return relevant, nil, nil
+		fetch: fetchDeps{
+			fetchAll: func(cfg *config.Config, markSeen bool) ([]model.Article, []fetcher.FailedSource, error) {
+				return relevant, nil, nil
+			},
 		},
-		printFailed: func([]fetcher.FailedSource) {},
-		deepDive: func(string, []model.Article, *time.Location) (string, error) {
-			return "DEEP TRANSLATED", nil
+		ai: aiDeps{
+			deepDive: func(string, []model.Article, *time.Location) (string, error) {
+				return "DEEP TRANSLATED", nil
+			},
 		},
-		composeBody: func(path string, mode model.OutputMode, content model.OutputContent) (string, error) {
-			gotPath, gotContent = path, content
-			return "COMPOSED DEEP", nil
+		output: outputDeps{
+			printFailed: func([]fetcher.FailedSource) {},
+			composeBody: func(path string, mode model.OutputMode, content model.OutputContent) (string, error) {
+				gotPath, gotContent = path, content
+				return "COMPOSED DEEP", nil
+			},
+			writeDeepDive: func(topic, content, outputDir, date string) (string, error) {
+				wroteContent = content
+				return "", nil
+			},
+			printText: func(s string) { printed = s },
 		},
-		writeDeepDive: func(topic, content, outputDir, date string) (string, error) {
-			wroteContent = content
-			return "", nil
-		},
-		printText: func(s string) { printed = s },
 	}
 
 	if err := app.runDeepDive(deepCommand{topic: "OpenAI"}); err != nil {
@@ -1139,27 +1321,35 @@ func TestRunDeepDiveSendEmailUsesDeepSender(t *testing.T) {
 			Email:  config.Email{To: "test@example.com"},
 			Output: config.OutputCfg{Dir: t.TempDir(), Mode: model.OutputModeTranslatedOnly},
 		},
-		fetchAll: func(cfg *config.Config, markSeen bool) ([]model.Article, []fetcher.FailedSource, error) {
-			return relevant, failed, nil
+		fetch: fetchDeps{
+			fetchAll: func(cfg *config.Config, markSeen bool) ([]model.Article, []fetcher.FailedSource, error) {
+				return relevant, failed, nil
+			},
 		},
-		printFailed: func([]fetcher.FailedSource) {},
-		deepDive: func(string, []model.Article, *time.Location) (string, error) {
-			return "DEEP TRANSLATED", nil
+		ai: aiDeps{
+			deepDive: func(string, []model.Article, *time.Location) (string, error) {
+				return "DEEP TRANSLATED", nil
+			},
 		},
-		composeBody: func(path string, mode model.OutputMode, content model.OutputContent) (string, error) {
-			return "COMPOSED DEEP", nil
+		output: outputDeps{
+			printFailed: func([]fetcher.FailedSource) {},
+			composeBody: func(path string, mode model.OutputMode, content model.OutputContent) (string, error) {
+				return "COMPOSED DEEP", nil
+			},
+			writeDeepDive: func(topic, content, outputDir, date string) (string, error) {
+				return "", nil
+			},
+			printText: func(string) {},
 		},
-		writeDeepDive: func(topic, content, outputDir, date string) (string, error) {
-			return "", nil
+		email: emailDeps{
+			sendDeepEmail: func(topic string, briefing *model.Briefing, cfg *config.Config, gotFailed []fetcher.FailedSource) error {
+				emailedTopic = topic
+				emailedBriefing = briefing
+				emailedCfg = cfg
+				emailedFailed = gotFailed
+				return nil
+			},
 		},
-		sendDeepEmail: func(topic string, briefing *model.Briefing, cfg *config.Config, gotFailed []fetcher.FailedSource) error {
-			emailedTopic = topic
-			emailedBriefing = briefing
-			emailedCfg = cfg
-			emailedFailed = gotFailed
-			return nil
-		},
-		printText: func(string) {},
 	}
 
 	if err := app.runDeepDive(deepCommand{topic: "OpenAI", sendEmail: true}); err != nil {
@@ -1189,16 +1379,22 @@ func TestRunDeepDiveRejectsInteractiveFollowUpOutput(t *testing.T) {
 	wrote := false
 	app := &app{
 		cfg: &config.Config{Output: config.OutputCfg{Dir: t.TempDir(), Mode: model.OutputModeTranslatedOnly}},
-		fetchAll: func(cfg *config.Config, markSeen bool) ([]model.Article, []fetcher.FailedSource, error) {
-			return []model.Article{{Title: "AI bill", Summary: "AI bill summary"}}, nil, nil
+		fetch: fetchDeps{
+			fetchAll: func(cfg *config.Config, markSeen bool) ([]model.Article, []fetcher.FailedSource, error) {
+				return []model.Article{{Title: "AI bill", Summary: "AI bill summary"}}, nil, nil
+			},
 		},
-		printFailed: func([]fetcher.FailedSource) {},
-		deepDive: func(string, []model.Article, *time.Location) (string, error) {
-			return "你给的 3 条“相关新闻”与“美国 AI 数据中心暂停法案”主题不匹配。你希望我怎么继续？", nil
+		ai: aiDeps{
+			deepDive: func(string, []model.Article, *time.Location) (string, error) {
+				return "你给的 3 条“相关新闻”与“美国 AI 数据中心暂停法案”主题不匹配。你希望我怎么继续？", nil
+			},
 		},
-		writeDeepDive: func(string, string, string, string) (string, error) {
-			wrote = true
-			return "", nil
+		output: outputDeps{
+			printFailed: func([]fetcher.FailedSource) {},
+			writeDeepDive: func(string, string, string, string) (string, error) {
+				wrote = true
+				return "", nil
+			},
 		},
 	}
 
@@ -1217,24 +1413,30 @@ func TestRunDeepDiveRejectsInteractiveFollowUpOutput(t *testing.T) {
 func TestRunDeepDiveSendEmailDoesNotUseRegularSender(t *testing.T) {
 	app := &app{
 		cfg: &config.Config{Output: config.OutputCfg{Dir: t.TempDir(), Mode: model.OutputModeOriginalOnly}},
-		fetchAll: func(cfg *config.Config, markSeen bool) ([]model.Article, []fetcher.FailedSource, error) {
-			return []model.Article{{Title: "Claude ships feature", Summary: "Claude update"}}, nil, nil
+		fetch: fetchDeps{
+			fetchAll: func(cfg *config.Config, markSeen bool) ([]model.Article, []fetcher.FailedSource, error) {
+				return []model.Article{{Title: "Claude ships feature", Summary: "Claude update"}}, nil, nil
+			},
 		},
-		printFailed: func([]fetcher.FailedSource) {},
-		composeBody: func(path string, mode model.OutputMode, content model.OutputContent) (string, error) {
-			return "ORIGINAL ONLY", nil
+		output: outputDeps{
+			printFailed: func([]fetcher.FailedSource) {},
+			composeBody: func(path string, mode model.OutputMode, content model.OutputContent) (string, error) {
+				return "ORIGINAL ONLY", nil
+			},
+			writeDeepDive: func(topic, content, outputDir, date string) (string, error) {
+				return "", nil
+			},
+			printText: func(string) {},
 		},
-		writeDeepDive: func(topic, content, outputDir, date string) (string, error) {
-			return "", nil
+		email: emailDeps{
+			sendEmail: func(*model.Briefing, *config.Config, []fetcher.FailedSource) error {
+				t.Fatal("sendEmail() should not be used for deep")
+				return nil
+			},
+			sendDeepEmail: func(topic string, briefing *model.Briefing, cfg *config.Config, gotFailed []fetcher.FailedSource) error {
+				return nil
+			},
 		},
-		sendEmail: func(*model.Briefing, *config.Config, []fetcher.FailedSource) error {
-			t.Fatal("sendEmail() should not be used for deep")
-			return nil
-		},
-		sendDeepEmail: func(topic string, briefing *model.Briefing, cfg *config.Config, gotFailed []fetcher.FailedSource) error {
-			return nil
-		},
-		printText: func(string) {},
 	}
 
 	if err := app.runDeepDive(deepCommand{topic: "Claude", sendEmail: true}); err != nil {
@@ -1249,20 +1451,26 @@ func TestRunDeepDiveSendEmailFailureDoesNotFailCommand(t *testing.T) {
 			Email:  config.Email{To: "test@example.com"},
 			Output: config.OutputCfg{Dir: t.TempDir(), Mode: model.OutputModeOriginalOnly},
 		},
-		fetchAll: func(cfg *config.Config, markSeen bool) ([]model.Article, []fetcher.FailedSource, error) {
-			return []model.Article{{Title: "Claude ships feature", Summary: "Claude update"}}, nil, nil
+		fetch: fetchDeps{
+			fetchAll: func(cfg *config.Config, markSeen bool) ([]model.Article, []fetcher.FailedSource, error) {
+				return []model.Article{{Title: "Claude ships feature", Summary: "Claude update"}}, nil, nil
+			},
 		},
-		printFailed: func([]fetcher.FailedSource) {},
-		composeBody: func(path string, mode model.OutputMode, content model.OutputContent) (string, error) {
-			return "ORIGINAL ONLY", nil
+		output: outputDeps{
+			printFailed: func([]fetcher.FailedSource) {},
+			composeBody: func(path string, mode model.OutputMode, content model.OutputContent) (string, error) {
+				return "ORIGINAL ONLY", nil
+			},
+			writeDeepDive: func(topic, content, outputDir, date string) (string, error) {
+				return "", nil
+			},
+			printText: func(s string) { printed = s },
 		},
-		writeDeepDive: func(topic, content, outputDir, date string) (string, error) {
-			return "", nil
+		email: emailDeps{
+			sendDeepEmail: func(topic string, briefing *model.Briefing, cfg *config.Config, gotFailed []fetcher.FailedSource) error {
+				return errors.New("smtp down")
+			},
 		},
-		sendDeepEmail: func(topic string, briefing *model.Briefing, cfg *config.Config, gotFailed []fetcher.FailedSource) error {
-			return errors.New("smtp down")
-		},
-		printText: func(s string) { printed = s },
 	}
 
 	if err := app.runDeepDive(deepCommand{topic: "Claude", sendEmail: true}); err != nil {
@@ -1278,12 +1486,16 @@ func TestExecuteResendMDSendsMarkdownFile(t *testing.T) {
 	var gotPath string
 	app := &app{
 		cfg: &config.Config{Email: config.Email{To: "test@example.com"}},
-		resendMarkdownEmail: func(path string, cfg *config.Config) error {
-			called = true
-			gotPath = path
-			return nil
+		output: outputDeps{
+			printText: func(string) {},
 		},
-		printText: func(string) {},
+		email: emailDeps{
+			resendMarkdownEmail: func(path string, cfg *config.Config) error {
+				called = true
+				gotPath = path
+				return nil
+			},
+		},
 	}
 
 	if err := execute(app, resendMDCommand{file: "output/26.04.13-晚间-1800.md"}); err != nil {
@@ -1300,10 +1512,14 @@ func TestExecuteResendMDSendsMarkdownFile(t *testing.T) {
 func TestExecuteResendMDReturnsSendError(t *testing.T) {
 	app := &app{
 		cfg: &config.Config{},
-		resendMarkdownEmail: func(path string, cfg *config.Config) error {
-			return errors.New("smtp down")
+		output: outputDeps{
+			printText: func(string) {},
 		},
-		printText: func(string) {},
+		email: emailDeps{
+			resendMarkdownEmail: func(path string, cfg *config.Config) error {
+				return errors.New("smtp down")
+			},
+		},
 	}
 
 	err := execute(app, resendMDCommand{file: "output/26.04.13-晚间-1800.md"})
@@ -1315,10 +1531,14 @@ func TestExecuteResendMDReturnsSendError(t *testing.T) {
 func TestExecuteResendMDPrintsSuccessMessage(t *testing.T) {
 	var printed []string
 	app := &app{
-		cfg:       &config.Config{Email: config.Email{To: "test@example.com"}},
-		printText: func(s string) { printed = append(printed, s) },
-		resendMarkdownEmail: func(path string, cfg *config.Config) error {
-			return nil
+		cfg: &config.Config{Email: config.Email{To: "test@example.com"}},
+		output: outputDeps{
+			printText: func(s string) { printed = append(printed, s) },
+		},
+		email: emailDeps{
+			resendMarkdownEmail: func(path string, cfg *config.Config) error {
+				return nil
+			},
 		},
 	}
 
@@ -1463,29 +1683,33 @@ func TestRunDeepDiveIgnoreSeenUsesFetchWindow(t *testing.T) {
 	app := &app{
 		cfg: &config.Config{Output: config.OutputCfg{Dir: t.TempDir(), Mode: model.OutputModeOriginalOnly}},
 		now: func() time.Time { return now },
-		fetchAll: func(cfg *config.Config, markSeen bool) ([]model.Article, []fetcher.FailedSource, error) {
-			fetchAllCalled = true
-			return nil, nil, nil
+		fetch: fetchDeps{
+			fetchAll: func(cfg *config.Config, markSeen bool) ([]model.Article, []fetcher.FailedSource, error) {
+				fetchAllCalled = true
+				return nil, nil, nil
+			},
+			fetchWindow: func(cfg *config.Config, from, to time.Time, markSeen, ignoreSeen bool) ([]model.Article, []fetcher.FailedSource, error) {
+				windowCalled = true
+				if markSeen || !ignoreSeen {
+					t.Fatalf("fetchWindow() markSeen=%v ignoreSeen=%v, want false true", markSeen, ignoreSeen)
+				}
+				if !from.Equal(now.Add(-12*time.Hour)) || !to.Equal(now) {
+					t.Fatalf("fetchWindow() window = %v ~ %v, want %v ~ %v", from, to, now.Add(-12*time.Hour), now)
+				}
+				return []model.Article{{Title: "Claude ships feature", Summary: "Claude update"}}, nil, nil
+			},
 		},
-		fetchWindow: func(cfg *config.Config, from, to time.Time, markSeen, ignoreSeen bool) ([]model.Article, []fetcher.FailedSource, error) {
-			windowCalled = true
-			if markSeen || !ignoreSeen {
-				t.Fatalf("fetchWindow() markSeen=%v ignoreSeen=%v, want false true", markSeen, ignoreSeen)
-			}
-			if !from.Equal(now.Add(-12*time.Hour)) || !to.Equal(now) {
-				t.Fatalf("fetchWindow() window = %v ~ %v, want %v ~ %v", from, to, now.Add(-12*time.Hour), now)
-			}
-			return []model.Article{{Title: "Claude ships feature", Summary: "Claude update"}}, nil, nil
+		output: outputDeps{
+			printFailed: func([]fetcher.FailedSource) {},
+			composeBody: func(path string, mode model.OutputMode, content model.OutputContent) (string, error) {
+				return "ORIGINAL ONLY", nil
+			},
+			writeDeepDive: func(topic, content, outputDir, date string) (string, error) {
+				wroteContent = content
+				return "", nil
+			},
+			printText: func(string) {},
 		},
-		printFailed: func([]fetcher.FailedSource) {},
-		composeBody: func(path string, mode model.OutputMode, content model.OutputContent) (string, error) {
-			return "ORIGINAL ONLY", nil
-		},
-		writeDeepDive: func(topic, content, outputDir, date string) (string, error) {
-			wroteContent = content
-			return "", nil
-		},
-		printText: func(string) {},
 	}
 
 	if err := app.runDeepDive(deepCommand{topic: "Claude", ignoreSeen: true}); err != nil {
@@ -1513,31 +1737,35 @@ func TestRunDeepDiveExplicitWindowUsesFetchWindow(t *testing.T) {
 			ScheduleLocation: loc,
 			Output:           config.OutputCfg{Dir: t.TempDir(), Mode: model.OutputModeOriginalOnly},
 		},
-		fetchAll: func(cfg *config.Config, markSeen bool) ([]model.Article, []fetcher.FailedSource, error) {
-			fetchAllCalled = true
-			return nil, nil, nil
+		fetch: fetchDeps{
+			fetchAll: func(cfg *config.Config, markSeen bool) ([]model.Article, []fetcher.FailedSource, error) {
+				fetchAllCalled = true
+				return nil, nil, nil
+			},
+			fetchWindow: func(cfg *config.Config, from, to time.Time, markSeen, ignoreSeen bool) ([]model.Article, []fetcher.FailedSource, error) {
+				windowCalled = true
+				wantFrom := time.Date(2026, 3, 28, 0, 0, 0, 0, loc)
+				wantTo := time.Date(2026, 3, 29, 23, 59, 0, 0, loc)
+				if !from.Equal(wantFrom) || !to.Equal(wantTo) {
+					t.Fatalf("fetchWindow() window = %v ~ %v, want %v ~ %v", from, to, wantFrom, wantTo)
+				}
+				if markSeen || ignoreSeen {
+					t.Fatalf("fetchWindow() markSeen=%v ignoreSeen=%v, want false false", markSeen, ignoreSeen)
+				}
+				return []model.Article{{Title: "Claude ships feature", Summary: "Claude update"}}, nil, nil
+			},
 		},
-		fetchWindow: func(cfg *config.Config, from, to time.Time, markSeen, ignoreSeen bool) ([]model.Article, []fetcher.FailedSource, error) {
-			windowCalled = true
-			wantFrom := time.Date(2026, 3, 28, 0, 0, 0, 0, loc)
-			wantTo := time.Date(2026, 3, 29, 23, 59, 0, 0, loc)
-			if !from.Equal(wantFrom) || !to.Equal(wantTo) {
-				t.Fatalf("fetchWindow() window = %v ~ %v, want %v ~ %v", from, to, wantFrom, wantTo)
-			}
-			if markSeen || ignoreSeen {
-				t.Fatalf("fetchWindow() markSeen=%v ignoreSeen=%v, want false false", markSeen, ignoreSeen)
-			}
-			return []model.Article{{Title: "Claude ships feature", Summary: "Claude update"}}, nil, nil
+		output: outputDeps{
+			printFailed: func([]fetcher.FailedSource) {},
+			composeBody: func(path string, mode model.OutputMode, content model.OutputContent) (string, error) {
+				return "ORIGINAL ONLY", nil
+			},
+			writeDeepDive: func(topic, content, outputDir, date string) (string, error) {
+				wroteContent = content
+				return "", nil
+			},
+			printText: func(string) {},
 		},
-		printFailed: func([]fetcher.FailedSource) {},
-		composeBody: func(path string, mode model.OutputMode, content model.OutputContent) (string, error) {
-			return "ORIGINAL ONLY", nil
-		},
-		writeDeepDive: func(topic, content, outputDir, date string) (string, error) {
-			wroteContent = content
-			return "", nil
-		},
-		printText: func(string) {},
 	}
 
 	if err := app.runDeepDive(deepCommand{topic: "Claude", fromRaw: "2026-03-28 00:00", toRaw: "2026-03-29 23:59"}); err != nil {
@@ -1562,24 +1790,30 @@ func TestRunDeepDiveExplicitWindowWithIgnoreSeenPassesIgnoreSeen(t *testing.T) {
 			ScheduleLocation: loc,
 			Output:           config.OutputCfg{Dir: t.TempDir(), Mode: model.OutputModeOriginalOnly},
 		},
-		fetchWindow: func(cfg *config.Config, from, to time.Time, markSeen, ignoreSeen bool) ([]model.Article, []fetcher.FailedSource, error) {
-			if markSeen || !ignoreSeen {
-				t.Fatalf("fetchWindow() markSeen=%v ignoreSeen=%v, want false true", markSeen, ignoreSeen)
-			}
-			return []model.Article{{Title: "Claude ships feature", Summary: "Claude update"}}, nil, nil
+		fetch: fetchDeps{
+			fetchWindow: func(cfg *config.Config, from, to time.Time, markSeen, ignoreSeen bool) ([]model.Article, []fetcher.FailedSource, error) {
+				if markSeen || !ignoreSeen {
+					t.Fatalf("fetchWindow() markSeen=%v ignoreSeen=%v, want false true", markSeen, ignoreSeen)
+				}
+				return []model.Article{{Title: "Claude ships feature", Summary: "Claude update"}}, nil, nil
+			},
 		},
-		printFailed: func([]fetcher.FailedSource) {},
-		composeBody: func(path string, mode model.OutputMode, content model.OutputContent) (string, error) {
-			return "ORIGINAL ONLY", nil
+		output: outputDeps{
+			printFailed: func([]fetcher.FailedSource) {},
+			composeBody: func(path string, mode model.OutputMode, content model.OutputContent) (string, error) {
+				return "ORIGINAL ONLY", nil
+			},
+			writeDeepDive: func(topic, content, outputDir, date string) (string, error) {
+				return "", nil
+			},
+			printText: func(string) {},
 		},
-		writeDeepDive: func(topic, content, outputDir, date string) (string, error) {
-			return "", nil
+		email: emailDeps{
+			sendDeepEmail: func(topic string, briefing *model.Briefing, cfg *config.Config, gotFailed []fetcher.FailedSource) error {
+				emailed = true
+				return nil
+			},
 		},
-		sendDeepEmail: func(topic string, briefing *model.Briefing, cfg *config.Config, gotFailed []fetcher.FailedSource) error {
-			emailed = true
-			return nil
-		},
-		printText: func(string) {},
 	}
 
 	if err := app.runDeepDive(deepCommand{topic: "Claude", fromRaw: "2026-03-28 00:00", toRaw: "2026-03-29 23:59", ignoreSeen: true, sendEmail: true}); err != nil {
@@ -1630,22 +1864,26 @@ func TestRunDeepDiveDisplayedTimeMatchesConfiguredWindowTimezone(t *testing.T) {
 			ScheduleLocation: loc,
 			Output:           config.OutputCfg{Dir: t.TempDir(), Mode: model.OutputModeOriginalOnly},
 		},
-		fetchWindow: func(cfg *config.Config, from, to time.Time, markSeen, ignoreSeen bool) ([]model.Article, []fetcher.FailedSource, error) {
-			windowCalled = true
-			want := time.Date(2026, 3, 18, 7, 0, 0, 0, loc)
-			if !from.Equal(want) || !to.Equal(want) {
-				t.Fatalf("fetchWindow() window = %v ~ %v, want %v ~ %v", from, to, want, want)
-			}
-			return []model.Article{article}, nil, nil
+		fetch: fetchDeps{
+			fetchWindow: func(cfg *config.Config, from, to time.Time, markSeen, ignoreSeen bool) ([]model.Article, []fetcher.FailedSource, error) {
+				windowCalled = true
+				want := time.Date(2026, 3, 18, 7, 0, 0, 0, loc)
+				if !from.Equal(want) || !to.Equal(want) {
+					t.Fatalf("fetchWindow() window = %v ~ %v, want %v ~ %v", from, to, want, want)
+				}
+				return []model.Article{article}, nil, nil
+			},
 		},
-		printFailed: func([]fetcher.FailedSource) {},
-		composeBody: func(path string, mode model.OutputMode, content model.OutputContent) (string, error) {
-			return "ORIGINAL ONLY", nil
+		output: outputDeps{
+			printFailed: func([]fetcher.FailedSource) {},
+			composeBody: func(path string, mode model.OutputMode, content model.OutputContent) (string, error) {
+				return "ORIGINAL ONLY", nil
+			},
+			writeDeepDive: func(topic, content, outputDir, date string) (string, error) {
+				return "", nil
+			},
+			printText: func(string) {},
 		},
-		writeDeepDive: func(topic, content, outputDir, date string) (string, error) {
-			return "", nil
-		},
-		printText: func(string) {},
 	}
 
 	if err := app.runDeepDive(deepCommand{topic: "Claude", fromRaw: "2026-03-18 07:00", toRaw: "2026-03-18 07:00"}); err != nil {
@@ -1668,22 +1906,28 @@ func TestRunDeepDiveUsesConfiguredTimezoneForBriefingDate(t *testing.T) {
 			Output:           config.OutputCfg{Dir: t.TempDir(), Mode: model.OutputModeOriginalOnly},
 		},
 		now: func() time.Time { return now },
-		fetchAll: func(cfg *config.Config, markSeen bool) ([]model.Article, []fetcher.FailedSource, error) {
-			return []model.Article{{Title: "Claude ships feature", Summary: "Claude update"}}, nil, nil
+		fetch: fetchDeps{
+			fetchAll: func(cfg *config.Config, markSeen bool) ([]model.Article, []fetcher.FailedSource, error) {
+				return []model.Article{{Title: "Claude ships feature", Summary: "Claude update"}}, nil, nil
+			},
 		},
-		printFailed: func([]fetcher.FailedSource) {},
-		composeBody: func(path string, mode model.OutputMode, content model.OutputContent) (string, error) {
-			return "ORIGINAL ONLY", nil
+		output: outputDeps{
+			printFailed: func([]fetcher.FailedSource) {},
+			composeBody: func(path string, mode model.OutputMode, content model.OutputContent) (string, error) {
+				return "ORIGINAL ONLY", nil
+			},
+			writeDeepDive: func(topic, content, outputDir, date string) (string, error) {
+				wroteDate = date
+				return "", nil
+			},
+			printText: func(string) {},
 		},
-		writeDeepDive: func(topic, content, outputDir, date string) (string, error) {
-			wroteDate = date
-			return "", nil
+		email: emailDeps{
+			sendDeepEmail: func(topic string, briefing *model.Briefing, cfg *config.Config, gotFailed []fetcher.FailedSource) error {
+				emailedDate = briefing.Date
+				return nil
+			},
 		},
-		sendDeepEmail: func(topic string, briefing *model.Briefing, cfg *config.Config, gotFailed []fetcher.FailedSource) error {
-			emailedDate = briefing.Date
-			return nil
-		},
-		printText: func(string) {},
 	}
 
 	if err := app.runDeepDive(deepCommand{topic: "Claude", sendEmail: true}); err != nil {
@@ -1719,21 +1963,27 @@ func TestRunDeepDiveIncludesWatchSeenArticles(t *testing.T) {
 	app := &app{
 		cfg: &config.Config{Output: config.OutputCfg{Dir: outputDir, Mode: model.OutputModeTranslatedOnly}},
 		now: func() time.Time { return time.Date(2026, 4, 15, 18, 0, 0, 0, time.UTC) },
-		fetchAll: func(cfg *config.Config, markSeen bool) ([]model.Article, []fetcher.FailedSource, error) {
-			return nil, nil, nil
+		fetch: fetchDeps{
+			fetchAll: func(cfg *config.Config, markSeen bool) ([]model.Article, []fetcher.FailedSource, error) {
+				return nil, nil, nil
+			},
 		},
-		printFailed: func([]fetcher.FailedSource) {},
-		deepDive: func(topic string, articles []model.Article, loc *time.Location) (string, error) {
-			deepArticles = articles
-			return "DEEP TRANSLATED", nil
+		ai: aiDeps{
+			deepDive: func(topic string, articles []model.Article, loc *time.Location) (string, error) {
+				deepArticles = articles
+				return "DEEP TRANSLATED", nil
+			},
 		},
-		composeBody: func(path string, mode model.OutputMode, content model.OutputContent) (string, error) {
-			return "COMPOSED DEEP", nil
+		output: outputDeps{
+			printFailed: func([]fetcher.FailedSource) {},
+			composeBody: func(path string, mode model.OutputMode, content model.OutputContent) (string, error) {
+				return "COMPOSED DEEP", nil
+			},
+			writeDeepDive: func(topic, content, outputDir, date string) (string, error) {
+				return "", nil
+			},
+			printText: func(string) {},
 		},
-		writeDeepDive: func(topic, content, outputDir, date string) (string, error) {
-			return "", nil
-		},
-		printText: func(string) {},
 	}
 
 	if err := app.runDeepDive(deepCommand{topic: "身份验证"}); err != nil {
@@ -1753,17 +2003,21 @@ func TestRunDeepDiveIncludesWatchSeenArticles(t *testing.T) {
 func TestRunDeepDiveWithoutWatchSeenFileStaysCompatible(t *testing.T) {
 	app := &app{
 		cfg: &config.Config{Output: config.OutputCfg{Dir: t.TempDir(), Mode: model.OutputModeOriginalOnly}},
-		fetchAll: func(cfg *config.Config, markSeen bool) ([]model.Article, []fetcher.FailedSource, error) {
-			return []model.Article{{Title: "Claude ships feature", Summary: "Claude update"}}, nil, nil
+		fetch: fetchDeps{
+			fetchAll: func(cfg *config.Config, markSeen bool) ([]model.Article, []fetcher.FailedSource, error) {
+				return []model.Article{{Title: "Claude ships feature", Summary: "Claude update"}}, nil, nil
+			},
 		},
-		printFailed: func([]fetcher.FailedSource) {},
-		composeBody: func(path string, mode model.OutputMode, content model.OutputContent) (string, error) {
-			return "ORIGINAL ONLY", nil
+		output: outputDeps{
+			printFailed: func([]fetcher.FailedSource) {},
+			composeBody: func(path string, mode model.OutputMode, content model.OutputContent) (string, error) {
+				return "ORIGINAL ONLY", nil
+			},
+			writeDeepDive: func(topic, content, outputDir, date string) (string, error) {
+				return "", nil
+			},
+			printText: func(string) {},
 		},
-		writeDeepDive: func(topic, content, outputDir, date string) (string, error) {
-			return "", nil
-		},
-		printText: func(string) {},
 	}
 
 	if err := app.runDeepDive(deepCommand{topic: "Claude"}); err != nil {
@@ -1839,22 +2093,28 @@ func TestRunDeepDiveExplicitWindowUsesWindowDateForOutput(t *testing.T) {
 			Output:           config.OutputCfg{Dir: t.TempDir(), Mode: model.OutputModeOriginalOnly},
 		},
 		now: func() time.Time { return now },
-		fetchWindow: func(cfg *config.Config, from, to time.Time, markSeen, ignoreSeen bool) ([]model.Article, []fetcher.FailedSource, error) {
-			return []model.Article{{Title: "Claude ships feature", Summary: "Claude update"}}, nil, nil
+		fetch: fetchDeps{
+			fetchWindow: func(cfg *config.Config, from, to time.Time, markSeen, ignoreSeen bool) ([]model.Article, []fetcher.FailedSource, error) {
+				return []model.Article{{Title: "Claude ships feature", Summary: "Claude update"}}, nil, nil
+			},
 		},
-		printFailed: func([]fetcher.FailedSource) {},
-		composeBody: func(path string, mode model.OutputMode, content model.OutputContent) (string, error) {
-			return "ORIGINAL ONLY", nil
+		output: outputDeps{
+			printFailed: func([]fetcher.FailedSource) {},
+			composeBody: func(path string, mode model.OutputMode, content model.OutputContent) (string, error) {
+				return "ORIGINAL ONLY", nil
+			},
+			writeDeepDive: func(topic, content, outputDir, date string) (string, error) {
+				wroteDate = date
+				return "", nil
+			},
+			printText: func(string) {},
 		},
-		writeDeepDive: func(topic, content, outputDir, date string) (string, error) {
-			wroteDate = date
-			return "", nil
+		email: emailDeps{
+			sendDeepEmail: func(topic string, briefing *model.Briefing, cfg *config.Config, gotFailed []fetcher.FailedSource) error {
+				emailedDate = briefing.Date
+				return nil
+			},
 		},
-		sendDeepEmail: func(topic string, briefing *model.Briefing, cfg *config.Config, gotFailed []fetcher.FailedSource) error {
-			emailedDate = briefing.Date
-			return nil
-		},
-		printText: func(string) {},
 	}
 
 	if err := app.runDeepDive(deepCommand{topic: "Claude", fromRaw: "2026-03-28 00:00", toRaw: "2026-03-29 23:59", sendEmail: true}); err != nil {

@@ -345,14 +345,11 @@ func TestExtractRequestIDFindsOpenAIStyleRequestID(t *testing.T) {
 func TestCallClaudeWritesFailureLogAfterRetryExhaustion(t *testing.T) {
 	dir := t.TempDir()
 	logPath := filepath.Join(dir, "ai-cli-failures.log")
-	oldLogPath := aiCLIFailureLogPath
 	oldPath := os.Getenv("PATH")
 	t.Cleanup(func() {
-		aiCLIFailureLogPath = oldLogPath
 		_ = os.Setenv("PATH", oldPath)
 		ResetCommandForTest()
 	})
-	aiCLIFailureLogPath = logPath
 
 	commandName := "log-fail-ai"
 	if runtime.GOOS == "windows" {
@@ -369,6 +366,7 @@ func TestCallClaudeWritesFailureLogAfterRetryExhaustion(t *testing.T) {
 
 	runner := NewRunner("log-fail-ai", nil, nil, true, "", "")
 	runner.retrySleep = func(context.Context, time.Duration) error { return nil }
+	runner.failureLogPath = logPath
 	_, err := runner.callClaudeWithKind(callKindTranslate, "hello world")
 	if err == nil {
 		t.Fatal("callClaudeWithKind() error = nil, want failure")
@@ -479,14 +477,11 @@ func TestTranslateWritesFailureLogWhenSanitizedOutputStaysEmpty(t *testing.T) {
 	dir := t.TempDir()
 	logPath := filepath.Join(dir, "ai-cli-failures.log")
 	statePath := filepath.Join(dir, "attempts.txt")
-	oldLogPath := aiCLIFailureLogPath
 	oldPath := os.Getenv("PATH")
 	t.Cleanup(func() {
-		aiCLIFailureLogPath = oldLogPath
 		_ = os.Setenv("PATH", oldPath)
 		ResetCommandForTest()
 	})
-	aiCLIFailureLogPath = logPath
 
 	commandName := "ccs"
 	if runtime.GOOS == "windows" {
@@ -508,6 +503,7 @@ func TestTranslateWritesFailureLogWhenSanitizedOutputStaysEmpty(t *testing.T) {
 
 	runner := NewRunner("ccs", []string{"codex"}, nil, true, "", "")
 	runner.retrySleep = func(context.Context, time.Duration) error { return nil }
+	runner.failureLogPath = logPath
 	_, err := runner.Translate(sampleArticles(), []string{"AI/科技"}, time.Local)
 	if err == nil {
 		t.Fatal("Translate() error = nil, want retry exhaustion")
@@ -539,14 +535,11 @@ func TestSummarizeWritesFailureLogWhenSanitizedOutputStaysEmpty(t *testing.T) {
 	dir := t.TempDir()
 	logPath := filepath.Join(dir, "ai-cli-failures.log")
 	statePath := filepath.Join(dir, "attempts.txt")
-	oldLogPath := aiCLIFailureLogPath
 	oldPath := os.Getenv("PATH")
 	t.Cleanup(func() {
-		aiCLIFailureLogPath = oldLogPath
 		_ = os.Setenv("PATH", oldPath)
 		ResetCommandForTest()
 	})
-	aiCLIFailureLogPath = logPath
 
 	commandName := "ccs"
 	if runtime.GOOS == "windows" {
@@ -568,6 +561,7 @@ func TestSummarizeWritesFailureLogWhenSanitizedOutputStaysEmpty(t *testing.T) {
 
 	runner := NewRunner("ccs", []string{"codex"}, nil, true, "", "")
 	runner.retrySleep = func(context.Context, time.Duration) error { return nil }
+	runner.failureLogPath = logPath
 	_, err := runner.Summarize(sampleArticles(), []string{"AI/科技"}, time.Local)
 	if err == nil {
 		t.Fatal("Summarize() error = nil, want retry exhaustion")
@@ -599,14 +593,11 @@ func TestDeepDiveWritesFailureLogWhenSanitizedOutputStaysEmpty(t *testing.T) {
 	dir := t.TempDir()
 	logPath := filepath.Join(dir, "ai-cli-failures.log")
 	statePath := filepath.Join(dir, "attempts.txt")
-	oldLogPath := aiCLIFailureLogPath
 	oldPath := os.Getenv("PATH")
 	t.Cleanup(func() {
-		aiCLIFailureLogPath = oldLogPath
 		_ = os.Setenv("PATH", oldPath)
 		ResetCommandForTest()
 	})
-	aiCLIFailureLogPath = logPath
 
 	commandName := "ccs"
 	if runtime.GOOS == "windows" {
@@ -628,6 +619,7 @@ func TestDeepDiveWritesFailureLogWhenSanitizedOutputStaysEmpty(t *testing.T) {
 
 	runner := NewRunner("ccs", []string{"codex"}, nil, true, "", "")
 	runner.retrySleep = func(context.Context, time.Duration) error { return nil }
+	runner.failureLogPath = logPath
 	_, err := runner.DeepDive("OpenAI", sampleArticles(), time.Local)
 	if err == nil {
 		t.Fatal("DeepDive() error = nil, want retry exhaustion")
@@ -752,29 +744,30 @@ func TestSanitizeCLIOutputStripsCCSInfraLogs(t *testing.T) {
 	}
 }
 
-func TestShouldSanitizeCLIOutputOnlyForCCSCodex(t *testing.T) {
+func TestRunnerShouldSanitizeCLIOutputOnlyForCCSCodex(t *testing.T) {
+	if !NewRunner("ccs", []string{"codex"}, nil, true, "", "").shouldSanitizeCLIOutput() {
+		t.Fatalf("shouldSanitizeCLIOutput() = false, want true for ccs codex")
+	}
+	if NewRunner("ccs", []string{"gemini"}, nil, true, "", "").shouldSanitizeCLIOutput() {
+		t.Fatalf("shouldSanitizeCLIOutput() = true, want false for ccs gemini")
+	}
+	if NewRunner("my-ai", []string{"codex"}, nil, true, "", "").shouldSanitizeCLIOutput() {
+		t.Fatalf("shouldSanitizeCLIOutput() = true, want false for non-ccs command")
+	}
+}
+
+func TestLegacyShouldSanitizeCLIOutputUsesDefaultConfig(t *testing.T) {
 	ResetCommandForTest()
-	t.Cleanup(func() {
-		ResetCommandForTest()
-	})
+	t.Cleanup(ResetCommandForTest)
 
 	if !shouldSanitizeCLIOutput() {
 		t.Fatalf("shouldSanitizeCLIOutput() = false, want true for default ccs codex")
-	}
-
-	SetCommand("ccs", []string{"gemini"})
-	if shouldSanitizeCLIOutput() {
-		t.Fatalf("shouldSanitizeCLIOutput() = true, want false for ccs gemini")
-	}
-
-	SetCommand("my-ai", []string{"codex"})
-	if shouldSanitizeCLIOutput() {
-		t.Fatalf("shouldSanitizeCLIOutput() = true, want false for non-ccs command")
 	}
 }
 
 func TestSetProxyPreservesConfiguredCommand(t *testing.T) {
 	ResetCommandForTest()
+	t.Cleanup(ResetCommandForTest)
 	setupFakeCLI(t, "my-ai")
 	SetCommand("my-ai", []string{"foo"})
 	SetProxy("http://127.0.0.1:7897", "socks5://127.0.0.1:7898")
@@ -790,8 +783,23 @@ func TestSetProxyPreservesConfiguredCommand(t *testing.T) {
 	}
 }
 
+func TestResetCommandForTestRestoresDefaultConfig(t *testing.T) {
+	SetCommand("my-ai", []string{"foo"})
+	SetProxy("http://127.0.0.1:7897", "socks5://127.0.0.1:7898")
+	ResetCommandForTest()
+	t.Cleanup(ResetCommandForTest)
+
+	if !shouldSanitizeCLIOutput() {
+		t.Fatalf("shouldSanitizeCLIOutput() = false, want true after reset")
+	}
+	if runner := legacyDefaultRunner(); len(runner.proxyEnv) != 0 {
+		t.Fatalf("proxy env after reset = %#v, want empty", runner.proxyEnv)
+	}
+}
+
 func TestDefaultRunnerConcurrentMutationDoesNotRace(t *testing.T) {
 	ResetCommandForTest()
+	t.Cleanup(ResetCommandForTest)
 	setupFakeCLI(t, "ccs")
 	setupFakeCLI(t, "my-ai")
 

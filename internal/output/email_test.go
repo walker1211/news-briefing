@@ -166,27 +166,24 @@ func TestSendMarkdownFileRejectsSymlinkPathOutsideOutputDirEvenWhenTargetInside(
 	}
 
 	cfg := &config.Config{Output: config.OutputCfg{Dir: outputDir}, Email: config.Email{RetryTimes: 1}}
-	oldSend := smtpSend
-	defer func() { smtpSend = oldSend }()
-	smtpSend = func(cfg *config.Config, subject, body, password string) error { return nil }
+	sender := NewEmailSender()
+	sender.smtpSend = func(cfg *config.Config, subject, body, password string) error { return nil }
 	if err := os.Setenv("EMAIL_SMTP_AUTH_CODE", "secret"); err != nil {
 		t.Fatalf("Setenv() error = %v", err)
 	}
 	defer os.Unsetenv("EMAIL_SMTP_AUTH_CODE")
 
-	err := SendMarkdownFile(linkPath, cfg)
+	err := sender.SendMarkdownFile(linkPath, cfg)
 	if err == nil || !strings.Contains(err.Error(), "outside output dir") {
 		t.Fatalf("SendMarkdownFile() error = %v", err)
 	}
 }
 
 func TestEmailDialContextUsesConfiguredSocks5Proxy(t *testing.T) {
-	oldFactory := newSocks5EmailDialContext
-	defer func() { newSocks5EmailDialContext = oldFactory }()
-
 	capturedAddr := ""
 	capturedTimeout := time.Duration(0)
-	newSocks5EmailDialContext = func(proxyAddr string, timeout time.Duration) (func(context.Context, string, string) (net.Conn, error), error) {
+	sender := NewEmailSender()
+	sender.newSocks5EmailDialContext = func(proxyAddr string, timeout time.Duration) (func(context.Context, string, string) (net.Conn, error), error) {
 		capturedAddr = proxyAddr
 		capturedTimeout = timeout
 		return func(ctx context.Context, network, address string) (net.Conn, error) {
@@ -198,7 +195,7 @@ func TestEmailDialContextUsesConfiguredSocks5Proxy(t *testing.T) {
 		Email: config.Email{Timeout: 2 * time.Second, UseProxy: true},
 		Proxy: config.Proxy{Socks5: "socks5://127.0.0.1:1080"},
 	}
-	_, err := newEmailDialContext(cfg)
+	_, err := sender.newEmailDialContext(cfg)
 	if err != nil {
 		t.Fatalf("newEmailDialContext() error = %v", err)
 	}
@@ -219,11 +216,9 @@ func TestEmailDialContextRejectsMissingSocks5ProxyWhenEnabled(t *testing.T) {
 }
 
 func TestEmailDialerDirectIgnoresProxyEnvWhenDisabled(t *testing.T) {
-	oldFactory := newDirectEmailDialContext
-	defer func() { newDirectEmailDialContext = oldFactory }()
-
 	capturedTimeout := time.Duration(0)
-	newDirectEmailDialContext = func(timeout time.Duration) func(ctx context.Context, network, address string) (net.Conn, error) {
+	sender := NewEmailSender()
+	sender.newDirectEmailDialContext = func(timeout time.Duration) func(ctx context.Context, network, address string) (net.Conn, error) {
 		capturedTimeout = timeout
 		return func(ctx context.Context, network, address string) (net.Conn, error) {
 			return nil, errors.New("stop")
@@ -231,7 +226,7 @@ func TestEmailDialerDirectIgnoresProxyEnvWhenDisabled(t *testing.T) {
 	}
 
 	cfg := &config.Config{Email: config.Email{SMTPHost: "smtp.example.com", SMTPPort: 465, Timeout: time.Second, UseProxy: false}}
-	err := deliverSMTPMessage(cfg, "subject", "body", "secret")
+	err := sender.deliverSMTPMessage(cfg, "subject", "body", "secret")
 	if err == nil || !strings.Contains(err.Error(), "stop") {
 		t.Fatalf("deliverSMTPMessage() error = %v", err)
 	}
@@ -243,21 +238,21 @@ func TestEmailDialerDirectIgnoresProxyEnvWhenDisabled(t *testing.T) {
 func TestSendEmailWithRetryStopsAfterSuccess(t *testing.T) {
 	cfg := &config.Config{Email: config.Email{RetryTimes: 3, RetryWaitTime: 0, UseProxy: false}}
 	attempts := 0
-	oldSend := smtpSend
-	defer func() { smtpSend = oldSend }()
-	smtpSend = func(cfg *config.Config, subject, body, password string) error {
+	sender := NewEmailSender()
+	sender.smtpSend = func(cfg *config.Config, subject, body, password string) error {
 		attempts++
 		if attempts < 3 {
 			return errors.New("temporary timeout")
 		}
 		return nil
 	}
+	sender.sleep = func(time.Duration) {}
 	if err := os.Setenv("EMAIL_SMTP_AUTH_CODE", "secret"); err != nil {
 		t.Fatalf("Setenv() error = %v", err)
 	}
 	defer os.Unsetenv("EMAIL_SMTP_AUTH_CODE")
 
-	if err := sendEmailWithContent(cfg, "subject", "body"); err != nil {
+	if err := sender.sendEmailWithContent(cfg, "subject", "body"); err != nil {
 		t.Fatalf("sendEmailWithContent() error = %v", err)
 	}
 	if attempts != 3 {
@@ -267,17 +262,17 @@ func TestSendEmailWithRetryStopsAfterSuccess(t *testing.T) {
 
 func TestSendEmailWithRetryReturnsLastError(t *testing.T) {
 	cfg := &config.Config{Email: config.Email{RetryTimes: 3, RetryWaitTime: 0, UseProxy: false}}
-	oldSend := smtpSend
-	defer func() { smtpSend = oldSend }()
-	smtpSend = func(cfg *config.Config, subject, body, password string) error {
+	sender := NewEmailSender()
+	sender.smtpSend = func(cfg *config.Config, subject, body, password string) error {
 		return errors.New("temporary timeout")
 	}
+	sender.sleep = func(time.Duration) {}
 	if err := os.Setenv("EMAIL_SMTP_AUTH_CODE", "secret"); err != nil {
 		t.Fatalf("Setenv() error = %v", err)
 	}
 	defer os.Unsetenv("EMAIL_SMTP_AUTH_CODE")
 
-	err := sendEmailWithContent(cfg, "subject", "body")
+	err := sender.sendEmailWithContent(cfg, "subject", "body")
 	if err == nil || !strings.Contains(err.Error(), "after 3 attempts") {
 		t.Fatalf("sendEmailWithContent() error = %v", err)
 	}

@@ -89,6 +89,7 @@ type Runner struct {
 	appendSystemPrompt bool
 	proxyEnv           []string
 	retrySleep         sleepFunc
+	failureLogPath     string
 }
 
 type callKind string
@@ -104,22 +105,77 @@ var (
 	defaultCommandArgs        = []string{"codex"}
 	defaultExtraFlags         []string
 	defaultAppendSystemPrompt = true
-	defaultRunnerMu           sync.RWMutex
-	defaultRunner             = NewRunner(defaultCommand, defaultCommandArgs, defaultExtraFlags, defaultAppendSystemPrompt, "", "")
-	defaultHTTPProxy          string
-	defaultSocks5Proxy        string
-	aiCLIFailureLogPath       = filepath.Join("logs", "ai-cli-failures.log")
+	defaultFailureLogPath     = filepath.Join("logs", "ai-cli-failures.log")
+	legacyDefaultMu           sync.RWMutex
+	legacyDefaultConfig       = newDefaultRunnerConfig()
 	requestIDPattern          = regexp.MustCompile(`[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}`)
 )
+
+type runnerConfig struct {
+	command            string
+	args               []string
+	extraFlags         []string
+	appendSystemPrompt bool
+	httpProxy          string
+	socks5Proxy        string
+	failureLogPath     string
+}
+
+func newDefaultRunnerConfig() runnerConfig {
+	return runnerConfig{
+		command:            defaultCommand,
+		args:               cloneStrings(defaultCommandArgs),
+		extraFlags:         cloneStrings(defaultExtraFlags),
+		appendSystemPrompt: defaultAppendSystemPrompt,
+		failureLogPath:     defaultFailureLogPath,
+	}
+}
+
+func (c runnerConfig) clone() runnerConfig {
+	return runnerConfig{
+		command:            c.command,
+		args:               cloneStrings(c.args),
+		extraFlags:         cloneStrings(c.extraFlags),
+		appendSystemPrompt: c.appendSystemPrompt,
+		httpProxy:          c.httpProxy,
+		socks5Proxy:        c.socks5Proxy,
+		failureLogPath:     c.failureLogPath,
+	}
+}
+
+func cloneStrings(values []string) []string {
+	return append([]string(nil), values...)
+}
+
+func (c runnerConfig) newRunner() *Runner {
+	runner := NewRunner(c.command, c.args, c.extraFlags, c.appendSystemPrompt, c.httpProxy, c.socks5Proxy)
+	runner.failureLogPath = c.failureLogPath
+	return runner
+}
+
+func (c runnerConfig) shouldSanitizeCLIOutput() bool {
+	return shouldSanitizeCommand(c.command, c.args)
+}
+
+func legacyDefaultRunnerConfig() runnerConfig {
+	legacyDefaultMu.RLock()
+	cfg := legacyDefaultConfig.clone()
+	legacyDefaultMu.RUnlock()
+	return cfg
+}
+
+func legacyDefaultRunner() *Runner {
+	return legacyDefaultRunnerConfig().newRunner()
+}
 
 func NewRunner(command string, args []string, extraFlags []string, appendSystemPrompt bool, httpProxy, socks5Proxy string) *Runner {
 	name := command
 	if name == "" {
 		name = defaultCommand
 	}
-	runnerArgs := append([]string(nil), args...)
+	runnerArgs := cloneStrings(args)
 	if len(runnerArgs) == 0 {
-		runnerArgs = append([]string(nil), defaultCommandArgs...)
+		runnerArgs = cloneStrings(defaultCommandArgs)
 	}
 
 	var proxyEnv []string
@@ -138,37 +194,40 @@ func NewRunner(command string, args []string, extraFlags []string, appendSystemP
 	return &Runner{
 		commandName:        name,
 		commandArgs:        runnerArgs,
-		extraFlags:         append([]string(nil), extraFlags...),
+		extraFlags:         cloneStrings(extraFlags),
 		appendSystemPrompt: appendSystemPrompt,
 		proxyEnv:           proxyEnv,
 		retrySleep:         retrySleep,
+		failureLogPath:     defaultFailureLogPath,
 	}
 }
 
 // SetProxy 配置默认 Runner 的代理环境变量
 func SetProxy(httpProxy, socks5Proxy string) {
-	defaultRunnerMu.Lock()
-	defer defaultRunnerMu.Unlock()
+	legacyDefaultMu.Lock()
+	defer legacyDefaultMu.Unlock()
 
-	defaultHTTPProxy = httpProxy
-	defaultSocks5Proxy = socks5Proxy
-	defaultRunner = NewRunner(defaultRunner.commandName, defaultRunner.commandArgs, defaultRunner.extraFlags, defaultRunner.appendSystemPrompt, defaultHTTPProxy, defaultSocks5Proxy)
+	cfg := legacyDefaultConfig.clone()
+	cfg.httpProxy = httpProxy
+	cfg.socks5Proxy = socks5Proxy
+	legacyDefaultConfig = cfg
 }
 
 func SetCommand(command string, args []string) {
-	defaultRunnerMu.Lock()
-	defer defaultRunnerMu.Unlock()
+	legacyDefaultMu.Lock()
+	defer legacyDefaultMu.Unlock()
 
-	defaultRunner = NewRunner(command, args, defaultRunner.extraFlags, defaultRunner.appendSystemPrompt, defaultHTTPProxy, defaultSocks5Proxy)
+	cfg := legacyDefaultConfig.clone()
+	cfg.command = command
+	cfg.args = cloneStrings(args)
+	legacyDefaultConfig = cfg
 }
 
 func ResetCommandForTest() {
-	defaultRunnerMu.Lock()
-	defer defaultRunnerMu.Unlock()
+	legacyDefaultMu.Lock()
+	defer legacyDefaultMu.Unlock()
 
-	defaultHTTPProxy = ""
-	defaultSocks5Proxy = ""
-	defaultRunner = NewRunner(defaultCommand, defaultCommandArgs, defaultExtraFlags, defaultAppendSystemPrompt, "", "")
+	legacyDefaultConfig = newDefaultRunnerConfig()
 }
 
 func isRetryableAICLIError(err error, stdout string, stderr string) bool {
@@ -243,7 +302,7 @@ func (r *Runner) callClaudeWithKindContext(ctx context.Context, kind callKind, p
 		lastErr = buildRetryableCallError(attempt+1, err, stdoutText, stderrText)
 		if !isRetryableAICLIError(err, stdoutText, stderrText) || attempt == len(attemptDelays)-1 {
 			finalErr := fmt.Errorf("ai cli failed after %d attempts: %w", attempt+1, lastErr)
-			appendAICLIFailureLog(kind, attempt+1, stdoutText, stderrText, finalErr)
+			r.appendAICLIFailureLog(kind, attempt+1, stdoutText, stderrText, finalErr)
 			return "", finalErr
 		}
 	}
@@ -290,11 +349,15 @@ func extractRequestID(stdout string, stderr string) string {
 	return requestIDPattern.FindString(combined)
 }
 
-func appendAICLIFailureLog(kind callKind, attempts int, stdout string, stderr string, err error) {
-	if aiCLIFailureLogPath == "" {
+func (r *Runner) appendAICLIFailureLog(kind callKind, attempts int, stdout string, stderr string, err error) {
+	appendAICLIFailureLog(r.failureLogPath, kind, attempts, stdout, stderr, err)
+}
+
+func appendAICLIFailureLog(path string, kind callKind, attempts int, stdout string, stderr string, err error) {
+	if path == "" {
 		return
 	}
-	if logErr := os.MkdirAll(filepath.Dir(aiCLIFailureLogPath), 0o755); logErr != nil {
+	if logErr := os.MkdirAll(filepath.Dir(path), 0o755); logErr != nil {
 		return
 	}
 	entry := fmt.Sprintf(
@@ -305,7 +368,7 @@ func appendAICLIFailureLog(kind callKind, attempts int, stdout string, stderr st
 		extractRequestID(stdout, stderr),
 		err.Error(),
 	)
-	f, logErr := os.OpenFile(aiCLIFailureLogPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+	f, logErr := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
 	if logErr != nil {
 		return
 	}
@@ -314,10 +377,14 @@ func appendAICLIFailureLog(kind callKind, attempts int, stdout string, stderr st
 }
 
 func (r *Runner) shouldSanitizeCLIOutput() bool {
-	if r.commandName != "ccs" {
+	return shouldSanitizeCommand(r.commandName, r.commandArgs)
+}
+
+func shouldSanitizeCommand(command string, args []string) bool {
+	if command != "ccs" {
 		return false
 	}
-	for _, arg := range r.commandArgs {
+	for _, arg := range args {
 		if arg == "codex" {
 			return true
 		}
@@ -360,10 +427,7 @@ func DeepDive(topic string, articles []model.Article, loc *time.Location) (strin
 }
 
 func SummarizeContext(ctx context.Context, articles []model.Article, categoryOrder []string, loc *time.Location) (string, error) {
-	defaultRunnerMu.RLock()
-	runner := defaultRunner
-	defaultRunnerMu.RUnlock()
-	return runner.SummarizeContext(ctx, articles, categoryOrder, loc)
+	return legacyDefaultRunner().SummarizeContext(ctx, articles, categoryOrder, loc)
 }
 
 func (r *Runner) Summarize(articles []model.Article, categoryOrder []string, loc *time.Location) (string, error) {
@@ -390,17 +454,11 @@ func (r *Runner) summarizeExtraFlags() []string {
 }
 
 func shouldSanitizeCLIOutput() bool {
-	defaultRunnerMu.RLock()
-	runner := defaultRunner
-	defaultRunnerMu.RUnlock()
-	return runner.shouldSanitizeCLIOutput()
+	return legacyDefaultRunnerConfig().shouldSanitizeCLIOutput()
 }
 
 func DeepDiveContext(ctx context.Context, topic string, articles []model.Article, loc *time.Location) (string, error) {
-	defaultRunnerMu.RLock()
-	runner := defaultRunner
-	defaultRunnerMu.RUnlock()
-	return runner.DeepDiveContext(ctx, topic, articles, loc)
+	return legacyDefaultRunner().DeepDiveContext(ctx, topic, articles, loc)
 }
 
 func (r *Runner) DeepDive(topic string, articles []model.Article, loc *time.Location) (string, error) {
@@ -428,10 +486,7 @@ const translatePrompt = `将以下新闻列表翻译成中文。要求：
 3. 直接输出翻译结果，不要加任何额外说明`
 
 func TranslateContext(ctx context.Context, articles []model.Article, categoryOrder []string, loc *time.Location) (string, error) {
-	defaultRunnerMu.RLock()
-	runner := defaultRunner
-	defaultRunnerMu.RUnlock()
-	return runner.TranslateContext(ctx, articles, categoryOrder, loc)
+	return legacyDefaultRunner().TranslateContext(ctx, articles, categoryOrder, loc)
 }
 
 func (r *Runner) Translate(articles []model.Article, categoryOrder []string, loc *time.Location) (string, error) {

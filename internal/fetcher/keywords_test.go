@@ -30,16 +30,6 @@ func loadKeywordsForTest(t *testing.T) []string {
 	return cfg.Keywords
 }
 
-func withSharedClient(t *testing.T, client *http.Client) {
-	t.Helper()
-
-	oldClient := sharedClient
-	sharedClient = client
-	t.Cleanup(func() {
-		sharedClient = oldClient
-	})
-}
-
 func TestMatchedKeywordsReturnsAllCaseInsensitiveMatches(t *testing.T) {
 	text := "OpenClaw ships with Copilot and openclaw helpers"
 	got := matchedKeywords(text, []string{"OpenClaw", "Copilot", "Missing"})
@@ -61,7 +51,7 @@ func TestMatchKeywordsMatchesRSSOpenClawText(t *testing.T) {
 	source := config.Source{
 		Name:     "Example RSS",
 		URL:      "https://example.com/feed.xml",
-		Type:     "rss",
+		Type:     config.SourceTypeRSS,
 		Category: "AI/科技",
 	}
 	since := time.Date(2026, 3, 22, 0, 0, 0, 0, time.UTC)
@@ -98,7 +88,7 @@ func TestMatchKeywordsMatchesRSSOpenClawText(t *testing.T) {
   </channel>
 </rss>`
 
-			withSharedClient(t, &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+			client := NewClient(&http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
 				return &http.Response{
 					StatusCode: http.StatusOK,
 					Status:     "200 OK",
@@ -108,7 +98,7 @@ func TestMatchKeywordsMatchesRSSOpenClawText(t *testing.T) {
 				}, nil
 			})})
 
-			result, err := FetchRSS(source, keywords, since)
+			result, err := client.FetchRSS(source, keywords, since)
 			if err != nil {
 				t.Fatalf("FetchRSS() error = %v", err)
 			}
@@ -127,7 +117,7 @@ func TestMatchKeywordsMatchesRedditOpenClawText(t *testing.T) {
 	source := config.Source{
 		Name:     "Example Reddit",
 		URL:      "https://example.com/reddit.json",
-		Type:     "reddit",
+		Type:     config.SourceTypeReddit,
 		Category: "AI/科技",
 	}
 	since := time.Date(2026, 3, 22, 0, 0, 0, 0, time.UTC)
@@ -155,7 +145,7 @@ func TestMatchKeywordsMatchesRedditOpenClawText(t *testing.T) {
 			listing := `{"data":{"children":[{"data":{"title":"` + tt.title + `","url":"https://example.com/post","permalink":"/r/test/comments/1","score":42,"created_utc":` +
 				strconv.FormatInt(created, 10) + `,"selftext":"` + tt.selftext + `"}}]}}`
 
-			withSharedClient(t, &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+			client := NewClient(&http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
 				return &http.Response{
 					StatusCode: http.StatusOK,
 					Status:     "200 OK",
@@ -165,7 +155,7 @@ func TestMatchKeywordsMatchesRedditOpenClawText(t *testing.T) {
 				}, nil
 			})})
 
-			result, err := FetchReddit(source, keywords, since)
+			result, err := client.FetchReddit(source, keywords, since)
 			if err != nil {
 				t.Fatalf("FetchReddit() error = %v", err)
 			}
@@ -184,13 +174,13 @@ func TestMatchKeywordsMatchesHackerNewsOpenClawTitle(t *testing.T) {
 	source := config.Source{
 		Name:     "Hacker News",
 		URL:      hnBaseURL,
-		Type:     "hackernews",
+		Type:     config.SourceTypeHackerNews,
 		Category: "AI/科技",
 	}
 	since := time.Date(2026, 3, 22, 0, 0, 0, 0, time.UTC)
 	itemTime := time.Date(2026, 3, 23, 10, 0, 0, 0, time.UTC).Unix()
 
-	withSharedClient(t, &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+	client := NewClient(&http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
 		switch req.URL.Path {
 		case "/v0/topstories.json":
 			return &http.Response{
@@ -220,7 +210,7 @@ func TestMatchKeywordsMatchesHackerNewsOpenClawTitle(t *testing.T) {
 		}
 	})})
 
-	result, err := FetchHackerNews(source, keywords, since)
+	result, err := client.FetchHackerNews(source, keywords, since)
 	if err != nil {
 		t.Fatalf("FetchHackerNews() error = %v", err)
 	}
@@ -237,7 +227,7 @@ func TestFetchRSSFiltersInternationalCategoryWithoutKeywordMatch(t *testing.T) {
 	source := config.Source{
 		Name:     "Example RSS",
 		URL:      "https://example.com/feed.xml",
-		Type:     "rss",
+		Type:     config.SourceTypeRSS,
 		Category: "国际政治",
 	}
 	since := time.Date(2026, 3, 22, 0, 0, 0, 0, time.UTC)
@@ -254,7 +244,7 @@ func TestFetchRSSFiltersInternationalCategoryWithoutKeywordMatch(t *testing.T) {
   </channel>
 </rss>`
 
-	withSharedClient(t, &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+	client := NewClient(&http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
 		return &http.Response{
 			StatusCode: http.StatusOK,
 			Status:     "200 OK",
@@ -264,7 +254,7 @@ func TestFetchRSSFiltersInternationalCategoryWithoutKeywordMatch(t *testing.T) {
 		}, nil
 	})})
 
-	result, err := FetchRSS(source, keywords, since)
+	result, err := client.FetchRSS(source, keywords, since)
 	if err != nil {
 		t.Fatalf("FetchRSS() error = %v", err)
 	}
@@ -281,14 +271,14 @@ func TestFetchRedditFiltersInternationalCategoryWithoutKeywordMatch(t *testing.T
 	source := config.Source{
 		Name:     "Example Reddit",
 		URL:      "https://example.com/reddit.json",
-		Type:     "reddit",
+		Type:     config.SourceTypeReddit,
 		Category: "国际政治",
 	}
 	since := time.Date(2026, 3, 22, 0, 0, 0, 0, time.UTC)
 	created := time.Date(2026, 3, 23, 10, 0, 0, 0, time.UTC).Unix()
 	listing := `{"data":{"children":[{"data":{"title":"Policy update with no configured keywords","url":"https://example.com/post","permalink":"/r/test/comments/1","score":42,"created_utc":` + strconv.FormatInt(created, 10) + `,"selftext":"Routine diplomacy note without tracked entities"}}]}}`
 
-	withSharedClient(t, &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+	client := NewClient(&http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
 		return &http.Response{
 			StatusCode: http.StatusOK,
 			Status:     "200 OK",
@@ -298,7 +288,7 @@ func TestFetchRedditFiltersInternationalCategoryWithoutKeywordMatch(t *testing.T
 		}, nil
 	})})
 
-	result, err := FetchReddit(source, keywords, since)
+	result, err := client.FetchReddit(source, keywords, since)
 	if err != nil {
 		t.Fatalf("FetchReddit() error = %v", err)
 	}

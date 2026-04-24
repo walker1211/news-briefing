@@ -24,7 +24,7 @@ func TestParseDocsPageExtractsPublishedAnnouncement(t *testing.T) {
 	src := config.Source{
 		Name:     "GLM Docs",
 		URL:      "https://example.com/glm",
-		Type:     "docs_page",
+		Type:     config.SourceTypeDocsPage,
 		Category: "AI/科技",
 		Keywords: []string{"GLM"},
 		PageKind: "announcement",
@@ -57,7 +57,7 @@ func TestParseRepoPagePrefersReleasePublishedTime(t *testing.T) {
 	src := config.Source{
 		Name:     "ACE-Step",
 		URL:      "https://example.com/ace-step",
-		Type:     "repo_page",
+		Type:     config.SourceTypeRepoPage,
 		Category: "AI/科技",
 		Keywords: []string{"ACE-Step"},
 		PageKind: "release",
@@ -90,7 +90,7 @@ func TestParsePageRejectsMissingAcceptableTime(t *testing.T) {
 	src := config.Source{
 		Name:     "No Time",
 		URL:      "https://example.com/no-time",
-		Type:     "docs_page",
+		Type:     config.SourceTypeDocsPage,
 		Category: "AI/科技",
 		Keywords: []string{"GLM"},
 		PageKind: "announcement",
@@ -110,7 +110,7 @@ func TestParsePageRejectsNonReleaseStaticPage(t *testing.T) {
 	src := config.Source{
 		Name:     "EUPE",
 		URL:      "https://example.com/eupe",
-		Type:     "repo_page",
+		Type:     config.SourceTypeRepoPage,
 		Category: "AI/科技",
 		Keywords: []string{"EUPE"},
 		PageKind: "release",

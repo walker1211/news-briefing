@@ -19,14 +19,7 @@ func (f roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
 }
 
 func TestFetchRSSFallsBackToCurlForReddit403(t *testing.T) {
-	oldClient := sharedClient
-	oldCurl := fetchFeedWithCurlContext
-	t.Cleanup(func() {
-		sharedClient = oldClient
-		fetchFeedWithCurlContext = oldCurl
-	})
-
-	sharedClient = &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+	client := NewClient(&http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
 		return &http.Response{
 			StatusCode: http.StatusForbidden,
 			Status:     "403 Forbidden",
@@ -34,9 +27,9 @@ func TestFetchRSSFallsBackToCurlForReddit403(t *testing.T) {
 			Header:     make(http.Header),
 			Request:    req,
 		}, nil
-	})}
+	})})
 
-	fetchFeedWithCurlContext = func(ctx context.Context, url string) ([]byte, error) {
+	client.fetchCurl = func(ctx context.Context, url string) ([]byte, error) {
 		return []byte(`<?xml version="1.0" encoding="UTF-8"?>
 <rss version="2.0">
   <channel>
@@ -51,10 +44,10 @@ func TestFetchRSSFallsBackToCurlForReddit403(t *testing.T) {
 </rss>`), nil
 	}
 
-	result, err := FetchRSS(config.Source{
+	result, err := client.FetchRSS(config.Source{
 		Name:     "Reddit Singularity",
 		URL:      "https://www.reddit.com/r/singularity/.rss",
-		Type:     "rss",
+		Type:     config.SourceTypeRSS,
 		Category: "AI/科技",
 	}, []string{"AI"}, time.Date(2026, 3, 18, 8, 0, 0, 0, time.UTC))
 	if err != nil {
@@ -70,14 +63,7 @@ func TestFetchRSSFallsBackToCurlForReddit403(t *testing.T) {
 }
 
 func TestFetchRSSReturnsCurlFallbackError(t *testing.T) {
-	oldClient := sharedClient
-	oldCurl := fetchFeedWithCurlContext
-	t.Cleanup(func() {
-		sharedClient = oldClient
-		fetchFeedWithCurlContext = oldCurl
-	})
-
-	sharedClient = &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+	client := NewClient(&http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
 		return &http.Response{
 			StatusCode: http.StatusForbidden,
 			Status:     "403 Forbidden",
@@ -85,16 +71,16 @@ func TestFetchRSSReturnsCurlFallbackError(t *testing.T) {
 			Header:     make(http.Header),
 			Request:    req,
 		}, nil
-	})}
+	})})
 
-	fetchFeedWithCurlContext = func(ctx context.Context, url string) ([]byte, error) {
+	client.fetchCurl = func(ctx context.Context, url string) ([]byte, error) {
 		return nil, errors.New("curl failed")
 	}
 
-	_, err := FetchRSS(config.Source{
+	_, err := client.FetchRSS(config.Source{
 		Name:     "Reddit Singularity",
 		URL:      "https://www.reddit.com/r/singularity/.rss",
-		Type:     "rss",
+		Type:     config.SourceTypeRSS,
 		Category: "AI/科技",
 	}, []string{"AI"}, time.Date(2026, 3, 18, 8, 0, 0, 0, time.UTC))
 	if err == nil || !strings.Contains(err.Error(), "curl failed") {
@@ -103,14 +89,7 @@ func TestFetchRSSReturnsCurlFallbackError(t *testing.T) {
 }
 
 func TestFetchRSSDoesNotFallbackToCurlForNonReddit403(t *testing.T) {
-	oldClient := sharedClient
-	oldCurl := fetchFeedWithCurlContext
-	t.Cleanup(func() {
-		sharedClient = oldClient
-		fetchFeedWithCurlContext = oldCurl
-	})
-
-	sharedClient = &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+	client := NewClient(&http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
 		return &http.Response{
 			StatusCode: http.StatusForbidden,
 			Status:     "403 Forbidden",
@@ -118,37 +97,30 @@ func TestFetchRSSDoesNotFallbackToCurlForNonReddit403(t *testing.T) {
 			Header:     make(http.Header),
 			Request:    req,
 		}, nil
-	})}
+	})})
 
 	called := false
-	fetchFeedWithCurlContext = func(ctx context.Context, url string) ([]byte, error) {
+	client.fetchCurl = func(ctx context.Context, url string) ([]byte, error) {
 		called = true
 		return nil, nil
 	}
 
-	_, err := FetchRSS(config.Source{
+	_, err := client.FetchRSS(config.Source{
 		Name:     "Example",
 		URL:      "https://example.com/feed.xml",
-		Type:     "rss",
+		Type:     config.SourceTypeRSS,
 		Category: "AI/科技",
 	}, []string{"AI"}, time.Date(2026, 3, 18, 8, 0, 0, 0, time.UTC))
 	if err == nil {
 		t.Fatalf("FetchRSS() error = nil, want forbidden error")
 	}
 	if called {
-		t.Fatalf("fetchFeedWithCurlContext() was called for non-reddit source")
+		t.Fatalf("client.fetchCurl() was called for non-reddit source")
 	}
 }
 
 func TestFetchRSSDoesNotFallbackToCurlForRedditNon403(t *testing.T) {
-	oldClient := sharedClient
-	oldCurl := fetchFeedWithCurlContext
-	t.Cleanup(func() {
-		sharedClient = oldClient
-		fetchFeedWithCurlContext = oldCurl
-	})
-
-	sharedClient = &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+	client := NewClient(&http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
 		return &http.Response{
 			StatusCode: http.StatusInternalServerError,
 			Status:     "500 Internal Server Error",
@@ -156,24 +128,24 @@ func TestFetchRSSDoesNotFallbackToCurlForRedditNon403(t *testing.T) {
 			Header:     make(http.Header),
 			Request:    req,
 		}, nil
-	})}
+	})})
 
 	called := false
-	fetchFeedWithCurlContext = func(ctx context.Context, url string) ([]byte, error) {
+	client.fetchCurl = func(ctx context.Context, url string) ([]byte, error) {
 		called = true
 		return nil, nil
 	}
 
-	_, err := FetchRSS(config.Source{
+	_, err := client.FetchRSS(config.Source{
 		Name:     "Reddit Singularity",
 		URL:      "https://www.reddit.com/r/singularity/.rss",
-		Type:     "rss",
+		Type:     config.SourceTypeRSS,
 		Category: "AI/科技",
 	}, []string{"AI"}, time.Date(2026, 3, 18, 8, 0, 0, 0, time.UTC))
 	if err == nil {
 		t.Fatalf("FetchRSS() error = nil, want server error")
 	}
 	if called {
-		t.Fatalf("fetchFeedWithCurlContext() was called for reddit non-403 error")
+		t.Fatalf("client.fetchCurl() was called for reddit non-403 error")
 	}
 }

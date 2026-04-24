@@ -53,15 +53,18 @@ type sourceFetchers struct {
 	repoPage   sourceFetchFunc
 }
 
+type curlFetchFunc func(context.Context, string) ([]byte, error)
+
 type Client struct {
 	httpClient *http.Client
+	fetchCurl  curlFetchFunc
 }
 
 func NewClient(httpClient *http.Client) *Client {
 	if httpClient == nil {
 		httpClient = DefaultHTTPClient()
 	}
-	return &Client{httpClient: httpClient}
+	return &Client{httpClient: httpClient, fetchCurl: fetchFeedWithCurlContext}
 }
 
 func fetchRSSSource(ctx context.Context, src config.Source, keywords []string, since time.Time) (sourceFetchResult, error) {
@@ -264,7 +267,7 @@ func fetchAllSourcesDetailedWith(ctx context.Context, cfg *config.Config, since 
 	var redditSources []config.Source
 	var otherSources []config.Source
 	for _, src := range cfg.Sources {
-		if src.Type == "reddit" {
+		if src.Type == config.SourceTypeReddit {
 			redditSources = append(redditSources, src)
 		} else {
 			otherSources = append(otherSources, src)
@@ -346,15 +349,15 @@ func fetchWithRetryUsing(ctx context.Context, src config.Source, keywords []stri
 		}
 		var err error
 		switch src.Type {
-		case "rss":
+		case config.SourceTypeRSS:
 			result, err = fetchers.rss(ctx, src, keywords, since)
-		case "hackernews":
+		case config.SourceTypeHackerNews:
 			result, err = fetchers.hackernews(ctx, src, keywords, since)
-		case "reddit":
+		case config.SourceTypeReddit:
 			result, err = fetchers.reddit(ctx, src, keywords, since)
-		case "docs_page":
+		case config.SourceTypeDocsPage:
 			result, err = fetchers.docsPage(ctx, src, keywords, since)
-		case "repo_page":
+		case config.SourceTypeRepoPage:
 			result, err = fetchers.repoPage(ctx, src, keywords, since)
 		default:
 			return sourceFetchResult{}, fmt.Errorf("unknown source type for %s: %s", src.Name, src.Type)

@@ -77,7 +77,7 @@ func TestFetchWindowUsesExplicitBounds(t *testing.T) {
 
 	fetchAll := func(ctx context.Context, cfg *config.Config, since time.Time) ([]sourceFetchResult, []FailedSource, error) {
 		return []sourceFetchResult{{
-			Source: config.Source{Name: "RSS", Type: "rss", Category: "AI/科技"},
+			Source: config.Source{Name: "RSS", Type: config.SourceTypeRSS, Category: "AI/科技"},
 			Candidates: []fetchedCandidate{
 				{Article: model.Article{Title: "before", Link: "1", Published: from.Add(-time.Minute)}},
 				{Article: model.Article{Title: "from", Link: "2", Published: from}},
@@ -126,7 +126,7 @@ func TestFetchWindowReturnsFailedSourcesWhenDedupErrors(t *testing.T) {
 	to := from.Add(6 * time.Hour)
 	fetchAll := func(ctx context.Context, cfg *config.Config, since time.Time) ([]sourceFetchResult, []FailedSource, error) {
 		return []sourceFetchResult{{
-			Source: config.Source{Name: "RSS", Type: "rss", Category: "AI/科技"},
+			Source: config.Source{Name: "RSS", Type: config.SourceTypeRSS, Category: "AI/科技"},
 			Candidates: []fetchedCandidate{{
 				Article:         model.Article{Title: "story", Link: "https://example.com/a", Published: from.Add(time.Hour)},
 				MatchedKeywords: []string{"AI"},
@@ -150,13 +150,13 @@ func TestFetchWindowFiltersCandidatesAndPreservesFailures(t *testing.T) {
 	from := time.Date(2026, 3, 18, 8, 0, 0, 0, time.UTC)
 	to := from.Add(6 * time.Hour)
 	cfg := &config.Config{Output: config.OutputCfg{Dir: "output"}, Sources: []config.Source{
-		{Name: "RSS", Type: "rss", Category: "AI/科技"},
-		{Name: "HN", Type: "hackernews", Category: "AI/科技"},
+		{Name: "RSS", Type: config.SourceTypeRSS, Category: "AI/科技"},
+		{Name: "HN", Type: config.SourceTypeHackerNews, Category: "AI/科技"},
 	}}
 
 	fetchAll := func(ctx context.Context, cfg *config.Config, since time.Time) ([]sourceFetchResult, []FailedSource, error) {
 		return []sourceFetchResult{{
-			Source: config.Source{Name: "RSS", Type: "rss", Category: "AI/科技"},
+			Source: config.Source{Name: "RSS", Type: config.SourceTypeRSS, Category: "AI/科技"},
 			Candidates: []fetchedCandidate{
 				{Article: model.Article{Title: "miss keyword", Link: "https://example.com/miss", Source: "RSS", Category: "AI/科技", Published: from.Add(time.Hour)}},
 				{Article: model.Article{Title: "out window", Link: "https://example.com/window", Source: "RSS", Category: "AI/科技", Published: to.Add(time.Minute)}, MatchedKeywords: []string{"AI"}},
@@ -180,11 +180,11 @@ func TestFetchWindowFiltersCandidatesAndPreservesFailures(t *testing.T) {
 func TestFetchWindowDedupsAcceptedCandidates(t *testing.T) {
 	from := time.Date(2026, 3, 18, 8, 0, 0, 0, time.UTC)
 	to := from.Add(6 * time.Hour)
-	cfg := &config.Config{Output: config.OutputCfg{Dir: "output"}, Sources: []config.Source{{Name: "RSS", Type: "rss", Category: "AI/科技"}}}
+	cfg := &config.Config{Output: config.OutputCfg{Dir: "output"}, Sources: []config.Source{{Name: "RSS", Type: config.SourceTypeRSS, Category: "AI/科技"}}}
 
 	fetchAll := func(ctx context.Context, cfg *config.Config, since time.Time) ([]sourceFetchResult, []FailedSource, error) {
 		return []sourceFetchResult{{
-			Source: config.Source{Name: "RSS", Type: "rss", Category: "AI/科技"},
+			Source: config.Source{Name: "RSS", Type: config.SourceTypeRSS, Category: "AI/科技"},
 			Candidates: []fetchedCandidate{
 				{Article: model.Article{Title: "first", Link: "https://example.com/dup", Source: "RSS", Category: "AI/科技", Published: from.Add(2 * time.Hour)}, MatchedKeywords: []string{"AI"}},
 				{Article: model.Article{Title: "second", Link: "https://example.com/dup", Source: "RSS", Category: "AI/科技", Published: from.Add(time.Hour)}, MatchedKeywords: []string{"AI"}},
@@ -207,7 +207,7 @@ func TestFetchWindowDedupsAcceptedCandidates(t *testing.T) {
 func TestFetchWindowIncludesDocsPageCandidate(t *testing.T) {
 	from := time.Date(2026, 4, 7, 0, 0, 0, 0, time.UTC)
 	to := from.Add(24 * time.Hour)
-	cfg := &config.Config{Output: config.OutputCfg{Dir: "output"}, Sources: []config.Source{{Name: "GLM Docs", Type: "docs_page", Category: "AI/科技", URL: "https://example.com/glm"}}}
+	cfg := &config.Config{Output: config.OutputCfg{Dir: "output"}, Sources: []config.Source{{Name: "GLM Docs", Type: config.SourceTypeDocsPage, Category: "AI/科技", URL: "https://example.com/glm"}}}
 	fetchers := stubSourceFetchers()
 	fetchers.docsPage = func(ctx context.Context, src config.Source, keywords []string, since time.Time) (sourceFetchResult, error) {
 		return sourceFetchResult{
@@ -237,7 +237,7 @@ func TestFetchWindowIncludesDocsPageCandidate(t *testing.T) {
 func TestFetchWindowRejectsUnacceptedDocsPageCandidate(t *testing.T) {
 	from := time.Date(2026, 4, 7, 0, 0, 0, 0, time.UTC)
 	to := from.Add(24 * time.Hour)
-	cfg := &config.Config{Output: config.OutputCfg{Dir: "output"}, Sources: []config.Source{{Name: "No Time", Type: "docs_page", Category: "AI/科技", URL: "https://example.com/no-time"}}}
+	cfg := &config.Config{Output: config.OutputCfg{Dir: "output"}, Sources: []config.Source{{Name: "No Time", Type: config.SourceTypeDocsPage, Category: "AI/科技", URL: "https://example.com/no-time"}}}
 	fetchers := stubSourceFetchers()
 	fetchers.docsPage = func(ctx context.Context, src config.Source, keywords []string, since time.Time) (sourceFetchResult, error) {
 		return sourceFetchResult{Source: src}, nil
@@ -305,7 +305,7 @@ func TestClientFetchAllSourcesRetriesRedditSerially(t *testing.T) {
 	})})
 
 	sleep := func(context.Context, time.Duration) error { return nil }
-	_, failed, err := fetchAllSourcesDetailedWith(context.Background(), &config.Config{Sources: []config.Source{{Name: "reddit", Type: "reddit", URL: "https://example.com/reddit.json"}}}, time.Time{}, client.serialSourceFetchers(sleep), sleep)
+	_, failed, err := fetchAllSourcesDetailedWith(context.Background(), &config.Config{Sources: []config.Source{{Name: "reddit", Type: config.SourceTypeReddit, URL: "https://example.com/reddit.json"}}}, time.Time{}, client.serialSourceFetchers(sleep), sleep)
 	if err != nil {
 		t.Fatalf("fetchAllSourcesDetailed() error = %v", err)
 	}
@@ -348,7 +348,7 @@ func TestFetchWithRetryReturnsContextErrorWhenCancelled(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	_, err := fetchWithRetry(ctx, config.Source{Name: "RSS", Type: "rss"}, nil, time.Time{})
+	_, err := fetchWithRetry(ctx, config.Source{Name: "RSS", Type: config.SourceTypeRSS}, nil, time.Time{})
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("fetchWithRetry() error = %v, want context.Canceled", err)
 	}
@@ -365,7 +365,7 @@ func TestFetchWithRetryStopsDuringRetrySleepWhenCancelled(t *testing.T) {
 		return ctx.Err()
 	}
 
-	_, err := fetchWithRetryUsing(ctx, config.Source{Name: "RSS", Type: "rss"}, nil, time.Time{}, fetchers, sleep)
+	_, err := fetchWithRetryUsing(ctx, config.Source{Name: "RSS", Type: config.SourceTypeRSS}, nil, time.Time{}, fetchers, sleep)
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("fetchWithRetry() error = %v, want context.Canceled", err)
 	}
@@ -389,7 +389,7 @@ func TestFetchWindowContextReturnsContextErrorAfterFetchCancellation(t *testing.
 	fetchAll := func(ctx context.Context, cfg *config.Config, since time.Time) ([]sourceFetchResult, []FailedSource, error) {
 		cancel()
 		return []sourceFetchResult{{
-			Source: config.Source{Name: "RSS", Type: "rss"},
+			Source: config.Source{Name: "RSS", Type: config.SourceTypeRSS},
 			Candidates: []fetchedCandidate{{
 				Article:         model.Article{Title: "story", Link: "https://example.com/a", Published: to},
 				MatchedKeywords: []string{"AI"},
@@ -420,7 +420,7 @@ func TestFetchAllSourcesDetailedReturnsContextErrorAfterCancellation(t *testing.
 		}, nil
 	}
 
-	_, _, err := fetchAllSourcesDetailedWith(ctx, &config.Config{Sources: []config.Source{{Name: "RSS", Type: "rss"}}}, time.Now().Add(-time.Hour), fetchers, sleepContext)
+	_, _, err := fetchAllSourcesDetailedWith(ctx, &config.Config{Sources: []config.Source{{Name: "RSS", Type: config.SourceTypeRSS}}}, time.Now().Add(-time.Hour), fetchers, sleepContext)
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("fetchAllSourcesDetailed() error = %v, want context.Canceled", err)
 	}
@@ -464,8 +464,8 @@ func TestFetchAllSourcesSerializesRedditByType(t *testing.T) {
 	sleep := func(context.Context, time.Duration) error { return nil }
 
 	cfg := &config.Config{Sources: []config.Source{
-		{Name: "reddit-1", Type: "reddit", URL: "https://api.example.com/reddit1"},
-		{Name: "reddit-2", Type: "reddit", URL: "https://api.example.com/reddit2"},
+		{Name: "reddit-1", Type: config.SourceTypeReddit, URL: "https://api.example.com/reddit1"},
+		{Name: "reddit-2", Type: config.SourceTypeReddit, URL: "https://api.example.com/reddit2"},
 	}}
 
 	_, _, err := fetchAllSourcesDetailedWith(context.Background(), cfg, time.Time{}, fetchers, sleep)

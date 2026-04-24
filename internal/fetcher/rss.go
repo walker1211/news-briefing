@@ -53,7 +53,11 @@ func (c *Client) FetchRSSContext(ctx context.Context, source config.Source, keyw
 		if !shouldFallbackToCurl(source, err) {
 			return sourceFetchResult{}, err
 		}
-		body, curlErr := fetchFeedWithCurlContext(ctx, source.URL)
+		fetchCurl := c.fetchCurl
+		if fetchCurl == nil {
+			fetchCurl = fetchFeedWithCurlContext
+		}
+		body, curlErr := fetchCurl(ctx, source.URL)
 		if curlErr != nil {
 			return sourceFetchResult{}, fmt.Errorf("reddit rss curl fallback failed: %w", curlErr)
 		}
@@ -121,8 +125,4 @@ func matchedKeywords(text string, keywords []string) []string {
 		}
 	}
 	return matched
-}
-
-func matchKeywords(text string, keywords []string) bool {
-	return len(matchedKeywords(text, keywords)) > 0
 }

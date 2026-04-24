@@ -19,36 +19,60 @@ import (
 )
 
 type app struct {
-	cfg                 *config.Config
-	now                 func() time.Time
-	startCron           func(*config.Config, func(scheduler.Window)) error
-	startCronContext    func(context.Context, *config.Config, func(scheduler.Window)) error
-	waitForever         func()
-	waitForeverContext  func(context.Context)
-	fetchAll            func(*config.Config, bool) ([]model.Article, []fetcher.FailedSource, error)
-	fetchAllContext     func(context.Context, *config.Config, bool) ([]model.Article, []fetcher.FailedSource, error)
-	fetchWindow         func(*config.Config, time.Time, time.Time, bool, bool) ([]model.Article, []fetcher.FailedSource, error)
-	fetchWindowContext  func(context.Context, *config.Config, time.Time, time.Time, bool, bool) ([]model.Article, []fetcher.FailedSource, error)
-	markSeen            func([]model.Article) error
-	fetchWatch          func(*config.Config, time.Time) ([]model.Article, *model.WatchReport, error)
-	fetchWatchContext   func(context.Context, *config.Config, time.Time) ([]model.Article, *model.WatchReport, error)
-	summarize           func([]model.Article, []string, *time.Location) (string, error)
-	summarizeContext    func(context.Context, []model.Article, []string, *time.Location) (string, error)
-	translate           func([]model.Article, []string, *time.Location) (string, error)
-	translateContext    func(context.Context, []model.Article, []string, *time.Location) (string, error)
-	deepDive            func(string, []model.Article, *time.Location) (string, error)
-	deepDiveContext     func(context.Context, string, []model.Article, *time.Location) (string, error)
-	composeBody         func(string, model.OutputMode, model.OutputContent) (string, error)
-	printText           func(string)
-	printFailed         func([]fetcher.FailedSource)
-	printArticles       func([]model.Article)
-	printCLI            func(*model.Briefing)
-	writeMarkdown       func(*model.Briefing, string) (string, error)
-	writeWatchMarkdown  func(*model.WatchReport, string, string, string) (string, error)
+	cfg       *config.Config
+	now       func() time.Time
+	scheduler schedulerDeps
+	fetch     fetchDeps
+	watch     watchDeps
+	ai        aiDeps
+	output    outputDeps
+	email     emailDeps
+}
+
+type schedulerDeps struct {
+	startCron          func(*config.Config, func(scheduler.Window)) error
+	startCronContext   func(context.Context, *config.Config, func(scheduler.Window)) error
+	waitForever        func()
+	waitForeverContext func(context.Context)
+}
+
+type fetchDeps struct {
+	fetchAll           func(*config.Config, bool) ([]model.Article, []fetcher.FailedSource, error)
+	fetchAllContext    func(context.Context, *config.Config, bool) ([]model.Article, []fetcher.FailedSource, error)
+	fetchWindow        func(*config.Config, time.Time, time.Time, bool, bool) ([]model.Article, []fetcher.FailedSource, error)
+	fetchWindowContext func(context.Context, *config.Config, time.Time, time.Time, bool, bool) ([]model.Article, []fetcher.FailedSource, error)
+	markSeen           func([]model.Article) error
+}
+
+type watchDeps struct {
+	fetchWatch        func(*config.Config, time.Time) ([]model.Article, *model.WatchReport, error)
+	fetchWatchContext func(context.Context, *config.Config, time.Time) ([]model.Article, *model.WatchReport, error)
+}
+
+type aiDeps struct {
+	summarize        func([]model.Article, []string, *time.Location) (string, error)
+	summarizeContext func(context.Context, []model.Article, []string, *time.Location) (string, error)
+	translate        func([]model.Article, []string, *time.Location) (string, error)
+	translateContext func(context.Context, []model.Article, []string, *time.Location) (string, error)
+	deepDive         func(string, []model.Article, *time.Location) (string, error)
+	deepDiveContext  func(context.Context, string, []model.Article, *time.Location) (string, error)
+}
+
+type outputDeps struct {
+	composeBody        func(string, model.OutputMode, model.OutputContent) (string, error)
+	printText          func(string)
+	printFailed        func([]fetcher.FailedSource)
+	printArticles      func([]model.Article)
+	printCLI           func(*model.Briefing)
+	writeMarkdown      func(*model.Briefing, string) (string, error)
+	writeWatchMarkdown func(*model.WatchReport, string, string, string) (string, error)
+	writeDeepDive      func(string, string, string, string) (string, error)
+}
+
+type emailDeps struct {
 	sendEmail           func(*model.Briefing, *config.Config, []fetcher.FailedSource) error
 	sendDeepEmail       func(string, *model.Briefing, *config.Config, []fetcher.FailedSource) error
 	resendMarkdownEmail func(string, *config.Config) error
-	writeDeepDive       func(string, string, string, string) (string, error)
 }
 
 func newApp(cfg *config.Config) *app {
@@ -56,49 +80,62 @@ func newApp(cfg *config.Config) *app {
 	fetchClient := fetcher.NewClient(httpClient)
 	watchRunner := watch.NewRunner(httpClient)
 	aiRunner := summarizer.NewRunner(cfg.AI.Command, cfg.AI.Args, cfg.AI.ExtraFlags, cfg.AI.ShouldAppendSystemPrompt(), cfg.Proxy.HTTP, cfg.Proxy.Socks5)
+	emailSender := output.NewEmailSender()
 	return &app{
-		cfg:              cfg,
-		now:              time.Now,
-		startCron:        scheduler.Start,
-		startCronContext: scheduler.StartContext,
-		waitForever: func() {
-			select {}
+		cfg: cfg,
+		now: time.Now,
+		scheduler: schedulerDeps{
+			startCron:        scheduler.Start,
+			startCronContext: scheduler.StartContext,
+			waitForever: func() {
+				select {}
+			},
+			waitForeverContext: func(ctx context.Context) {
+				<-ctx.Done()
+			},
 		},
-		waitForeverContext: func(ctx context.Context) {
-			<-ctx.Done()
+		fetch: fetchDeps{
+			fetchAll:           fetchClient.FetchAll,
+			fetchAllContext:    fetchClient.FetchAllContext,
+			fetchWindow:        fetchClient.FetchWindow,
+			fetchWindowContext: fetchClient.FetchWindowContext,
+			markSeen: func(articles []model.Article) error {
+				return fetcher.MarkArticlesSeen(cfg.Output.Dir, articles)
+			},
 		},
-		fetchAll:           fetchClient.FetchAll,
-		fetchAllContext:    fetchClient.FetchAllContext,
-		fetchWindow:        fetchClient.FetchWindow,
-		fetchWindowContext: fetchClient.FetchWindowContext,
-		markSeen: func(articles []model.Article) error {
-			return fetcher.MarkArticlesSeen(cfg.Output.Dir, articles)
+		watch: watchDeps{
+			fetchWatch:        watchRunner.Run,
+			fetchWatchContext: watchRunner.RunContext,
 		},
-		fetchWatch:        watchRunner.Run,
-		fetchWatchContext: watchRunner.RunContext,
-		summarize:         aiRunner.Summarize,
-		summarizeContext:  aiRunner.SummarizeContext,
-		translate:         aiRunner.Translate,
-		translateContext:  aiRunner.TranslateContext,
-		deepDive:          aiRunner.DeepDive,
-		deepDiveContext:   aiRunner.DeepDiveContext,
-		composeBody:       output.FormatBody,
-		printText:         func(s string) { fmt.Println(s) },
-		printFailed:       fetcher.PrintFailed,
-		printArticles: func(articles []model.Article) {
-			loc := cfg.ScheduleLocation
-			if loc == nil {
-				loc = time.Local
-			}
-			printArticles(articles, categoryOrderFromSources(cfg.Sources), loc)
+		ai: aiDeps{
+			summarize:        aiRunner.Summarize,
+			summarizeContext: aiRunner.SummarizeContext,
+			translate:        aiRunner.Translate,
+			translateContext: aiRunner.TranslateContext,
+			deepDive:         aiRunner.DeepDive,
+			deepDiveContext:  aiRunner.DeepDiveContext,
 		},
-		printCLI:            output.PrintCLI,
-		writeMarkdown:       output.WriteMarkdown,
-		writeWatchMarkdown:  output.WriteWatchMarkdown,
-		sendEmail:           output.SendEmail,
-		sendDeepEmail:       output.SendDeepEmail,
-		resendMarkdownEmail: output.SendMarkdownFile,
-		writeDeepDive:       output.WriteDeepDive,
+		output: outputDeps{
+			composeBody: output.FormatBody,
+			printText:   func(s string) { fmt.Println(s) },
+			printFailed: fetcher.PrintFailed,
+			printArticles: func(articles []model.Article) {
+				loc := cfg.ScheduleLocation
+				if loc == nil {
+					loc = time.Local
+				}
+				printArticles(articles, categoryOrderFromSources(cfg.Sources), loc)
+			},
+			printCLI:           output.PrintCLI,
+			writeMarkdown:      output.WriteMarkdown,
+			writeWatchMarkdown: output.WriteWatchMarkdown,
+			writeDeepDive:      output.WriteDeepDive,
+		},
+		email: emailDeps{
+			sendEmail:           emailSender.SendEmail,
+			sendDeepEmail:       emailSender.SendDeepEmail,
+			resendMarkdownEmail: emailSender.SendMarkdownFile,
+		},
 	}
 }
 
@@ -149,13 +186,13 @@ func executeContext(ctx context.Context, app *app, cmd command) error {
 	case deepCommand:
 		return app.runDeepDiveContext(ctx, c)
 	case resendMDCommand:
-		if app.resendMarkdownEmail == nil {
-			app.resendMarkdownEmail = output.SendMarkdownFile
+		if app.email.resendMarkdownEmail == nil {
+			app.email.resendMarkdownEmail = output.SendMarkdownFile
 		}
-		if err := app.resendMarkdownEmail(c.file, app.cfg); err != nil {
+		if err := app.email.resendMarkdownEmail(c.file, app.cfg); err != nil {
 			return err
 		}
-		app.printText(fmt.Sprintf("Email resent to %s", app.cfg.Email.To))
+		app.output.printText(fmt.Sprintf("Email resent to %s", app.cfg.Email.To))
 		return nil
 	case helpCommand:
 		printUsage()
@@ -170,81 +207,81 @@ func outputNeedsTranslatedContent(mode model.OutputMode) bool {
 }
 
 func (app *app) startScheduler(ctx context.Context, cfg *config.Config, run func(scheduler.Window)) error {
-	if app.startCronContext != nil {
-		return app.startCronContext(ctx, cfg, run)
+	if app.scheduler.startCronContext != nil {
+		return app.scheduler.startCronContext(ctx, cfg, run)
 	}
-	if app.startCron != nil {
-		return app.startCron(cfg, run)
+	if app.scheduler.startCron != nil {
+		return app.scheduler.startCron(cfg, run)
 	}
 	return scheduler.StartContext(ctx, cfg, run)
 }
 
 func (app *app) wait(ctx context.Context) {
-	if app.waitForeverContext != nil {
-		app.waitForeverContext(ctx)
+	if app.scheduler.waitForeverContext != nil {
+		app.scheduler.waitForeverContext(ctx)
 		return
 	}
-	if app.waitForever != nil {
-		app.waitForever()
+	if app.scheduler.waitForever != nil {
+		app.scheduler.waitForever()
 	}
 }
 
 func (app *app) fetchAllArticles(ctx context.Context, markSeen bool) ([]model.Article, []fetcher.FailedSource, error) {
-	if app.fetchAllContext != nil {
-		return app.fetchAllContext(ctx, app.cfg, markSeen)
+	if app.fetch.fetchAllContext != nil {
+		return app.fetch.fetchAllContext(ctx, app.cfg, markSeen)
 	}
-	if app.fetchAll != nil {
-		return app.fetchAll(app.cfg, markSeen)
+	if app.fetch.fetchAll != nil {
+		return app.fetch.fetchAll(app.cfg, markSeen)
 	}
 	return fetcher.FetchAllContext(ctx, app.cfg, markSeen)
 }
 
 func (app *app) fetchWindowArticles(ctx context.Context, from, to time.Time, markSeen bool, ignoreSeen bool) ([]model.Article, []fetcher.FailedSource, error) {
-	if app.fetchWindowContext != nil {
-		return app.fetchWindowContext(ctx, app.cfg, from, to, markSeen, ignoreSeen)
+	if app.fetch.fetchWindowContext != nil {
+		return app.fetch.fetchWindowContext(ctx, app.cfg, from, to, markSeen, ignoreSeen)
 	}
-	if app.fetchWindow != nil {
-		return app.fetchWindow(app.cfg, from, to, markSeen, ignoreSeen)
+	if app.fetch.fetchWindow != nil {
+		return app.fetch.fetchWindow(app.cfg, from, to, markSeen, ignoreSeen)
 	}
 	return fetcher.FetchWindowContext(ctx, app.cfg, from, to, markSeen, ignoreSeen)
 }
 
 func (app *app) fetchWatchArticles(ctx context.Context, now time.Time) ([]model.Article, *model.WatchReport, error) {
-	if app.fetchWatchContext != nil {
-		return app.fetchWatchContext(ctx, app.cfg, now)
+	if app.watch.fetchWatchContext != nil {
+		return app.watch.fetchWatchContext(ctx, app.cfg, now)
 	}
-	if app.fetchWatch != nil {
-		return app.fetchWatch(app.cfg, now)
+	if app.watch.fetchWatch != nil {
+		return app.watch.fetchWatch(app.cfg, now)
 	}
 	return nil, nil, nil
 }
 
 func (app *app) summarizeArticles(ctx context.Context, articles []model.Article, categoryOrder []string, loc *time.Location) (string, error) {
-	if app.summarizeContext != nil {
-		return app.summarizeContext(ctx, articles, categoryOrder, loc)
+	if app.ai.summarizeContext != nil {
+		return app.ai.summarizeContext(ctx, articles, categoryOrder, loc)
 	}
-	if app.summarize != nil {
-		return app.summarize(articles, categoryOrder, loc)
+	if app.ai.summarize != nil {
+		return app.ai.summarize(articles, categoryOrder, loc)
 	}
 	return summarizer.SummarizeContext(ctx, articles, categoryOrder, loc)
 }
 
 func (app *app) translateArticles(ctx context.Context, articles []model.Article, categoryOrder []string, loc *time.Location) (string, error) {
-	if app.translateContext != nil {
-		return app.translateContext(ctx, articles, categoryOrder, loc)
+	if app.ai.translateContext != nil {
+		return app.ai.translateContext(ctx, articles, categoryOrder, loc)
 	}
-	if app.translate != nil {
-		return app.translate(articles, categoryOrder, loc)
+	if app.ai.translate != nil {
+		return app.ai.translate(articles, categoryOrder, loc)
 	}
 	return summarizer.TranslateContext(ctx, articles, categoryOrder, loc)
 }
 
 func (app *app) deepDiveArticles(ctx context.Context, topic string, articles []model.Article, loc *time.Location) (string, error) {
-	if app.deepDiveContext != nil {
-		return app.deepDiveContext(ctx, topic, articles, loc)
+	if app.ai.deepDiveContext != nil {
+		return app.ai.deepDiveContext(ctx, topic, articles, loc)
 	}
-	if app.deepDive != nil {
-		return app.deepDive(topic, articles, loc)
+	if app.ai.deepDive != nil {
+		return app.ai.deepDive(topic, articles, loc)
 	}
 	return summarizer.DeepDiveContext(ctx, topic, articles, loc)
 }
@@ -267,20 +304,20 @@ func (app *app) runFetchContext(ctx context.Context, cmd fetchCommand) error {
 		return err
 	}
 	fmt.Printf("Found %d articles after filtering.\n\n", len(articles))
-	if app.composeBody == nil {
-		app.composeBody = output.FormatBody
+	if app.output.composeBody == nil {
+		app.output.composeBody = output.FormatBody
 	}
-	if app.printText == nil {
-		app.printText = func(s string) { fmt.Println(s) }
+	if app.output.printText == nil {
+		app.output.printText = func(s string) { fmt.Println(s) }
 	}
 
 	if !cmd.zh {
-		app.printArticles(articles)
-		app.printFailed(failed)
+		app.output.printArticles(articles)
+		app.output.printFailed(failed)
 		return nil
 	}
 	if len(articles) == 0 {
-		app.printFailed(failed)
+		app.output.printFailed(failed)
 		return nil
 	}
 
@@ -296,13 +333,13 @@ func (app *app) runFetchContext(ctx context.Context, cmd fetchCommand) error {
 		}
 		content.Translated = translated
 	}
-	body, err := app.composeBody("fetch --zh", app.cfg.Output.Mode, content)
+	body, err := app.output.composeBody("fetch --zh", app.cfg.Output.Mode, content)
 	if err != nil {
 		return err
 	}
 	fmt.Println()
-	app.printText(body)
-	app.printFailed(failed)
+	app.output.printText(body)
+	app.output.printFailed(failed)
 	return nil
 }
 
@@ -318,15 +355,15 @@ func (app *app) runBriefingContext(ctx context.Context, commandPath string, peri
 		return err
 	}
 	seenArticles := append([]model.Article(nil), articles...)
-	if app.fetchWatchContext != nil || app.fetchWatch != nil {
+	if app.watch.fetchWatchContext != nil || app.watch.fetchWatch != nil {
 		watchArticles, report, err := app.fetchWatchArticles(ctx, now)
 		if err != nil {
 			return err
 		}
 		articles = append(articles, watchArticles...)
 		app.printWatchSiteErrors(report)
-		if app.writeWatchMarkdown != nil && report != nil {
-			if _, err := app.writeWatchMarkdown(report, app.cfg.Output.Dir, now.Format("06.01.02"), period); err != nil {
+		if app.output.writeWatchMarkdown != nil && report != nil {
+			if _, err := app.output.writeWatchMarkdown(report, app.cfg.Output.Dir, now.Format("06.01.02"), period); err != nil {
 				return err
 			}
 		}
@@ -345,19 +382,16 @@ func (app *app) runScheduledBriefingContext(ctx context.Context, window schedule
 		return err
 	}
 	seenArticles := append([]model.Article(nil), articles...)
-	loc := app.cfg.ScheduleLocation
-	if loc == nil {
-		loc = time.Local
-	}
-	if app.fetchWatchContext != nil || app.fetchWatch != nil {
+	loc := app.displayLocation()
+	if app.watch.fetchWatchContext != nil || app.watch.fetchWatch != nil {
 		watchArticles, report, err := app.fetchWatchArticles(ctx, window.To)
 		if err != nil {
 			return err
 		}
 		articles = append(articles, watchArticles...)
 		app.printWatchSiteErrors(report)
-		if app.writeWatchMarkdown != nil && report != nil {
-			if _, err := app.writeWatchMarkdown(report, app.cfg.Output.Dir, window.To.In(loc).Format("06.01.02"), window.Period); err != nil {
+		if app.output.writeWatchMarkdown != nil && report != nil {
+			if _, err := app.output.writeWatchMarkdown(report, app.cfg.Output.Dir, window.To.In(loc).Format("06.01.02"), window.Period); err != nil {
 				return err
 			}
 		}
@@ -370,10 +404,7 @@ func (app *app) runRegen(cmd regenCommand) error {
 }
 
 func (app *app) runRegenContext(ctx context.Context, cmd regenCommand) error {
-	loc := time.Local
-	if app.cfg != nil && app.cfg.ScheduleLocation != nil {
-		loc = app.cfg.ScheduleLocation
-	}
+	loc := app.displayLocation()
 	from, err := parseRegenTime(cmd.fromRaw, loc)
 	if err != nil {
 		return fmt.Errorf("parse --from: %w", err)
@@ -404,14 +435,14 @@ func (app *app) renderBriefing(commandPath string, date string, period string, a
 
 func (app *app) renderBriefingContext(ctx context.Context, commandPath string, date string, period string, articles []model.Article, seenArticles []model.Article, failed []fetcher.FailedSource, showRaw bool, sendEmail bool) error {
 	fmt.Printf("Found %d articles after filtering.\n", len(articles))
-	app.printFailed(failed)
-	if app.composeBody == nil {
-		app.composeBody = output.FormatBody
+	app.output.printFailed(failed)
+	if app.output.composeBody == nil {
+		app.output.composeBody = output.FormatBody
 	}
 
 	if showRaw {
 		fmt.Println("\n--- Raw Articles ---")
-		app.printArticles(articles)
+		app.output.printArticles(articles)
 		fmt.Println("--- End Raw Articles ---")
 		fmt.Println()
 	}
@@ -430,7 +461,7 @@ func (app *app) renderBriefingContext(ctx context.Context, commandPath string, d
 		}
 		content.Translated = summary
 	}
-	body, err := app.composeBody(commandPath, app.cfg.Output.Mode, content)
+	body, err := app.output.composeBody(commandPath, app.cfg.Output.Mode, content)
 	if err != nil {
 		return err
 	}
@@ -444,7 +475,7 @@ func (app *app) renderBriefingContext(ctx context.Context, commandPath string, d
 	}
 
 	if err := runIfActive(ctx, func() error {
-		app.printCLI(briefing)
+		app.output.printCLI(briefing)
 		return nil
 	}); err != nil {
 		return err
@@ -453,16 +484,16 @@ func (app *app) renderBriefingContext(ctx context.Context, commandPath string, d
 	var path string
 	if err := runIfActive(ctx, func() error {
 		var writeErr error
-		path, writeErr = app.writeMarkdown(briefing, app.cfg.Output.Dir)
+		path, writeErr = app.output.writeMarkdown(briefing, app.cfg.Output.Dir)
 		return writeErr
 	}); err != nil {
 		return fmt.Errorf("write markdown: %w", err)
 	}
 	fmt.Printf("Markdown saved: %s\n", path)
 
-	if app.markSeen != nil && len(seenArticles) > 0 {
+	if app.fetch.markSeen != nil && len(seenArticles) > 0 {
 		if err := runIfActive(ctx, func() error {
-			return app.markSeen(seenArticles)
+			return app.fetch.markSeen(seenArticles)
 		}); err != nil {
 			return fmt.Errorf("mark seen: %w", err)
 		}
@@ -473,7 +504,7 @@ func (app *app) renderBriefingContext(ctx context.Context, commandPath string, d
 		return nil
 	}
 	if err := runIfActive(ctx, func() error {
-		return app.sendEmail(briefing, app.cfg, failed)
+		return app.email.sendEmail(briefing, app.cfg, failed)
 	}); err != nil {
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			return ctxErr
@@ -501,10 +532,7 @@ func (app *app) runDeepDiveContext(ctx context.Context, cmd deepCommand) error {
 	windowTo := app.currentTime()
 	windowFrom := windowTo.Add(-12 * time.Hour)
 	if cmd.fromRaw != "" || cmd.toRaw != "" {
-		loc := time.Local
-		if app.cfg != nil && app.cfg.ScheduleLocation != nil {
-			loc = app.cfg.ScheduleLocation
-		}
+		loc := app.displayLocation()
 		from, err := parseRegenTime(cmd.fromRaw, loc)
 		if err != nil {
 			return fmt.Errorf("parse --from: %w", err)
@@ -537,12 +565,12 @@ func (app *app) runDeepDiveContext(ctx context.Context, cmd deepCommand) error {
 		return err
 	}
 	articles = append(articles, watchArticles...)
-	app.printFailed(failed)
-	if app.composeBody == nil {
-		app.composeBody = output.FormatBody
+	app.output.printFailed(failed)
+	if app.output.composeBody == nil {
+		app.output.composeBody = output.FormatBody
 	}
-	if app.printText == nil {
-		app.printText = func(s string) { fmt.Println(s) }
+	if app.output.printText == nil {
+		app.output.printText = func(s string) { fmt.Println(s) }
 	}
 
 	relevant, err := selectDeepDiveArticles(cmd.topic, articles)
@@ -567,7 +595,7 @@ func (app *app) runDeepDiveContext(ctx context.Context, cmd deepCommand) error {
 		fmt.Printf("Found %d relevant articles.\n", len(relevant))
 	}
 
-	body, err := app.composeBody("deep", app.cfg.Output.Mode, formattedContent)
+	body, err := app.output.composeBody("deep", app.cfg.Output.Mode, formattedContent)
 	if err != nil {
 		return err
 	}
@@ -578,7 +606,7 @@ func (app *app) runDeepDiveContext(ctx context.Context, cmd deepCommand) error {
 		RawContent: body,
 	}
 
-	path, err := app.writeDeepDive(cmd.topic, body, app.cfg.Output.Dir, briefing.Date)
+	path, err := app.output.writeDeepDive(cmd.topic, body, app.cfg.Output.Dir, briefing.Date)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error writing deep dive: %v\n", err)
 	} else {
@@ -586,10 +614,10 @@ func (app *app) runDeepDiveContext(ctx context.Context, cmd deepCommand) error {
 	}
 
 	if cmd.sendEmail {
-		if app.sendDeepEmail == nil {
-			app.sendDeepEmail = output.SendDeepEmail
+		if app.email.sendDeepEmail == nil {
+			app.email.sendDeepEmail = output.SendDeepEmail
 		}
-		if err := app.sendDeepEmail(cmd.topic, briefing, app.cfg, failed); err != nil {
+		if err := app.email.sendDeepEmail(cmd.topic, briefing, app.cfg, failed); err != nil {
 			fmt.Fprintf(os.Stderr, "Error sending email: %v\n", err)
 		} else {
 			fmt.Printf("Email sent to %s\n", app.cfg.Email.To)
@@ -597,7 +625,7 @@ func (app *app) runDeepDiveContext(ctx context.Context, cmd deepCommand) error {
 	}
 
 	fmt.Println()
-	app.printText(body)
+	app.output.printText(body)
 	return nil
 }
 
@@ -796,13 +824,13 @@ func (app *app) currentTime() time.Time {
 }
 
 func (app *app) printWatchSiteErrors(report *model.WatchReport) {
-	if report == nil || app.printText == nil {
+	if report == nil || app.output.printText == nil {
 		return
 	}
 	for _, event := range report.Events {
 		if event.EventType != "site_error" {
 			continue
 		}
-		app.printText(fmt.Sprintf("Watch 站点异常：%s — %s", event.Source, event.Reason))
+		app.output.printText(fmt.Sprintf("Watch 站点异常：%s — %s", event.Source, event.Reason))
 	}
 }

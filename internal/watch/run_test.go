@@ -91,7 +91,7 @@ func TestRunContextPropagatesCancellationFromAnnouncementSite(t *testing.T) {
 		Output: config.OutputCfg{Dir: t.TempDir()},
 		Watch: config.WatchConfig{Sites: []config.WatchSite{{
 			Name:             "Anthropic News",
-			Type:             "announcement_page",
+			Type:             config.WatchTypeAnnouncementPage,
 			HomeURL:          "https://www.anthropic.com/news",
 			BriefingCategory: "AI/科技",
 		}}},
@@ -115,7 +115,7 @@ func TestRunBootstrapsCategoryBaselineWithoutBriefingArticles(t *testing.T) {
 		Output: config.OutputCfg{Dir: t.TempDir()},
 		Watch: config.WatchConfig{Sites: []config.WatchSite{{
 			Name:              "Anthropic Claude Support",
-			Type:              "anthropic_support",
+			Type:              config.WatchTypeAnthropicSupport,
 			HomeURL:           "https://support.claude.com/zh-CN",
 			BriefingCategory:  "AI/科技",
 			CategoryAllowlist: []string{"安全保障"},
@@ -157,7 +157,7 @@ func TestRunAnnouncementSiteBootstrapsWithoutBriefingOutput(t *testing.T) {
 		Output: config.OutputCfg{Dir: t.TempDir()},
 		Watch: config.WatchConfig{Sites: []config.WatchSite{{
 			Name:             "Anthropic News",
-			Type:             "announcement_page",
+			Type:             config.WatchTypeAnnouncementPage,
 			HomeURL:          "https://www.anthropic.com/news",
 			BriefingCategory: "AI/科技",
 			HighValueKeywords: []string{
@@ -201,7 +201,7 @@ func TestRunAnnouncementSiteIncludesNewArticleInBriefing(t *testing.T) {
 		Output: config.OutputCfg{Dir: t.TempDir()},
 		Watch: config.WatchConfig{Sites: []config.WatchSite{{
 			Name:             "Anthropic News",
-			Type:             "announcement_page",
+			Type:             config.WatchTypeAnnouncementPage,
 			HomeURL:          "https://www.anthropic.com/news",
 			BriefingCategory: "AI/科技",
 			HighValueKeywords: []string{
@@ -268,7 +268,7 @@ func TestRunClaudeReleaseNotesIncludesNewArticleInBriefing(t *testing.T) {
 		Output: config.OutputCfg{Dir: t.TempDir()},
 		Watch: config.WatchConfig{Sites: []config.WatchSite{{
 			Name:             "Claude Platform Release Notes",
-			Type:             "announcement_page",
+			Type:             config.WatchTypeAnnouncementPage,
 			HomeURL:          "https://platform.claude.com/docs/en/release-notes/overview",
 			BriefingCategory: "AI/科技",
 			HighValueKeywords: []string{
@@ -341,7 +341,7 @@ func TestRunSkipsFailedAnnouncementSiteAndKeepsOtherWatchSites(t *testing.T) {
 		Watch: config.WatchConfig{Sites: []config.WatchSite{
 			{
 				Name:             "Claude Platform Release Notes",
-				Type:             "announcement_page",
+				Type:             config.WatchTypeAnnouncementPage,
 				HomeURL:          "https://platform.claude.com/docs/en/release-notes/overview",
 				BriefingCategory: "AI/科技",
 				HighValueKeywords: []string{
@@ -350,7 +350,7 @@ func TestRunSkipsFailedAnnouncementSiteAndKeepsOtherWatchSites(t *testing.T) {
 			},
 			{
 				Name:              "Anthropic Claude Support",
-				Type:              "anthropic_support",
+				Type:              config.WatchTypeAnthropicSupport,
 				HomeURL:           "https://support.claude.com/zh-CN",
 				BriefingCategory:  "AI/科技",
 				CategoryAllowlist: []string{"安全保障"},
@@ -413,7 +413,7 @@ func TestRunBackfillsMissingArticleStateForExistingCategoryBaseline(t *testing.T
 		Output: config.OutputCfg{Dir: t.TempDir()},
 		Watch: config.WatchConfig{Sites: []config.WatchSite{{
 			Name:              "Anthropic Claude Support",
-			Type:              "anthropic_support",
+			Type:              config.WatchTypeAnthropicSupport,
 			HomeURL:           "https://support.claude.com/zh-CN",
 			BriefingCategory:  "AI/科技",
 			CategoryAllowlist: []string{"安全保障"},
@@ -480,7 +480,7 @@ func TestRunDetectsContentChangedForExistingArticle(t *testing.T) {
 		Output: config.OutputCfg{Dir: t.TempDir()},
 		Watch: config.WatchConfig{Sites: []config.WatchSite{{
 			Name:              "Anthropic Claude Support",
-			Type:              "anthropic_support",
+			Type:              config.WatchTypeAnthropicSupport,
 			HomeURL:           "https://support.claude.com/zh-CN",
 			BriefingCategory:  "AI/科技",
 			CategoryAllowlist: []string{"安全保障"},
@@ -550,7 +550,7 @@ func TestRunKeepsArticleCountChangedInSidecarOnly(t *testing.T) {
 		Output: config.OutputCfg{Dir: t.TempDir()},
 		Watch: config.WatchConfig{Sites: []config.WatchSite{{
 			Name:              "Anthropic Claude Support",
-			Type:              "anthropic_support",
+			Type:              config.WatchTypeAnthropicSupport,
 			HomeURL:           "https://support.claude.com/zh-CN",
 			BriefingCategory:  "AI/科技",
 			CategoryAllowlist: []string{"安全保障"},
@@ -610,7 +610,7 @@ func TestRunDeletesArticleStateForRemovedArticle(t *testing.T) {
 		Output: config.OutputCfg{Dir: t.TempDir()},
 		Watch: config.WatchConfig{Sites: []config.WatchSite{{
 			Name:              "Anthropic Claude Support",
-			Type:              "anthropic_support",
+			Type:              config.WatchTypeAnthropicSupport,
 			HomeURL:           "https://support.claude.com/zh-CN",
 			BriefingCategory:  "AI/科技",
 			CategoryAllowlist: []string{"安全保障"},
@@ -685,7 +685,7 @@ func TestRunWritesSeenStateForContentChangedBriefingArticle(t *testing.T) {
 		Output: config.OutputCfg{Dir: t.TempDir()},
 		Watch: config.WatchConfig{Sites: []config.WatchSite{{
 			Name:              "Anthropic Claude Support",
-			Type:              "anthropic_support",
+			Type:              config.WatchTypeAnthropicSupport,
 			HomeURL:           "https://support.claude.com/zh-CN",
 			BriefingCategory:  "AI/科技",
 			CategoryAllowlist: []string{"安全保障"},
@@ -763,7 +763,7 @@ func TestRunBootstrapDoesNotWriteSeenState(t *testing.T) {
 		Output: config.OutputCfg{Dir: t.TempDir()},
 		Watch: config.WatchConfig{Sites: []config.WatchSite{{
 			Name:              "Anthropic Claude Support",
-			Type:              "anthropic_support",
+			Type:              config.WatchTypeAnthropicSupport,
 			HomeURL:           "https://support.claude.com/zh-CN",
 			BriefingCategory:  "AI/科技",
 			CategoryAllowlist: []string{"安全保障"},
@@ -797,7 +797,7 @@ func TestRunContentChangedUpdatesSeenState(t *testing.T) {
 		Output: config.OutputCfg{Dir: t.TempDir()},
 		Watch: config.WatchConfig{Sites: []config.WatchSite{{
 			Name:              "Anthropic Claude Support",
-			Type:              "anthropic_support",
+			Type:              config.WatchTypeAnthropicSupport,
 			HomeURL:           "https://support.claude.com/zh-CN",
 			BriefingCategory:  "AI/科技",
 			CategoryAllowlist: []string{"安全保障"},
