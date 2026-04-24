@@ -1,6 +1,7 @@
 package watch
 
 import (
+	"os"
 	"path/filepath"
 	"testing"
 
@@ -16,6 +17,30 @@ func TestStateStoresUseOutputStateDirectory(t *testing.T) {
 	}
 	if articleStore.Path != filepath.Join("output", "state", "watch-articles.json") {
 		t.Fatalf("articleStore.Path = %q", articleStore.Path)
+	}
+}
+
+func TestStateStoresSaveWithoutLeavingTemporaryFiles(t *testing.T) {
+	dir := t.TempDir()
+	if err := NewIndexStore(dir).Save(IndexState{}); err != nil {
+		t.Fatalf("IndexStore.Save() error = %v", err)
+	}
+	if err := NewArticleStore(dir).Save(ArticleState{}); err != nil {
+		t.Fatalf("ArticleStore.Save() error = %v", err)
+	}
+
+	for _, name := range []string{"watch-index.json", "watch-articles.json"} {
+		path := filepath.Join(dir, "state", name)
+		if _, err := os.Stat(path); err != nil {
+			t.Fatalf("Stat(%q) error = %v", path, err)
+		}
+		matches, err := filepath.Glob(filepath.Join(dir, "state", "."+name+"-*.tmp"))
+		if err != nil {
+			t.Fatalf("Glob() error = %v", err)
+		}
+		if len(matches) != 0 {
+			t.Fatalf("temporary files for %s = %v, want none", name, matches)
+		}
 	}
 }
 

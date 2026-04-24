@@ -1,9 +1,12 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"os"
+	"os/signal"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/walker1211/news-briefing/internal/config"
@@ -57,7 +60,10 @@ func main() {
 
 	fetcher.InitHTTPClient(cfg.Proxy)
 
-	if err := execute(newApp(cfg), cmd); err != nil {
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	if err := executeContext(ctx, newApp(cfg), cmd); err != nil {
 		exitWithError(err)
 	}
 }

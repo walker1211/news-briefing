@@ -1,6 +1,7 @@
 package scheduler
 
 import (
+	"context"
 	"fmt"
 	"time"
 
@@ -18,11 +19,18 @@ type Window struct {
 
 // Start 注册所有定时任务并启动调度器。
 func Start(cfg *config.Config, runFunc func(Window)) error {
+	return StartContext(context.Background(), cfg, runFunc)
+}
+
+func StartContext(ctx context.Context, cfg *config.Config, runFunc func(Window)) error {
 	if cfg == nil {
 		return fmt.Errorf("scheduler config 不能为空")
 	}
 	if len(cfg.Schedule) == 0 {
 		return fmt.Errorf("schedule 不能为空")
+	}
+	if err := ctx.Err(); err != nil {
+		return err
 	}
 
 	loc := cfg.ScheduleLocation
@@ -36,6 +44,9 @@ func Start(cfg *config.Config, runFunc func(Window)) error {
 		var entryID cron.EntryID
 		var err error
 		entryID, err = c.AddFunc(expr, func() {
+			if err := ctx.Err(); err != nil {
+				return
+			}
 			entry := c.Entry(entryID)
 			if entry.Prev.IsZero() {
 				logutil.Printf("[scheduler] 跳过定时任务 %s：上次触发时间为空", expr)
@@ -55,6 +66,11 @@ func Start(cfg *config.Config, runFunc func(Window)) error {
 	}
 
 	c.Start()
+	go func() {
+		<-ctx.Done()
+		stopCtx := c.Stop()
+		<-stopCtx.Done()
+	}()
 	logutil.Printf("[scheduler] 已启动，共 %d 个时间点 (%s)", len(cfg.Schedule), loc.String())
 	for _, expr := range cfg.Schedule {
 		logutil.Printf("  - %s", expr)

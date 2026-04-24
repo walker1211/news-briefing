@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 
 	"github.com/walker1211/news-briefing/internal/model"
+	"github.com/walker1211/news-briefing/internal/statefile"
 )
 
 type IndexState struct {
@@ -144,14 +145,11 @@ func loadJSONFile(path string, target any) error {
 }
 
 func saveJSONFile(path string, value any) error {
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		return fmt.Errorf("create watch state dir: %w", err)
-	}
 	data, err := json.MarshalIndent(value, "", "  ")
 	if err != nil {
 		return fmt.Errorf("marshal watch state: %w", err)
 	}
-	if err := os.WriteFile(path, data, 0o644); err != nil {
+	if err := statefile.WriteAtomic(path, data, 0o644); err != nil {
 		return fmt.Errorf("write watch state: %w", err)
 	}
 	return nil

@@ -1,6 +1,8 @@
 package summarizer
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -195,7 +197,7 @@ func TestCallClaudeRetriesRetryableFailureAndEventuallySucceeds(t *testing.T) {
 	dir := t.TempDir()
 	oldPath := os.Getenv("PATH")
 	oldRetrySleep := retrySleep
-	retrySleep = func(time.Duration) {}
+	retrySleep = func(context.Context, time.Duration) error { return nil }
 	t.Cleanup(func() {
 		retrySleep = oldRetrySleep
 		_ = os.Setenv("PATH", oldPath)
@@ -242,6 +244,52 @@ func TestCallClaudeRetriesRetryableFailureAndEventuallySucceeds(t *testing.T) {
 	}
 }
 
+func TestCallClaudeWithKindContextReturnsContextErrorWithoutRetry(t *testing.T) {
+	runner := NewRunner("unused-ai", nil, nil, true, "", "")
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	_, err := runner.callClaudeWithKindContext(ctx, callKindSummarize, "hello world")
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("callClaudeWithKindContext() error = %v, want context.Canceled", err)
+	}
+}
+
+func TestCallClaudeWithKindContextStopsDuringRetrySleep(t *testing.T) {
+	dir := t.TempDir()
+	oldPath := os.Getenv("PATH")
+	oldRetrySleep := retrySleep
+	t.Cleanup(func() {
+		retrySleep = oldRetrySleep
+		_ = os.Setenv("PATH", oldPath)
+		ResetCommandForTest()
+	})
+
+	commandName := "cancel-retry-ai"
+	if runtime.GOOS == "windows" {
+		commandName += ".bat"
+	}
+	commandPath := filepath.Join(dir, commandName)
+	if err := os.WriteFile(commandPath, []byte("#!/bin/sh\n>&2 printf 'server_error'\nexit 1\n"), 0o755); err != nil {
+		t.Fatalf("write fake cli: %v", err)
+	}
+	if err := os.Setenv("PATH", dir+string(os.PathListSeparator)+oldPath); err != nil {
+		t.Fatalf("set PATH: %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	retrySleep = func(ctx context.Context, d time.Duration) error {
+		cancel()
+		return ctx.Err()
+	}
+
+	runner := NewRunner("cancel-retry-ai", nil, nil, true, "", "")
+	_, err := runner.callClaudeWithKindContext(ctx, callKindSummarize, "hello world")
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("callClaudeWithKindContext() error = %v, want context.Canceled", err)
+	}
+}
+
 func TestIsRetryableAICLIErrorRejectsNonRetryableFailure(t *testing.T) {
 	err := fmt.Errorf("ai cli: exit status 1")
 	if isRetryableAICLIError(err, "", "flag provided but not defined") {
@@ -253,7 +301,7 @@ func TestCallClaudeReturnsAggregatedErrorAfterRetryExhaustion(t *testing.T) {
 	dir := t.TempDir()
 	oldPath := os.Getenv("PATH")
 	oldRetrySleep := retrySleep
-	retrySleep = func(time.Duration) {}
+	retrySleep = func(context.Context, time.Duration) error { return nil }
 	t.Cleanup(func() {
 		retrySleep = oldRetrySleep
 		_ = os.Setenv("PATH", oldPath)
@@ -307,7 +355,7 @@ func TestCallClaudeWritesFailureLogAfterRetryExhaustion(t *testing.T) {
 	oldLogPath := aiCLIFailureLogPath
 	oldPath := os.Getenv("PATH")
 	oldRetrySleep := retrySleep
-	retrySleep = func(time.Duration) {}
+	retrySleep = func(context.Context, time.Duration) error { return nil }
 	t.Cleanup(func() {
 		aiCLIFailureLogPath = oldLogPath
 		retrySleep = oldRetrySleep
@@ -349,7 +397,7 @@ func TestCallClaudeRetrySuccessStillSanitizesCCSOutput(t *testing.T) {
 	dir := t.TempDir()
 	oldPath := os.Getenv("PATH")
 	oldRetrySleep := retrySleep
-	retrySleep = func(time.Duration) {}
+	retrySleep = func(context.Context, time.Duration) error { return nil }
 	t.Cleanup(func() {
 		retrySleep = oldRetrySleep
 		_ = os.Setenv("PATH", oldPath)
@@ -393,7 +441,7 @@ func TestCallClaudeRetriesWhenSanitizedOutputIsEmpty(t *testing.T) {
 	dir := t.TempDir()
 	oldPath := os.Getenv("PATH")
 	oldRetrySleep := retrySleep
-	retrySleep = func(time.Duration) {}
+	retrySleep = func(context.Context, time.Duration) error { return nil }
 	t.Cleanup(func() {
 		retrySleep = oldRetrySleep
 		_ = os.Setenv("PATH", oldPath)
@@ -447,7 +495,7 @@ func TestTranslateWritesFailureLogWhenSanitizedOutputStaysEmpty(t *testing.T) {
 	oldLogPath := aiCLIFailureLogPath
 	oldPath := os.Getenv("PATH")
 	oldRetrySleep := retrySleep
-	retrySleep = func(time.Duration) {}
+	retrySleep = func(context.Context, time.Duration) error { return nil }
 	t.Cleanup(func() {
 		aiCLIFailureLogPath = oldLogPath
 		retrySleep = oldRetrySleep
@@ -509,7 +557,7 @@ func TestSummarizeWritesFailureLogWhenSanitizedOutputStaysEmpty(t *testing.T) {
 	oldLogPath := aiCLIFailureLogPath
 	oldPath := os.Getenv("PATH")
 	oldRetrySleep := retrySleep
-	retrySleep = func(time.Duration) {}
+	retrySleep = func(context.Context, time.Duration) error { return nil }
 	t.Cleanup(func() {
 		aiCLIFailureLogPath = oldLogPath
 		retrySleep = oldRetrySleep
@@ -571,7 +619,7 @@ func TestDeepDiveWritesFailureLogWhenSanitizedOutputStaysEmpty(t *testing.T) {
 	oldLogPath := aiCLIFailureLogPath
 	oldPath := os.Getenv("PATH")
 	oldRetrySleep := retrySleep
-	retrySleep = func(time.Duration) {}
+	retrySleep = func(context.Context, time.Duration) error { return nil }
 	t.Cleanup(func() {
 		aiCLIFailureLogPath = oldLogPath
 		retrySleep = oldRetrySleep

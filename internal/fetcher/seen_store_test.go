@@ -79,6 +79,34 @@ func TestSeenStoreLoadRejectsCorruptJSON(t *testing.T) {
 	}
 }
 
+func TestSeenStoreSaveWritesCanonicalJSONAtomically(t *testing.T) {
+	dir := t.TempDir()
+	store := NewSeenStore(dir)
+	entries := []seenEntry{{URL: "https://example.com/a", Time: time.Date(2026, 4, 24, 8, 0, 0, 0, time.UTC)}}
+
+	if err := store.Save(entries); err != nil {
+		t.Fatalf("Save() error = %v", err)
+	}
+
+	if _, err := os.Stat(filepath.Join(dir, "state", "seen.json")); err != nil {
+		t.Fatalf("Stat() canonical error = %v", err)
+	}
+	got, err := store.Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if len(got) != 1 || got[0].URL != "https://example.com/a" {
+		t.Fatalf("Load() = %#v", got)
+	}
+	matches, err := filepath.Glob(filepath.Join(dir, "state", ".seen.json-*.tmp"))
+	if err != nil {
+		t.Fatalf("Glob() error = %v", err)
+	}
+	if len(matches) != 0 {
+		t.Fatalf("temporary files = %v, want none", matches)
+	}
+}
+
 func TestDedupMarksSeenBeforeSeparately(t *testing.T) {
 	dir := t.TempDir()
 	canonicalDir := filepath.Join(dir, "output", "state")

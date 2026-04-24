@@ -1,6 +1,7 @@
 package fetcher
 
 import (
+	"context"
 	"errors"
 	"io"
 	"net/http"
@@ -19,10 +20,10 @@ func (f roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
 
 func TestFetchRSSFallsBackToCurlForReddit403(t *testing.T) {
 	oldClient := sharedClient
-	oldCurl := fetchFeedWithCurl
+	oldCurl := fetchFeedWithCurlContext
 	t.Cleanup(func() {
 		sharedClient = oldClient
-		fetchFeedWithCurl = oldCurl
+		fetchFeedWithCurlContext = oldCurl
 	})
 
 	sharedClient = &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
@@ -35,7 +36,7 @@ func TestFetchRSSFallsBackToCurlForReddit403(t *testing.T) {
 		}, nil
 	})}
 
-	fetchFeedWithCurl = func(url string) ([]byte, error) {
+	fetchFeedWithCurlContext = func(ctx context.Context, url string) ([]byte, error) {
 		return []byte(`<?xml version="1.0" encoding="UTF-8"?>
 <rss version="2.0">
   <channel>
@@ -70,10 +71,10 @@ func TestFetchRSSFallsBackToCurlForReddit403(t *testing.T) {
 
 func TestFetchRSSReturnsCurlFallbackError(t *testing.T) {
 	oldClient := sharedClient
-	oldCurl := fetchFeedWithCurl
+	oldCurl := fetchFeedWithCurlContext
 	t.Cleanup(func() {
 		sharedClient = oldClient
-		fetchFeedWithCurl = oldCurl
+		fetchFeedWithCurlContext = oldCurl
 	})
 
 	sharedClient = &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
@@ -86,7 +87,7 @@ func TestFetchRSSReturnsCurlFallbackError(t *testing.T) {
 		}, nil
 	})}
 
-	fetchFeedWithCurl = func(url string) ([]byte, error) {
+	fetchFeedWithCurlContext = func(ctx context.Context, url string) ([]byte, error) {
 		return nil, errors.New("curl failed")
 	}
 
@@ -103,10 +104,10 @@ func TestFetchRSSReturnsCurlFallbackError(t *testing.T) {
 
 func TestFetchRSSDoesNotFallbackToCurlForNonReddit403(t *testing.T) {
 	oldClient := sharedClient
-	oldCurl := fetchFeedWithCurl
+	oldCurl := fetchFeedWithCurlContext
 	t.Cleanup(func() {
 		sharedClient = oldClient
-		fetchFeedWithCurl = oldCurl
+		fetchFeedWithCurlContext = oldCurl
 	})
 
 	sharedClient = &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
@@ -120,7 +121,7 @@ func TestFetchRSSDoesNotFallbackToCurlForNonReddit403(t *testing.T) {
 	})}
 
 	called := false
-	fetchFeedWithCurl = func(url string) ([]byte, error) {
+	fetchFeedWithCurlContext = func(ctx context.Context, url string) ([]byte, error) {
 		called = true
 		return nil, nil
 	}
@@ -135,16 +136,16 @@ func TestFetchRSSDoesNotFallbackToCurlForNonReddit403(t *testing.T) {
 		t.Fatalf("FetchRSS() error = nil, want forbidden error")
 	}
 	if called {
-		t.Fatalf("fetchFeedWithCurl() was called for non-reddit source")
+		t.Fatalf("fetchFeedWithCurlContext() was called for non-reddit source")
 	}
 }
 
 func TestFetchRSSDoesNotFallbackToCurlForRedditNon403(t *testing.T) {
 	oldClient := sharedClient
-	oldCurl := fetchFeedWithCurl
+	oldCurl := fetchFeedWithCurlContext
 	t.Cleanup(func() {
 		sharedClient = oldClient
-		fetchFeedWithCurl = oldCurl
+		fetchFeedWithCurlContext = oldCurl
 	})
 
 	sharedClient = &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
@@ -158,7 +159,7 @@ func TestFetchRSSDoesNotFallbackToCurlForRedditNon403(t *testing.T) {
 	})}
 
 	called := false
-	fetchFeedWithCurl = func(url string) ([]byte, error) {
+	fetchFeedWithCurlContext = func(ctx context.Context, url string) ([]byte, error) {
 		called = true
 		return nil, nil
 	}
@@ -173,6 +174,6 @@ func TestFetchRSSDoesNotFallbackToCurlForRedditNon403(t *testing.T) {
 		t.Fatalf("FetchRSS() error = nil, want server error")
 	}
 	if called {
-		t.Fatalf("fetchFeedWithCurl() was called for reddit non-403 error")
+		t.Fatalf("fetchFeedWithCurlContext() was called for reddit non-403 error")
 	}
 }

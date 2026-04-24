@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"os"
 	"os/exec"
@@ -16,6 +17,8 @@ import (
 	"github.com/walker1211/news-briefing/internal/scheduler"
 	"github.com/walker1211/news-briefing/internal/watch"
 )
+
+type contextTestKey struct{}
 
 func TestExecuteServeUsesScheduler(t *testing.T) {
 	called := false
@@ -68,6 +71,198 @@ func TestExecuteServeDoesNotExitProcessOnScheduledRunError(t *testing.T) {
 			t.Fatalf("scheduled serve error exited process with code 1")
 		}
 		t.Fatalf("subprocess error = %v", err)
+	}
+}
+
+func TestExecuteContextFetchPassesContext(t *testing.T) {
+	ctx := context.WithValue(context.Background(), contextTestKey{}, "fetch")
+	called := false
+	app := &app{
+		cfg: &config.Config{Output: config.OutputCfg{Mode: model.OutputModeOriginalOnly}},
+		fetchAllContext: func(got context.Context, cfg *config.Config, markSeen bool) ([]model.Article, []fetcher.FailedSource, error) {
+			called = got.Value(contextTestKey{}) == "fetch"
+			return nil, nil, nil
+		},
+		printArticles: func([]model.Article) {},
+		printFailed:   func([]fetcher.FailedSource) {},
+	}
+
+	if err := executeContext(ctx, app, fetchCommand{}); err != nil {
+		t.Fatalf("executeContext() error = %v", err)
+	}
+	if !called {
+		t.Fatal("fetchAllContext() did not receive execute context")
+	}
+}
+
+func TestExecuteContextServePassesContextToSchedulerAndRun(t *testing.T) {
+	ctx := context.WithValue(context.Background(), contextTestKey{}, "serve")
+	window := scheduler.Window{Period: "0800", From: time.Date(2026, 3, 18, 7, 0, 0, 0, time.UTC), To: time.Date(2026, 3, 18, 8, 0, 0, 0, time.UTC)}
+	startCtxOK := false
+	fetchCtxOK := false
+	waitCtxOK := false
+	app := &app{
+		cfg: &config.Config{Output: config.OutputCfg{Dir: t.TempDir(), Mode: model.OutputModeOriginalOnly}},
+		startCronContext: func(got context.Context, cfg *config.Config, run func(scheduler.Window)) error {
+			startCtxOK = got.Value(contextTestKey{}) == "serve"
+			run(window)
+			return nil
+		},
+		fetchWindowContext: func(got context.Context, cfg *config.Config, from, to time.Time, markSeen bool, ignoreSeen bool) ([]model.Article, []fetcher.FailedSource, error) {
+			fetchCtxOK = got.Value(contextTestKey{}) == "serve"
+			return sampleExecuteArticles(), nil, nil
+		},
+		waitForeverContext: func(got context.Context) {
+			waitCtxOK = got.Value(contextTestKey{}) == "serve"
+		},
+		composeBody: func(path string, mode model.OutputMode, content model.OutputContent) (string, error) {
+			return "ORIGINAL ONLY", nil
+		},
+		printCLI:      func(*model.Briefing) {},
+		printFailed:   func([]fetcher.FailedSource) {},
+		writeMarkdown: func(*model.Briefing, string) (string, error) { return "", nil },
+		sendEmail:     func(*model.Briefing, *config.Config, []fetcher.FailedSource) error { return nil },
+	}
+
+	if err := executeContext(ctx, app, serveCommand{}); err != nil {
+		t.Fatalf("executeContext() error = %v", err)
+	}
+	if !startCtxOK || !fetchCtxOK || !waitCtxOK {
+		t.Fatalf("context propagation start=%v fetch=%v wait=%v", startCtxOK, fetchCtxOK, waitCtxOK)
+	}
+}
+
+func TestRenderBriefingContextPassesContextToSummarize(t *testing.T) {
+	ctx := context.WithValue(context.Background(), contextTestKey{}, "summarize")
+	called := false
+	app := &app{
+		cfg: &config.Config{Output: config.OutputCfg{Dir: t.TempDir(), Mode: model.OutputModeTranslatedOnly}},
+		summarizeContext: func(got context.Context, articles []model.Article, categoryOrder []string, loc *time.Location) (string, error) {
+			called = got.Value(contextTestKey{}) == "summarize"
+			return "summary", nil
+		},
+		composeBody:   func(string, model.OutputMode, model.OutputContent) (string, error) { return "COMPOSED", nil },
+		printCLI:      func(*model.Briefing) {},
+		printFailed:   func([]fetcher.FailedSource) {},
+		writeMarkdown: func(*model.Briefing, string) (string, error) { return "", nil },
+	}
+
+	if err := app.renderBriefingContext(ctx, "run", "26.03.27", "1400", sampleExecuteArticles(), nil, nil, false, false); err != nil {
+		t.Fatalf("renderBriefingContext() error = %v", err)
+	}
+	if !called {
+		t.Fatal("summarizeContext() did not receive render context")
+	}
+}
+
+func TestRenderBriefingContextStopsBeforeSideEffectsWhenCancelled(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	printed := false
+	wrote := false
+	marked := false
+	emailed := false
+	app := &app{
+		cfg: &config.Config{Output: config.OutputCfg{Dir: t.TempDir(), Mode: model.OutputModeTranslatedOnly}},
+		summarizeContext: func(context.Context, []model.Article, []string, *time.Location) (string, error) {
+			cancel()
+			return "summary", nil
+		},
+		composeBody: func(string, model.OutputMode, model.OutputContent) (string, error) { return "COMPOSED", nil },
+		printCLI:    func(*model.Briefing) { printed = true },
+		writeMarkdown: func(*model.Briefing, string) (string, error) {
+			wrote = true
+			return "", nil
+		},
+		markSeen:    func([]model.Article) error { marked = true; return nil },
+		sendEmail:   func(*model.Briefing, *config.Config, []fetcher.FailedSource) error { emailed = true; return nil },
+		printFailed: func([]fetcher.FailedSource) {},
+	}
+
+	err := app.renderBriefingContext(ctx, "run", "26.03.27", "1400", sampleExecuteArticles(), sampleExecuteArticles(), nil, false, true)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("renderBriefingContext() error = %v, want context.Canceled", err)
+	}
+	if printed || wrote || marked || emailed {
+		t.Fatalf("side effects printed=%v wrote=%v marked=%v emailed=%v", printed, wrote, marked, emailed)
+	}
+}
+
+func TestRenderBriefingContextStopsBeforeMarkSeenAndEmailWhenCancelledAfterWrite(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	marked := false
+	emailed := false
+	app := &app{
+		cfg:         &config.Config{Output: config.OutputCfg{Dir: t.TempDir(), Mode: model.OutputModeOriginalOnly}},
+		composeBody: func(string, model.OutputMode, model.OutputContent) (string, error) { return "COMPOSED", nil },
+		printCLI:    func(*model.Briefing) {},
+		writeMarkdown: func(*model.Briefing, string) (string, error) {
+			cancel()
+			return "output/test.md", nil
+		},
+		markSeen:    func([]model.Article) error { marked = true; return nil },
+		sendEmail:   func(*model.Briefing, *config.Config, []fetcher.FailedSource) error { emailed = true; return nil },
+		printFailed: func([]fetcher.FailedSource) {},
+	}
+
+	err := app.renderBriefingContext(ctx, "run", "26.03.27", "1400", sampleExecuteArticles(), sampleExecuteArticles(), nil, false, true)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("renderBriefingContext() error = %v, want context.Canceled", err)
+	}
+	if marked || emailed {
+		t.Fatalf("side effects marked=%v emailed=%v", marked, emailed)
+	}
+}
+
+func TestRenderBriefingContextStopsBeforeEmailWhenCancelledAfterMarkSeen(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	emailed := false
+	app := &app{
+		cfg:           &config.Config{Output: config.OutputCfg{Dir: t.TempDir(), Mode: model.OutputModeOriginalOnly}},
+		composeBody:   func(string, model.OutputMode, model.OutputContent) (string, error) { return "COMPOSED", nil },
+		printCLI:      func(*model.Briefing) {},
+		writeMarkdown: func(*model.Briefing, string) (string, error) { return "output/test.md", nil },
+		markSeen: func([]model.Article) error {
+			cancel()
+			return nil
+		},
+		sendEmail:   func(*model.Briefing, *config.Config, []fetcher.FailedSource) error { emailed = true; return nil },
+		printFailed: func([]fetcher.FailedSource) {},
+	}
+
+	err := app.renderBriefingContext(ctx, "run", "26.03.27", "1400", sampleExecuteArticles(), sampleExecuteArticles(), nil, false, true)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("renderBriefingContext() error = %v, want context.Canceled", err)
+	}
+	if emailed {
+		t.Fatal("sendEmail() should not run after context cancellation")
+	}
+}
+
+func TestRunDeepDiveContextPassesContextToFetcherAndRunner(t *testing.T) {
+	ctx := context.WithValue(context.Background(), contextTestKey{}, "deep")
+	fetchCtxOK := false
+	deepCtxOK := false
+	app := &app{
+		cfg: &config.Config{Output: config.OutputCfg{Dir: t.TempDir(), Mode: model.OutputModeTranslatedOnly}},
+		fetchAllContext: func(got context.Context, cfg *config.Config, markSeen bool) ([]model.Article, []fetcher.FailedSource, error) {
+			fetchCtxOK = got.Value(contextTestKey{}) == "deep"
+			return []model.Article{{Title: "OpenAI release", Summary: "OpenAI ships model", Category: "AI/科技"}}, nil, nil
+		},
+		deepDiveContext: func(got context.Context, topic string, articles []model.Article, loc *time.Location) (string, error) {
+			deepCtxOK = got.Value(contextTestKey{}) == "deep"
+			return "deep content", nil
+		},
+		printFailed:   func([]fetcher.FailedSource) {},
+		composeBody:   func(string, model.OutputMode, model.OutputContent) (string, error) { return "COMPOSED DEEP", nil },
+		writeDeepDive: func(string, string, string, string) (string, error) { return "", nil },
+		printText:     func(string) {},
+	}
+
+	if err := app.runDeepDiveContext(ctx, deepCommand{topic: "OpenAI"}); err != nil {
+		t.Fatalf("runDeepDiveContext() error = %v", err)
+	}
+	if !fetchCtxOK || !deepCtxOK {
+		t.Fatalf("context propagation fetch=%v deep=%v", fetchCtxOK, deepCtxOK)
 	}
 }
 

@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+
+	"github.com/walker1211/news-briefing/internal/statefile"
 )
 
 type SeenStore struct {
@@ -49,14 +51,11 @@ func (s SeenStore) Load() ([]seenEntry, error) {
 }
 
 func (s SeenStore) Save(entries []seenEntry) error {
-	if err := os.MkdirAll(filepath.Dir(s.Path), 0o755); err != nil {
-		return fmt.Errorf("create seen state dir: %w", err)
-	}
 	data, err := json.MarshalIndent(entries, "", "  ")
 	if err != nil {
 		return fmt.Errorf("marshal seen store: %w", err)
 	}
-	if err := os.WriteFile(s.Path, data, 0o644); err != nil {
+	if err := statefile.WriteAtomic(s.Path, data, 0o644); err != nil {
 		return fmt.Errorf("write seen store: %w", err)
 	}
 	return nil

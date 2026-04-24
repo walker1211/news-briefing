@@ -2,11 +2,14 @@ package config
 
 import (
 	"fmt"
+	"net/mail"
+	"net/url"
 	"os"
 	"strings"
 	"time"
 
 	"github.com/joho/godotenv"
+	"github.com/robfig/cron/v3"
 	"github.com/walker1211/news-briefing/internal/model"
 	"gopkg.in/yaml.v3"
 )
@@ -97,6 +100,19 @@ func resolveScheduleLocation(name string) (*time.Location, error) {
 	return loc, nil
 }
 
+var supportedSourceTypes = map[string]struct{}{
+	"rss":        {},
+	"hackernews": {},
+	"reddit":     {},
+	"docs_page":  {},
+	"repo_page":  {},
+}
+
+var supportedWatchTypes = map[string]struct{}{
+	"anthropic_support": {},
+	"announcement_page": {},
+}
+
 func applyEmailDefaults(email *Email) error {
 	if strings.TrimSpace(email.TimeoutRaw) == "" {
 		email.TimeoutRaw = "3s"
@@ -134,6 +150,172 @@ func applyEmailDefaults(email *Email) error {
 	return nil
 }
 
+func (cfg *Config) Validate() error {
+	if strings.TrimSpace(cfg.Output.Dir) == "" {
+		return fmt.Errorf("validate output.dir: must not be empty")
+	}
+	if err := cfg.Output.Mode.Validate(); err != nil {
+		return fmt.Errorf("validate output.mode: %w", err)
+	}
+	if strings.TrimSpace(cfg.AI.Command) == "" {
+		return fmt.Errorf("validate ai.command: must not be empty")
+	}
+	for i, arg := range cfg.AI.Args {
+		if strings.TrimSpace(arg) == "" {
+			return fmt.Errorf("validate ai.args[%d]: must not be empty", i)
+		}
+	}
+	for i, flag := range cfg.AI.ExtraFlags {
+		if strings.TrimSpace(flag) == "" {
+			return fmt.Errorf("validate ai.extra_flags[%d]: must not be empty", i)
+		}
+	}
+	for i, expr := range cfg.Schedule {
+		trimmed := strings.TrimSpace(expr)
+		if trimmed == "" {
+			return fmt.Errorf("validate schedule[%d]: must not be empty", i)
+		}
+		if _, err := cron.ParseStandard(trimmed); err != nil {
+			return fmt.Errorf("validate schedule[%d] %q: %w", i, trimmed, err)
+		}
+	}
+	for i, source := range cfg.Sources {
+		if err := validateSource(i, source); err != nil {
+			return err
+		}
+	}
+	for i, site := range cfg.Watch.Sites {
+		if err := validateWatchSite(i, site); err != nil {
+			return err
+		}
+	}
+	if err := validateEmail(cfg.Email); err != nil {
+		return err
+	}
+	if err := validateProxy(cfg.Proxy); err != nil {
+		return err
+	}
+	return nil
+}
+
+func validateSource(index int, source Source) error {
+	prefix := fmt.Sprintf("sources[%d]", index)
+	if strings.TrimSpace(source.Name) == "" {
+		return fmt.Errorf("validate %s.name: must not be empty", prefix)
+	}
+	if strings.TrimSpace(source.Category) == "" {
+		return fmt.Errorf("validate %s.category: must not be empty", prefix)
+	}
+	kind := strings.TrimSpace(source.Type)
+	if kind == "" {
+		return fmt.Errorf("validate %s.type: must not be empty", prefix)
+	}
+	if _, ok := supportedSourceTypes[kind]; !ok {
+		return fmt.Errorf("validate %s.type: unsupported source type %q", prefix, source.Type)
+	}
+	if strings.TrimSpace(source.URL) == "" {
+		if kind == "hackernews" {
+			return nil
+		}
+		return fmt.Errorf("validate %s.url: must not be empty", prefix)
+	}
+	if err := validateHTTPURL(prefix+".url", source.URL); err != nil {
+		return err
+	}
+	return nil
+}
+
+func validateWatchSite(index int, site WatchSite) error {
+	prefix := fmt.Sprintf("watch.sites[%d]", index)
+	if strings.TrimSpace(site.Name) == "" {
+		return fmt.Errorf("validate %s.name: must not be empty", prefix)
+	}
+	if strings.TrimSpace(site.BriefingCategory) == "" {
+		return fmt.Errorf("validate %s.briefing_category: must not be empty", prefix)
+	}
+	kind := strings.TrimSpace(site.Type)
+	if kind == "" {
+		return fmt.Errorf("validate %s.type: must not be empty", prefix)
+	}
+	if _, ok := supportedWatchTypes[kind]; !ok {
+		return fmt.Errorf("validate %s.type: unsupported watch type %q", prefix, site.Type)
+	}
+	if err := validateHTTPURL(prefix+".home_url", site.HomeURL); err != nil {
+		return err
+	}
+	return nil
+}
+
+func validateEmail(email Email) error {
+	if strings.TrimSpace(email.SMTPHost) == "" && email.SMTPPort == 0 && strings.TrimSpace(email.From) == "" && strings.TrimSpace(email.To) == "" {
+		return nil
+	}
+	if strings.TrimSpace(email.SMTPHost) == "" {
+		return fmt.Errorf("validate email.smtp_host: must not be empty")
+	}
+	if email.SMTPPort < 1 || email.SMTPPort > 65535 {
+		return fmt.Errorf("validate email.smtp_port: must be between 1 and 65535")
+	}
+	if err := validateEmailAddress("email.from", email.From); err != nil {
+		return err
+	}
+	if err := validateEmailAddress("email.to", email.To); err != nil {
+		return err
+	}
+	return nil
+}
+
+func validateEmailAddress(field string, value string) error {
+	trimmed := strings.TrimSpace(value)
+	if trimmed == "" {
+		return fmt.Errorf("validate %s: must not be empty", field)
+	}
+	if _, err := mail.ParseAddress(trimmed); err != nil {
+		return fmt.Errorf("validate %s: %w", field, err)
+	}
+	return nil
+}
+
+func validateProxy(proxy Proxy) error {
+	if err := validateOptionalURLScheme("proxy.http", proxy.HTTP, map[string]struct{}{"http": {}, "https": {}}); err != nil {
+		return err
+	}
+	if err := validateOptionalURLScheme("proxy.socks5", proxy.Socks5, map[string]struct{}{"socks5": {}, "socks5h": {}}); err != nil {
+		return err
+	}
+	return nil
+}
+
+func validateHTTPURL(field string, value string) error {
+	trimmed := strings.TrimSpace(value)
+	if trimmed == "" {
+		return fmt.Errorf("validate %s: must not be empty", field)
+	}
+	return validateURLScheme(field, trimmed, map[string]struct{}{"http": {}, "https": {}})
+}
+
+func validateOptionalURLScheme(field string, value string, allowed map[string]struct{}) error {
+	trimmed := strings.TrimSpace(value)
+	if trimmed == "" {
+		return nil
+	}
+	return validateURLScheme(field, trimmed, allowed)
+}
+
+func validateURLScheme(field string, value string, allowed map[string]struct{}) error {
+	u, err := url.Parse(value)
+	if err != nil {
+		return fmt.Errorf("validate %s: %w", field, err)
+	}
+	if u.Scheme == "" || u.Host == "" {
+		return fmt.Errorf("validate %s: must be an absolute URL", field)
+	}
+	if _, ok := allowed[strings.ToLower(u.Scheme)]; !ok {
+		return fmt.Errorf("validate %s: unsupported scheme %q", field, u.Scheme)
+	}
+	return nil
+}
+
 func Load(configPath string) (*Config, error) {
 	_ = godotenv.Load()
 
@@ -153,9 +335,6 @@ func Load(configPath string) (*Config, error) {
 	if cfg.Output.Mode == "" {
 		cfg.Output.Mode = model.OutputModeTranslatedOnly
 	}
-	if err := cfg.Output.Mode.Validate(); err != nil {
-		return nil, fmt.Errorf("validate output.mode: %w", err)
-	}
 	if cfg.AI.Command == "" {
 		cfg.AI.Command = "ccs"
 	}
@@ -168,6 +347,9 @@ func Load(configPath string) (*Config, error) {
 	}
 	cfg.ScheduleLocation = loc
 	if err := applyEmailDefaults(&cfg.Email); err != nil {
+		return nil, err
+	}
+	if err := cfg.Validate(); err != nil {
 		return nil, err
 	}
 

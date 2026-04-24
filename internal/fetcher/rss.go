@@ -14,8 +14,8 @@ import (
 	"github.com/walker1211/news-briefing/internal/model"
 )
 
-var fetchFeedWithCurl = func(url string) ([]byte, error) {
-	cmd := exec.Command("curl",
+var fetchFeedWithCurlContext = func(ctx context.Context, url string) ([]byte, error) {
+	cmd := exec.CommandContext(ctx, "curl",
 		"-sS",
 		"-L",
 		"--max-time", "30",
@@ -30,7 +30,11 @@ var fetchFeedWithCurl = func(url string) ([]byte, error) {
 }
 
 func FetchRSS(source config.Source, keywords []string, since time.Time) (sourceFetchResult, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	return FetchRSSContext(context.Background(), source, keywords, since)
+}
+
+func FetchRSSContext(ctx context.Context, source config.Source, keywords []string, since time.Time) (sourceFetchResult, error) {
+	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 
 	fp := gofeed.NewParser()
@@ -41,7 +45,7 @@ func FetchRSS(source config.Source, keywords []string, since time.Time) (sourceF
 		if !shouldFallbackToCurl(source, err) {
 			return sourceFetchResult{}, err
 		}
-		body, curlErr := fetchFeedWithCurl(source.URL)
+		body, curlErr := fetchFeedWithCurlContext(ctx, source.URL)
 		if curlErr != nil {
 			return sourceFetchResult{}, fmt.Errorf("reddit rss curl fallback failed: %w", curlErr)
 		}

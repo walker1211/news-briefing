@@ -1,6 +1,7 @@
 package watch
 
 import (
+	"context"
 	"fmt"
 	"net/url"
 	"strings"
@@ -11,13 +12,13 @@ import (
 	"github.com/walker1211/news-briefing/internal/model"
 )
 
-func runAnnouncementSite(site config.WatchSite, now time.Time, indexState IndexState, articleState ArticleState) ([]model.Article, []model.WatchSeenArticle, []model.WatchEvent, error) {
+func runAnnouncementSite(ctx context.Context, site config.WatchSite, now time.Time, indexState IndexState, articleState ArticleState) ([]model.Article, []model.WatchSeenArticle, []model.WatchEvent, error) {
 	type seenPayload struct {
 		summary string
 		body    string
 	}
 
-	homeHTML, err := fetchWatchHTML(site.HomeURL)
+	homeHTML, err := fetchWatchHTML(ctx, site.HomeURL)
 	if err != nil {
 		return nil, nil, nil, err
 	}
@@ -33,7 +34,7 @@ func runAnnouncementSite(site config.WatchSite, now time.Time, indexState IndexS
 	prevSnapshot, hasPrev := indexState.Categories[stateKey]
 	if !hasPrev {
 		for _, item := range current.Items {
-			articleHTML, err := fetchWatchHTML(item.URL)
+			articleHTML, err := fetchWatchHTML(ctx, item.URL)
 			if err != nil {
 				return nil, nil, nil, err
 			}
@@ -74,7 +75,7 @@ func runAnnouncementSite(site config.WatchSite, now time.Time, indexState IndexS
 			continue
 		}
 		state, ok := articleState[item.URL]
-		articleHTML, err := fetchWatchHTML(item.URL)
+		articleHTML, err := fetchWatchHTML(ctx, item.URL)
 		if err != nil {
 			return nil, nil, nil, err
 		}
@@ -137,7 +138,7 @@ func runAnnouncementSite(site config.WatchSite, now time.Time, indexState IndexS
 			continue
 		}
 
-		articleHTML, err := fetchWatchHTML(url)
+		articleHTML, err := fetchWatchHTML(ctx, url)
 		if err != nil {
 			return nil, nil, nil, err
 		}
@@ -178,7 +179,7 @@ func runAnnouncementSite(site config.WatchSite, now time.Time, indexState IndexS
 		articles = append(articles, watchEventToArticle(site, event))
 		payload, ok := seenPayloads[event.ArticleURL]
 		if !ok {
-			articleHTML, err := fetchWatchHTML(event.ArticleURL)
+			articleHTML, err := fetchWatchHTML(ctx, event.ArticleURL)
 			if err != nil {
 				return nil, nil, nil, err
 			}

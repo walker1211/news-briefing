@@ -2,6 +2,7 @@ package summarizer
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"os"
 	"os/exec"
@@ -193,16 +194,34 @@ func isRetryableAICLIError(err error, stdout string, stderr string) bool {
 	return false
 }
 
-var retrySleep = time.Sleep
+var retrySleep = func(ctx context.Context, d time.Duration) error {
+	timer := time.NewTimer(d)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
+}
 
 func (r *Runner) callClaudeWithKind(kind callKind, prompt string, extraFlags ...string) (string, error) {
+	return r.callClaudeWithKindContext(context.Background(), kind, prompt, extraFlags...)
+}
+
+func (r *Runner) callClaudeWithKindContext(ctx context.Context, kind callKind, prompt string, extraFlags ...string) (string, error) {
 	attemptDelays := []time.Duration{0, time.Second, 3 * time.Second}
 	var lastErr error
 	for attempt, delay := range attemptDelays {
-		if delay > 0 {
-			retrySleep(delay)
+		if err := ctx.Err(); err != nil {
+			return "", err
 		}
-		out, stdoutText, stderrText, err := r.runClaudeCommand(prompt, extraFlags...)
+		if delay > 0 {
+			if err := retrySleep(ctx, delay); err != nil {
+				return "", err
+			}
+		}
+		out, stdoutText, stderrText, err := r.runClaudeCommandContext(ctx, prompt, extraFlags...)
 		if err == nil {
 			body := strings.TrimSpace(out)
 			if r.shouldSanitizeCLIOutput() {
@@ -231,11 +250,19 @@ func (r *Runner) callClaude(prompt string, extraFlags ...string) (string, error)
 	return r.callClaudeWithKind(callKindSummarize, prompt, extraFlags...)
 }
 
+func (r *Runner) callClaudeContext(ctx context.Context, prompt string, extraFlags ...string) (string, error) {
+	return r.callClaudeWithKindContext(ctx, callKindSummarize, prompt, extraFlags...)
+}
+
 func (r *Runner) runClaudeCommand(prompt string, extraFlags ...string) (string, string, string, error) {
+	return r.runClaudeCommandContext(context.Background(), prompt, extraFlags...)
+}
+
+func (r *Runner) runClaudeCommandContext(ctx context.Context, prompt string, extraFlags ...string) (string, string, string, error) {
 	args := append([]string{}, r.commandArgs...)
 	args = append(args, extraFlags...)
 	args = append(args, "-p", prompt)
-	cmd := exec.Command(r.commandName, args...)
+	cmd := exec.CommandContext(ctx, r.commandName, args...)
 	env := filterEnv(os.Environ(), "CLAUDECODE")
 	env = append(env, r.proxyEnv...)
 	cmd.Env = env
@@ -317,13 +344,29 @@ func sanitizeCLIOutput(raw string) string {
 }
 
 func Summarize(articles []model.Article, categoryOrder []string, loc *time.Location) (string, error) {
+	return SummarizeContext(context.Background(), articles, categoryOrder, loc)
+}
+
+func Translate(articles []model.Article, categoryOrder []string, loc *time.Location) (string, error) {
+	return TranslateContext(context.Background(), articles, categoryOrder, loc)
+}
+
+func DeepDive(topic string, articles []model.Article, loc *time.Location) (string, error) {
+	return DeepDiveContext(context.Background(), topic, articles, loc)
+}
+
+func SummarizeContext(ctx context.Context, articles []model.Article, categoryOrder []string, loc *time.Location) (string, error) {
 	defaultRunnerMu.RLock()
 	runner := defaultRunner
 	defaultRunnerMu.RUnlock()
-	return runner.Summarize(articles, categoryOrder, loc)
+	return runner.SummarizeContext(ctx, articles, categoryOrder, loc)
 }
 
 func (r *Runner) Summarize(articles []model.Article, categoryOrder []string, loc *time.Location) (string, error) {
+	return r.SummarizeContext(context.Background(), articles, categoryOrder, loc)
+}
+
+func (r *Runner) SummarizeContext(ctx context.Context, articles []model.Article, categoryOrder []string, loc *time.Location) (string, error) {
 	if len(articles) == 0 {
 		return "今日暂无符合筛选条件的新闻。", nil
 	}
@@ -331,7 +374,7 @@ func (r *Runner) Summarize(articles []model.Article, categoryOrder []string, loc
 	input := output.GroupedArticleListView(articles, categoryOrder, loc)
 	prompt := briefingPrompt + "\n\n---\n以下是今日新闻条目：\n\n" + input
 
-	return r.callClaude(prompt, r.summarizeExtraFlags()...)
+	return r.callClaudeContext(ctx, prompt, r.summarizeExtraFlags()...)
 }
 
 func (r *Runner) summarizeExtraFlags() []string {
@@ -349,11 +392,22 @@ func shouldSanitizeCLIOutput() bool {
 	return runner.shouldSanitizeCLIOutput()
 }
 
+func DeepDiveContext(ctx context.Context, topic string, articles []model.Article, loc *time.Location) (string, error) {
+	defaultRunnerMu.RLock()
+	runner := defaultRunner
+	defaultRunnerMu.RUnlock()
+	return runner.DeepDiveContext(ctx, topic, articles, loc)
+}
+
 func (r *Runner) DeepDive(topic string, articles []model.Article, loc *time.Location) (string, error) {
+	return r.DeepDiveContext(context.Background(), topic, articles, loc)
+}
+
+func (r *Runner) DeepDiveContext(ctx context.Context, topic string, articles []model.Article, loc *time.Location) (string, error) {
 	input := output.ArticleListView(articles, loc)
 	prompt := fmt.Sprintf(deepDivePrompt, topic) + "\n\n---\n话题: " + topic + "\n\n相关新闻:\n" + input
 
-	return r.callClaudeWithKind(callKindDeepDive, prompt, r.deepDiveExtraFlags()...)
+	return r.callClaudeWithKindContext(ctx, callKindDeepDive, prompt, r.deepDiveExtraFlags()...)
 }
 
 func (r *Runner) deepDiveExtraFlags() []string {
@@ -369,13 +423,24 @@ const translatePrompt = `将以下新闻列表翻译成中文。要求：
 2. 每条新闻保持编号，只翻译标题和摘要，保留来源名称、时间和链接不变
 3. 直接输出翻译结果，不要加任何额外说明`
 
+func TranslateContext(ctx context.Context, articles []model.Article, categoryOrder []string, loc *time.Location) (string, error) {
+	defaultRunnerMu.RLock()
+	runner := defaultRunner
+	defaultRunnerMu.RUnlock()
+	return runner.TranslateContext(ctx, articles, categoryOrder, loc)
+}
+
 func (r *Runner) Translate(articles []model.Article, categoryOrder []string, loc *time.Location) (string, error) {
+	return r.TranslateContext(context.Background(), articles, categoryOrder, loc)
+}
+
+func (r *Runner) TranslateContext(ctx context.Context, articles []model.Article, categoryOrder []string, loc *time.Location) (string, error) {
 	if len(articles) == 0 {
 		return "暂无新闻。", nil
 	}
 	input := output.GroupedArticleListView(articles, categoryOrder, loc)
 	prompt := translatePrompt + "\n\n" + input
-	return r.callClaudeWithKind(callKindTranslate, prompt, r.translateExtraFlags()...)
+	return r.callClaudeWithKindContext(ctx, callKindTranslate, prompt, r.translateExtraFlags()...)
 }
 
 func (r *Runner) translateExtraFlags() []string {

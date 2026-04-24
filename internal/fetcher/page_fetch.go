@@ -10,16 +10,24 @@ import (
 	"github.com/walker1211/news-briefing/internal/config"
 )
 
-func FetchDocsPage(src config.Source, _ []string, _ time.Time) (sourceFetchResult, error) {
-	return fetchPageSource(src)
+func FetchDocsPage(src config.Source, keywords []string, since time.Time) (sourceFetchResult, error) {
+	return FetchDocsPageContext(context.Background(), src, keywords, since)
 }
 
-func FetchRepoPage(src config.Source, _ []string, _ time.Time) (sourceFetchResult, error) {
-	return fetchPageSource(src)
+func FetchDocsPageContext(ctx context.Context, src config.Source, _ []string, _ time.Time) (sourceFetchResult, error) {
+	return fetchPageSource(ctx, src)
 }
 
-func fetchPageSource(src config.Source) (sourceFetchResult, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+func FetchRepoPage(src config.Source, keywords []string, since time.Time) (sourceFetchResult, error) {
+	return FetchRepoPageContext(context.Background(), src, keywords, since)
+}
+
+func FetchRepoPageContext(ctx context.Context, src config.Source, _ []string, _ time.Time) (sourceFetchResult, error) {
+	return fetchPageSource(ctx, src)
+}
+
+func fetchPageSource(ctx context.Context, src config.Source) (sourceFetchResult, error) {
+	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, src.URL, nil)

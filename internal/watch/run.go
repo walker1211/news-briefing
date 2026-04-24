@@ -1,6 +1,7 @@
 package watch
 
 import (
+	"context"
 	"crypto/sha1"
 	"fmt"
 	"io"
@@ -14,8 +15,12 @@ import (
 	"github.com/walker1211/news-briefing/internal/model"
 )
 
-var fetchWatchHTML = func(url string) (string, error) {
-	resp, err := fetcher.HTTPClient().Get(url)
+var fetchWatchHTML = func(ctx context.Context, url string) (string, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return "", err
+	}
+	resp, err := fetcher.HTTPClient().Do(req)
 	if err != nil {
 		return "", err
 	}
@@ -31,7 +36,14 @@ var fetchWatchHTML = func(url string) (string, error) {
 }
 
 func Run(cfg *config.Config, now time.Time) ([]model.Article, *model.WatchReport, error) {
+	return RunContext(context.Background(), cfg, now)
+}
+
+func RunContext(ctx context.Context, cfg *config.Config, now time.Time) ([]model.Article, *model.WatchReport, error) {
 	report := &model.WatchReport{GeneratedAt: now, Events: []model.WatchEvent{}}
+	if err := ctx.Err(); err != nil {
+		return nil, nil, err
+	}
 	if cfg == nil || len(cfg.Watch.Sites) == 0 {
 		return nil, report, nil
 	}
@@ -50,8 +62,14 @@ func Run(cfg *config.Config, now time.Time) ([]model.Article, *model.WatchReport
 	articles := make([]model.Article, 0)
 	seenItems := make([]model.WatchSeenArticle, 0)
 	for _, site := range cfg.Watch.Sites {
-		siteArticles, siteSeenItems, events, err := runSite(site, now, indexState, articleState)
+		if err := ctx.Err(); err != nil {
+			return nil, nil, err
+		}
+		siteArticles, siteSeenItems, events, err := runSite(ctx, site, now, indexState, articleState)
 		if err != nil {
+			if ctxErr := ctx.Err(); ctxErr != nil {
+				return nil, nil, ctxErr
+			}
 			if site.Type == "announcement_page" {
 				report.Events = append(report.Events, model.WatchEvent{
 					EventType:         "site_error",
@@ -82,24 +100,24 @@ func Run(cfg *config.Config, now time.Time) ([]model.Article, *model.WatchReport
 	return articles, report, nil
 }
 
-func runSite(site config.WatchSite, now time.Time, indexState IndexState, articleState ArticleState) ([]model.Article, []model.WatchSeenArticle, []model.WatchEvent, error) {
+func runSite(ctx context.Context, site config.WatchSite, now time.Time, indexState IndexState, articleState ArticleState) ([]model.Article, []model.WatchSeenArticle, []model.WatchEvent, error) {
 	switch site.Type {
 	case "anthropic_support":
-		return runAnthropicSupportSite(site, now, indexState, articleState)
+		return runAnthropicSupportSite(ctx, site, now, indexState, articleState)
 	case "announcement_page":
-		return runAnnouncementSite(site, now, indexState, articleState)
+		return runAnnouncementSite(ctx, site, now, indexState, articleState)
 	default:
 		return nil, nil, nil, nil
 	}
 }
 
-func runAnthropicSupportSite(site config.WatchSite, now time.Time, indexState IndexState, articleState ArticleState) ([]model.Article, []model.WatchSeenArticle, []model.WatchEvent, error) {
+func runAnthropicSupportSite(ctx context.Context, site config.WatchSite, now time.Time, indexState IndexState, articleState ArticleState) ([]model.Article, []model.WatchSeenArticle, []model.WatchEvent, error) {
 	type seenPayload struct {
 		summary string
 		body    string
 	}
 
-	homeHTML, err := fetchWatchHTML(site.HomeURL)
+	homeHTML, err := fetchWatchHTML(ctx, site.HomeURL)
 	if err != nil {
 		return nil, nil, nil, err
 	}
@@ -125,7 +143,7 @@ func runAnthropicSupportSite(site config.WatchSite, now time.Time, indexState In
 	seenItems := make([]model.WatchSeenArticle, 0)
 	events := make([]model.WatchEvent, 0)
 	for _, categoryItem := range homeItems {
-		categoryHTML, err := fetchWatchHTML(categoryItem.URL)
+		categoryHTML, err := fetchWatchHTML(ctx, categoryItem.URL)
 		if err != nil {
 			return nil, nil, nil, err
 		}
@@ -140,7 +158,7 @@ func runAnthropicSupportSite(site config.WatchSite, now time.Time, indexState In
 		prevSnapshot, hasPrev := indexState.Categories[stateKey]
 		if !hasPrev {
 			for _, item := range current.Items {
-				articleHTML, err := fetchWatchHTML(item.URL)
+				articleHTML, err := fetchWatchHTML(ctx, item.URL)
 				if err != nil {
 					return nil, nil, nil, err
 				}
@@ -177,7 +195,7 @@ func runAnthropicSupportSite(site config.WatchSite, now time.Time, indexState In
 				continue
 			}
 			state, ok := articleState[item.URL]
-			articleHTML, err := fetchWatchHTML(item.URL)
+			articleHTML, err := fetchWatchHTML(ctx, item.URL)
 			if err != nil {
 				return nil, nil, nil, err
 			}
@@ -243,7 +261,7 @@ func runAnthropicSupportSite(site config.WatchSite, now time.Time, indexState In
 				continue
 			}
 
-			articleHTML, err := fetchWatchHTML(url)
+			articleHTML, err := fetchWatchHTML(ctx, url)
 			if err != nil {
 				return nil, nil, nil, err
 			}
@@ -283,7 +301,7 @@ func runAnthropicSupportSite(site config.WatchSite, now time.Time, indexState In
 			articles = append(articles, watchEventToArticle(site, event))
 			payload, ok := seenPayloads[event.ArticleURL]
 			if !ok {
-				articleHTML, err := fetchWatchHTML(event.ArticleURL)
+				articleHTML, err := fetchWatchHTML(ctx, event.ArticleURL)
 				if err != nil {
 					return nil, nil, nil, err
 				}

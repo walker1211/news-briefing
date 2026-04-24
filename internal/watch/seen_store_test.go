@@ -1,6 +1,7 @@
 package watch
 
 import (
+	"os"
 	"path/filepath"
 	"testing"
 	"time"
@@ -45,6 +46,24 @@ func TestSeenStoreSaveAndLoad(t *testing.T) {
 	item := got.Items[0]
 	if item.Title != "Claude 上的身份验证" || item.WatchCategory != "安全保障" || item.EventType != "content_changed" {
 		t.Fatalf("Load() item = %#v", item)
+	}
+}
+
+func TestSeenStoreSaveLeavesNoTemporaryFiles(t *testing.T) {
+	dir := t.TempDir()
+	store := NewSeenStore(dir)
+	if err := store.Save(model.WatchSeenState{}); err != nil {
+		t.Fatalf("Save() error = %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "state", "watch-seen.json")); err != nil {
+		t.Fatalf("Stat() error = %v", err)
+	}
+	matches, err := filepath.Glob(filepath.Join(dir, "state", ".watch-seen.json-*.tmp"))
+	if err != nil {
+		t.Fatalf("Glob() error = %v", err)
+	}
+	if len(matches) != 0 {
+		t.Fatalf("temporary files = %v, want none", matches)
 	}
 }
 

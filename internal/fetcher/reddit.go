@@ -1,6 +1,7 @@
 package fetcher
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -28,9 +29,13 @@ type redditPost struct {
 }
 
 func FetchReddit(source config.Source, keywords []string, since time.Time) (sourceFetchResult, error) {
+	return FetchRedditContext(context.Background(), source, keywords, since)
+}
+
+func FetchRedditContext(ctx context.Context, source config.Source, keywords []string, since time.Time) (sourceFetchResult, error) {
 	client := HTTPClient()
 
-	req, err := http.NewRequest("GET", source.URL, nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, source.URL, nil)
 	if err != nil {
 		return sourceFetchResult{}, err
 	}

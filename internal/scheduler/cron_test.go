@@ -1,6 +1,7 @@
 package scheduler
 
 import (
+	"context"
 	"strings"
 	"testing"
 	"time"
@@ -65,6 +66,19 @@ func TestStartReturnsErrorForInvalidCronExpression(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), `添加定时任务 "bad expr" 失败`) {
 		t.Fatalf("Start() error = %q, want invalid cron expression context", err)
+	}
+}
+
+func TestStartContextReturnsContextErrorWhenCancelled(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	err := StartContext(ctx, &config.Config{Schedule: []string{"0 7 * * *"}}, func(Window) {})
+	if err == nil {
+		t.Fatal("StartContext() error = nil, want context error")
+	}
+	if !strings.Contains(err.Error(), "context canceled") {
+		t.Fatalf("StartContext() error = %q, want context canceled", err.Error())
 	}
 }
 

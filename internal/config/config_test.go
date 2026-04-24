@@ -460,6 +460,209 @@ proxy: {}
 	}
 }
 
+func TestLoadAllowsEmptySourcesScheduleAndEmail(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	content := `sources: []
+keywords: []
+schedule: []
+output: {}
+proxy: {}
+`
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	if _, err := Load(path); err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+}
+
+func TestLoadAllowsHackerNewsSourceWithoutURL(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	content := `sources:
+  - name: Hacker News
+    type: hackernews
+    category: AI/科技
+keywords: []
+schedule: []
+output: {}
+proxy: {}
+`
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	if _, err := Load(path); err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+}
+
+func TestLoadRejectsInvalidSourceConfig(t *testing.T) {
+	tests := []struct {
+		name    string
+		source  string
+		wantErr string
+	}{
+		{name: "missing name", source: "url: https://example.com/feed.xml\ntype: rss\ncategory: AI/科技", wantErr: "sources[0].name"},
+		{name: "invalid type", source: "name: Example\nurl: https://example.com/feed.xml\ntype: nope\ncategory: AI/科技", wantErr: "sources[0].type"},
+		{name: "invalid url", source: "name: Example\nurl: notaurl\ntype: rss\ncategory: AI/科技", wantErr: "sources[0].url"},
+		{name: "missing category", source: "name: Example\nurl: https://example.com/feed.xml\ntype: rss", wantErr: "sources[0].category"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dir := t.TempDir()
+			path := filepath.Join(dir, "config.yaml")
+			content := "sources:\n  - " + strings.ReplaceAll(tt.source, "\n", "\n    ") + "\n" +
+				"keywords: []\n" +
+				"email:\n" +
+				"  smtp_host: smtp.example.com\n" +
+				"  smtp_port: 465\n" +
+				"  from: from@example.com\n" +
+				"  to: to@example.com\n" +
+				"schedule: []\n" +
+				"output: {}\n" +
+				"proxy: {}\n"
+			if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+				t.Fatalf("write config: %v", err)
+			}
+			_, err := Load(path)
+			if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
+				t.Fatalf("Load() error = %v, want %q", err, tt.wantErr)
+			}
+		})
+	}
+}
+
+func TestLoadRejectsInvalidScheduleExpression(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	content := `sources: []
+keywords: []
+email:
+  smtp_host: smtp.example.com
+  smtp_port: 465
+  from: from@example.com
+  to: to@example.com
+schedule:
+  - nope
+output: {}
+proxy: {}
+`
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	_, err := Load(path)
+	if err == nil || !strings.Contains(err.Error(), "schedule[0]") {
+		t.Fatalf("Load() error = %v, want schedule[0]", err)
+	}
+}
+
+func TestLoadRejectsInvalidEmailIdentityConfig(t *testing.T) {
+	tests := []struct {
+		name    string
+		email   string
+		wantErr string
+	}{
+		{name: "missing smtp host", email: "smtp_port: 465\nfrom: from@example.com\nto: to@example.com", wantErr: "email.smtp_host"},
+		{name: "bad port", email: "smtp_host: smtp.example.com\nsmtp_port: 70000\nfrom: from@example.com\nto: to@example.com", wantErr: "email.smtp_port"},
+		{name: "bad from", email: "smtp_host: smtp.example.com\nsmtp_port: 465\nfrom: not-an-address\nto: to@example.com", wantErr: "email.from"},
+		{name: "bad to", email: "smtp_host: smtp.example.com\nsmtp_port: 465\nfrom: from@example.com\nto: not-an-address", wantErr: "email.to"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dir := t.TempDir()
+			path := filepath.Join(dir, "config.yaml")
+			content := "sources: []\n" +
+				"keywords: []\n" +
+				"email:\n  " + strings.ReplaceAll(tt.email, "\n", "\n  ") + "\n" +
+				"schedule: []\n" +
+				"output: {}\n" +
+				"proxy: {}\n"
+			if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+				t.Fatalf("write config: %v", err)
+			}
+			_, err := Load(path)
+			if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
+				t.Fatalf("Load() error = %v, want %q", err, tt.wantErr)
+			}
+		})
+	}
+}
+
+func TestLoadRejectsInvalidProxyConfig(t *testing.T) {
+	tests := []struct {
+		name    string
+		proxy   string
+		wantErr string
+	}{
+		{name: "bad http scheme", proxy: "http: ftp://example.com", wantErr: "proxy.http"},
+		{name: "bad socks scheme", proxy: "socks5: http://127.0.0.1:1080", wantErr: "proxy.socks5"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dir := t.TempDir()
+			path := filepath.Join(dir, "config.yaml")
+			content := "sources: []\n" +
+				"keywords: []\n" +
+				"email:\n" +
+				"  smtp_host: smtp.example.com\n" +
+				"  smtp_port: 465\n" +
+				"  from: from@example.com\n" +
+				"  to: to@example.com\n" +
+				"schedule: []\n" +
+				"output: {}\n" +
+				"proxy:\n  " + strings.ReplaceAll(tt.proxy, "\n", "\n  ") + "\n"
+			if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+				t.Fatalf("write config: %v", err)
+			}
+			_, err := Load(path)
+			if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
+				t.Fatalf("Load() error = %v, want %q", err, tt.wantErr)
+			}
+		})
+	}
+}
+
+func TestLoadRejectsInvalidAIConfig(t *testing.T) {
+	tests := []struct {
+		name    string
+		ai      string
+		wantErr string
+	}{
+		{name: "blank command", ai: "command: \" \"", wantErr: "ai.command"},
+		{name: "blank arg", ai: "command: ccs\nargs:\n  - \" \"", wantErr: "ai.args[0]"},
+		{name: "blank extra flag", ai: "command: ccs\nextra_flags:\n  - \" \"", wantErr: "ai.extra_flags[0]"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dir := t.TempDir()
+			path := filepath.Join(dir, "config.yaml")
+			content := "sources: []\n" +
+				"keywords: []\n" +
+				"email:\n" +
+				"  smtp_host: smtp.example.com\n" +
+				"  smtp_port: 465\n" +
+				"  from: from@example.com\n" +
+				"  to: to@example.com\n" +
+				"schedule: []\n" +
+				"output: {}\n" +
+				"proxy: {}\n" +
+				"ai:\n  " + strings.ReplaceAll(tt.ai, "\n", "\n  ") + "\n"
+			if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+				t.Fatalf("write config: %v", err)
+			}
+			_, err := Load(path)
+			if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
+				t.Fatalf("Load() error = %v, want %q", err, tt.wantErr)
+			}
+		})
+	}
+}
+
 func TestLoadSupportsPageSourcesAndScopedKeywords(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.yaml")
@@ -552,6 +755,46 @@ proxy: {}
 	}
 	if !reflect.DeepEqual(site.HighValueKeywords, []string{"身份验证", "电话验证"}) {
 		t.Fatalf("site.HighValueKeywords = %#v", site.HighValueKeywords)
+	}
+}
+
+func TestLoadRejectsInvalidWatchSiteConfig(t *testing.T) {
+	tests := []struct {
+		name    string
+		site    string
+		wantErr string
+	}{
+		{name: "missing name", site: "type: anthropic_support\nhome_url: https://support.claude.com/zh-CN\nbriefing_category: AI/科技", wantErr: "watch.sites[0].name"},
+		{name: "invalid type", site: "name: Anthropic\ntype: nope\nhome_url: https://support.claude.com/zh-CN\nbriefing_category: AI/科技", wantErr: "watch.sites[0].type"},
+		{name: "invalid home url", site: "name: Anthropic\ntype: anthropic_support\nhome_url: notaurl\nbriefing_category: AI/科技", wantErr: "watch.sites[0].home_url"},
+		{name: "missing briefing category", site: "name: Anthropic\ntype: anthropic_support\nhome_url: https://support.claude.com/zh-CN", wantErr: "watch.sites[0].briefing_category"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dir := t.TempDir()
+			path := filepath.Join(dir, "config.yaml")
+			content := "sources: []\n" +
+				"keywords: []\n" +
+				"watch:\n" +
+				"  sites:\n" +
+				"    - " + strings.ReplaceAll(tt.site, "\n", "\n      ") + "\n" +
+				"email:\n" +
+				"  smtp_host: smtp.example.com\n" +
+				"  smtp_port: 465\n" +
+				"  from: from@example.com\n" +
+				"  to: to@example.com\n" +
+				"schedule: []\n" +
+				"output: {}\n" +
+				"proxy: {}\n"
+			if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+				t.Fatalf("write config: %v", err)
+			}
+			_, err := Load(path)
+			if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
+				t.Fatalf("Load() error = %v, want %q", err, tt.wantErr)
+			}
+		})
 	}
 }
 

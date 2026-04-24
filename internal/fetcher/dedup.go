@@ -1,6 +1,7 @@
 package fetcher
 
 import (
+	"context"
 	"time"
 
 	"github.com/walker1211/news-briefing/internal/model"
@@ -19,6 +20,13 @@ type DedupOutcome struct {
 
 // Dedup 过滤已读文章。save 为 true 时将新文章标记为已读。
 func Dedup(articles []model.Article, save bool, store SeenStore) (DedupOutcome, error) {
+	return DedupContext(context.Background(), articles, save, store)
+}
+
+func DedupContext(ctx context.Context, articles []model.Article, save bool, store SeenStore) (DedupOutcome, error) {
+	if err := ctx.Err(); err != nil {
+		return DedupOutcome{}, err
+	}
 	seen, err := store.Load()
 	if err != nil {
 		return DedupOutcome{}, err
@@ -51,12 +59,18 @@ func Dedup(articles []model.Article, save bool, store SeenStore) (DedupOutcome, 
 	}
 
 	if save {
+		if err := ctx.Err(); err != nil {
+			return DedupOutcome{}, err
+		}
 		cutoff := time.Now().AddDate(0, 0, -7)
 		var trimmed []seenEntry
 		for _, s := range seen {
 			if s.Time.After(cutoff) {
 				trimmed = append(trimmed, s)
 			}
+		}
+		if err := ctx.Err(); err != nil {
+			return DedupOutcome{}, err
 		}
 		if err := store.Save(trimmed); err != nil {
 			return DedupOutcome{}, err

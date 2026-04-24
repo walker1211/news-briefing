@@ -1,6 +1,7 @@
 package fetcher
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -23,9 +24,17 @@ type hnItem struct {
 }
 
 func FetchHackerNews(source config.Source, keywords []string, since time.Time) (sourceFetchResult, error) {
+	return FetchHackerNewsContext(context.Background(), source, keywords, since)
+}
+
+func FetchHackerNewsContext(ctx context.Context, source config.Source, keywords []string, since time.Time) (sourceFetchResult, error) {
 	client := HTTPClient()
 
-	resp, err := client.Get(hnBaseURL + "/topstories.json")
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, hnBaseURL+"/topstories.json", nil)
+	if err != nil {
+		return sourceFetchResult{}, err
+	}
+	resp, err := client.Do(req)
 	if err != nil {
 		return sourceFetchResult{}, err
 	}
@@ -52,10 +61,14 @@ func FetchHackerNews(source config.Source, keywords []string, since time.Time) (
 		wg.Add(1)
 		go func(id int) {
 			defer wg.Done()
-			sem <- struct{}{}
-			defer func() { <-sem }()
+			select {
+			case sem <- struct{}{}:
+				defer func() { <-sem }()
+			case <-ctx.Done():
+				return
+			}
 
-			item, err := fetchHNItem(client, id)
+			item, err := fetchHNItem(ctx, client, id)
 			if err != nil || item.URL == "" {
 				return
 			}
@@ -79,11 +92,18 @@ func FetchHackerNews(source config.Source, keywords []string, since time.Time) (
 	}
 
 	wg.Wait()
+	if err := ctx.Err(); err != nil {
+		return sourceFetchResult{}, err
+	}
 	return sourceFetchResult{Source: source, Candidates: candidates}, nil
 }
 
-func fetchHNItem(client *http.Client, id int) (*hnItem, error) {
-	resp, err := client.Get(fmt.Sprintf("%s/item/%d.json", hnBaseURL, id))
+func fetchHNItem(ctx context.Context, client *http.Client, id int) (*hnItem, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, fmt.Sprintf("%s/item/%d.json", hnBaseURL, id), nil)
+	if err != nil {
+		return nil, err
+	}
+	resp, err := client.Do(req)
 	if err != nil {
 		return nil, err
 	}
