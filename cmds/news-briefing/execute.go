@@ -52,7 +52,10 @@ type app struct {
 }
 
 func newApp(cfg *config.Config) *app {
-	runner := summarizer.NewRunner(cfg.AI.Command, cfg.AI.Args, cfg.AI.ExtraFlags, cfg.AI.ShouldAppendSystemPrompt(), cfg.Proxy.HTTP, cfg.Proxy.Socks5)
+	httpClient := fetcher.NewHTTPClient(cfg.Proxy)
+	fetchClient := fetcher.NewClient(httpClient)
+	watchRunner := watch.NewRunner(httpClient)
+	aiRunner := summarizer.NewRunner(cfg.AI.Command, cfg.AI.Args, cfg.AI.ExtraFlags, cfg.AI.ShouldAppendSystemPrompt(), cfg.Proxy.HTTP, cfg.Proxy.Socks5)
 	return &app{
 		cfg:              cfg,
 		now:              time.Now,
@@ -64,21 +67,21 @@ func newApp(cfg *config.Config) *app {
 		waitForeverContext: func(ctx context.Context) {
 			<-ctx.Done()
 		},
-		fetchAll:           fetcher.FetchAll,
-		fetchAllContext:    fetcher.FetchAllContext,
-		fetchWindow:        fetcher.FetchWindow,
-		fetchWindowContext: fetcher.FetchWindowContext,
+		fetchAll:           fetchClient.FetchAll,
+		fetchAllContext:    fetchClient.FetchAllContext,
+		fetchWindow:        fetchClient.FetchWindow,
+		fetchWindowContext: fetchClient.FetchWindowContext,
 		markSeen: func(articles []model.Article) error {
 			return fetcher.MarkArticlesSeen(cfg.Output.Dir, articles)
 		},
-		fetchWatch:        watch.Run,
-		fetchWatchContext: watch.RunContext,
-		summarize:         runner.Summarize,
-		summarizeContext:  runner.SummarizeContext,
-		translate:         runner.Translate,
-		translateContext:  runner.TranslateContext,
-		deepDive:          runner.DeepDive,
-		deepDiveContext:   runner.DeepDiveContext,
+		fetchWatch:        watchRunner.Run,
+		fetchWatchContext: watchRunner.RunContext,
+		summarize:         aiRunner.Summarize,
+		summarizeContext:  aiRunner.SummarizeContext,
+		translate:         aiRunner.Translate,
+		translateContext:  aiRunner.TranslateContext,
+		deepDive:          aiRunner.DeepDive,
+		deepDiveContext:   aiRunner.DeepDiveContext,
 		composeBody:       output.FormatBody,
 		printText:         func(s string) { fmt.Println(s) },
 		printFailed:       fetcher.PrintFailed,

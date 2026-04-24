@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -33,6 +34,40 @@ func TestFetchWatchHTMLIncludesURLOnUnexpectedStatus(t *testing.T) {
 	if !strings.Contains(err.Error(), "unexpected status 502") {
 		t.Fatalf("fetchWatchHTML() error = %q, want status in error", err)
 	}
+}
+
+func TestRunnerFetchWatchHTMLUsesInjectedHTTPClient(t *testing.T) {
+	called := false
+	runner := NewRunner(&http.Client{Transport: watchRoundTripFunc(func(req *http.Request) (*http.Response, error) {
+		called = true
+		if req.URL.String() != "https://example.com/watch" {
+			t.Fatalf("request URL = %q", req.URL.String())
+		}
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Status:     "200 OK",
+			Body:       io.NopCloser(strings.NewReader("<html>ok</html>")),
+			Header:     make(http.Header),
+			Request:    req,
+		}, nil
+	})})
+
+	html, err := runner.fetchWatchHTML(context.Background(), "https://example.com/watch")
+	if err != nil {
+		t.Fatalf("fetchWatchHTML() error = %v", err)
+	}
+	if !called {
+		t.Fatal("injected client was not called")
+	}
+	if html != "<html>ok</html>" {
+		t.Fatalf("html = %q", html)
+	}
+}
+
+type watchRoundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f watchRoundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
+	return f(req)
 }
 
 func TestRunContextReturnsContextErrorWhenCancelled(t *testing.T) {

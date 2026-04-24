@@ -3,6 +3,8 @@ package fetcher
 import (
 	"context"
 	"errors"
+	"io"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
@@ -276,6 +278,44 @@ func TestFetchWithRetryRejectsUnknownSourceType(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "mystery") || !strings.Contains(err.Error(), "unknown") {
 		t.Fatalf("error = %q, want source name/type", err.Error())
+	}
+}
+
+func TestClientFetchAllSourcesRetriesRedditSerially(t *testing.T) {
+	oldSleep := sleepContext
+	defer func() { sleepContext = oldSleep }()
+	sleepContext = func(context.Context, time.Duration) error { return nil }
+
+	attempts := 0
+	client := NewClient(&http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		attempts++
+		if attempts < maxRetries {
+			return &http.Response{
+				StatusCode: http.StatusInternalServerError,
+				Status:     "500 Internal Server Error",
+				Body:       io.NopCloser(strings.NewReader("boom")),
+				Header:     make(http.Header),
+				Request:    req,
+			}, nil
+		}
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Status:     "200 OK",
+			Body:       io.NopCloser(strings.NewReader(`{"data":{"children":[]}}`)),
+			Header:     make(http.Header),
+			Request:    req,
+		}, nil
+	})})
+
+	_, failed, err := client.fetchAllSourcesDetailed(context.Background(), &config.Config{Sources: []config.Source{{Name: "reddit", Type: "reddit", URL: "https://example.com/reddit.json"}}}, time.Time{})
+	if err != nil {
+		t.Fatalf("fetchAllSourcesDetailed() error = %v", err)
+	}
+	if attempts != maxRetries {
+		t.Fatalf("attempts = %d, want %d", attempts, maxRetries)
+	}
+	if len(failed) != 0 {
+		t.Fatalf("failed = %#v, want no failed sources", failed)
 	}
 }
 

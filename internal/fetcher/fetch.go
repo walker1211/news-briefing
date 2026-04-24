@@ -3,6 +3,7 @@ package fetcher
 import (
 	"context"
 	"fmt"
+	"net/http"
 	"os"
 	"sort"
 	"strings"
@@ -39,6 +40,28 @@ type sourceFetchResult struct {
 	Candidates []fetchedCandidate
 }
 
+type sourceFetchFunc func(context.Context, config.Source, []string, time.Time) (sourceFetchResult, error)
+type fetchAllSourcesDetailedFunc func(context.Context, *config.Config, time.Time) ([]sourceFetchResult, []FailedSource, error)
+
+type sourceFetchers struct {
+	rss        sourceFetchFunc
+	hackernews sourceFetchFunc
+	reddit     sourceFetchFunc
+	docsPage   sourceFetchFunc
+	repoPage   sourceFetchFunc
+}
+
+type Client struct {
+	httpClient *http.Client
+}
+
+func NewClient(httpClient *http.Client) *Client {
+	if httpClient == nil {
+		httpClient = DefaultHTTPClient()
+	}
+	return &Client{httpClient: httpClient}
+}
+
 var fetchRSSSource = func(ctx context.Context, src config.Source, keywords []string, since time.Time) (sourceFetchResult, error) {
 	return FetchRSSContext(ctx, src, keywords, since)
 }
@@ -63,6 +86,22 @@ var fetchRepoPageSource = func(ctx context.Context, src config.Source, keywords 
 	return FetchRepoPageContext(ctx, src, keywords, since)
 }
 
+func defaultSourceFetchers() sourceFetchers {
+	return sourceFetchers{
+		rss:        fetchRSSSource,
+		hackernews: fetchHackerNewsSource,
+		reddit:     fetchRedditDirect,
+		docsPage:   fetchDocsPageSource,
+		repoPage:   fetchRepoPageSource,
+	}
+}
+
+func serialSourceFetchers() sourceFetchers {
+	fetchers := defaultSourceFetchers()
+	fetchers.reddit = fetchRedditSource
+	return fetchers
+}
+
 // isRateLimited 检测是否为 429 限流响应
 func isRateLimited(err error) bool {
 	return err != nil && strings.Contains(err.Error(), "429")
@@ -74,65 +113,7 @@ type FailedSource struct {
 }
 
 var fetchAllSourcesDetailed = func(ctx context.Context, cfg *config.Config, since time.Time) ([]sourceFetchResult, []FailedSource, error) {
-	var (
-		mu     sync.Mutex
-		all    []sourceFetchResult
-		failed []FailedSource
-		wg     sync.WaitGroup
-	)
-
-	var redditSources []config.Source
-	var otherSources []config.Source
-	for _, src := range cfg.Sources {
-		if src.Type == "reddit" {
-			redditSources = append(redditSources, src)
-		} else {
-			otherSources = append(otherSources, src)
-		}
-	}
-
-	for _, src := range otherSources {
-		wg.Add(1)
-		go func(src config.Source) {
-			defer wg.Done()
-			if err := ctx.Err(); err != nil {
-				mu.Lock()
-				failed = append(failed, FailedSource{Name: src.Name, Err: err})
-				mu.Unlock()
-				return
-			}
-			result, err := fetchWithRetry(ctx, src, cfg.Keywords, since)
-			mu.Lock()
-			if err != nil {
-				failed = append(failed, FailedSource{Name: src.Name, Err: err})
-			} else {
-				all = append(all, result)
-			}
-			mu.Unlock()
-		}(src)
-	}
-
-	if len(redditSources) > 0 {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			fetchRedditSourcesSerially(ctx, redditSources, cfg.Keywords, since, func(item FailedSource) {
-				mu.Lock()
-				failed = append(failed, item)
-				mu.Unlock()
-			}, func(item sourceFetchResult) {
-				mu.Lock()
-				all = append(all, item)
-				mu.Unlock()
-			})
-		}()
-	}
-
-	wg.Wait()
-	if err := ctx.Err(); err != nil {
-		return nil, nil, err
-	}
-	return all, failed, nil
+	return fetchAllSourcesDetailedWith(ctx, cfg, since, serialSourceFetchers())
 }
 
 // FetchAll 并发抓取所有新闻源，支持重试。
@@ -141,20 +122,41 @@ func FetchAll(cfg *config.Config, markSeen bool) ([]model.Article, []FailedSourc
 	return FetchAllContext(context.Background(), cfg, markSeen)
 }
 
+func (c *Client) FetchAll(cfg *config.Config, markSeen bool) ([]model.Article, []FailedSource, error) {
+	return c.FetchAllContext(context.Background(), cfg, markSeen)
+}
+
 func FetchAllContext(ctx context.Context, cfg *config.Config, markSeen bool) ([]model.Article, []FailedSource, error) {
 	since := time.Now().Add(-12 * time.Hour)
-	return FetchWindowContext(ctx, cfg, since, time.Now(), markSeen, false)
+	return fetchWindowContext(ctx, cfg, since, time.Now(), markSeen, false, fetchAllSourcesDetailed)
+}
+
+func (c *Client) FetchAllContext(ctx context.Context, cfg *config.Config, markSeen bool) ([]model.Article, []FailedSource, error) {
+	since := time.Now().Add(-12 * time.Hour)
+	return c.FetchWindowContext(ctx, cfg, since, time.Now(), markSeen, false)
 }
 
 func FetchWindow(cfg *config.Config, from, to time.Time, markSeen bool, ignoreSeen bool) ([]model.Article, []FailedSource, error) {
 	return FetchWindowContext(context.Background(), cfg, from, to, markSeen, ignoreSeen)
 }
 
+func (c *Client) FetchWindow(cfg *config.Config, from, to time.Time, markSeen bool, ignoreSeen bool) ([]model.Article, []FailedSource, error) {
+	return c.FetchWindowContext(context.Background(), cfg, from, to, markSeen, ignoreSeen)
+}
+
 func FetchWindowContext(ctx context.Context, cfg *config.Config, from, to time.Time, markSeen bool, ignoreSeen bool) ([]model.Article, []FailedSource, error) {
+	return fetchWindowContext(ctx, cfg, from, to, markSeen, ignoreSeen, fetchAllSourcesDetailed)
+}
+
+func (c *Client) FetchWindowContext(ctx context.Context, cfg *config.Config, from, to time.Time, markSeen bool, ignoreSeen bool) ([]model.Article, []FailedSource, error) {
+	return fetchWindowContext(ctx, cfg, from, to, markSeen, ignoreSeen, c.fetchAllSourcesDetailed)
+}
+
+func fetchWindowContext(ctx context.Context, cfg *config.Config, from, to time.Time, markSeen bool, ignoreSeen bool, fetchAll fetchAllSourcesDetailedFunc) ([]model.Article, []FailedSource, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, nil, err
 	}
-	results, failed, err := fetchAllSourcesDetailed(ctx, cfg, from)
+	results, failed, err := fetchAll(ctx, cfg, from)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -227,7 +229,95 @@ func applyDedupContext(ctx context.Context, articles []model.Article, markSeen b
 	return DedupContext(ctx, articles, markSeen, store)
 }
 
+func (c *Client) fetchAllSourcesDetailed(ctx context.Context, cfg *config.Config, since time.Time) ([]sourceFetchResult, []FailedSource, error) {
+	return fetchAllSourcesDetailedWith(ctx, cfg, since, c.serialSourceFetchers())
+}
+
+func (c *Client) serialSourceFetchers() sourceFetchers {
+	fetchers := c.sourceFetchers()
+	fetchers.reddit = func(ctx context.Context, src config.Source, keywords []string, since time.Time) (sourceFetchResult, error) {
+		return fetchWithRetryUsing(ctx, src, keywords, since, c.sourceFetchers())
+	}
+	return fetchers
+}
+
+func (c *Client) sourceFetchers() sourceFetchers {
+	return sourceFetchers{
+		rss:        c.FetchRSSContext,
+		hackernews: c.FetchHackerNewsContext,
+		reddit:     c.FetchRedditContext,
+		docsPage:   c.FetchDocsPageContext,
+		repoPage:   c.FetchRepoPageContext,
+	}
+}
+
+func fetchAllSourcesDetailedWith(ctx context.Context, cfg *config.Config, since time.Time, fetchers sourceFetchers) ([]sourceFetchResult, []FailedSource, error) {
+	var (
+		mu     sync.Mutex
+		all    []sourceFetchResult
+		failed []FailedSource
+		wg     sync.WaitGroup
+	)
+
+	var redditSources []config.Source
+	var otherSources []config.Source
+	for _, src := range cfg.Sources {
+		if src.Type == "reddit" {
+			redditSources = append(redditSources, src)
+		} else {
+			otherSources = append(otherSources, src)
+		}
+	}
+
+	for _, src := range otherSources {
+		wg.Add(1)
+		go func(src config.Source) {
+			defer wg.Done()
+			if err := ctx.Err(); err != nil {
+				mu.Lock()
+				failed = append(failed, FailedSource{Name: src.Name, Err: err})
+				mu.Unlock()
+				return
+			}
+			result, err := fetchWithRetryUsing(ctx, src, cfg.Keywords, since, fetchers)
+			mu.Lock()
+			if err != nil {
+				failed = append(failed, FailedSource{Name: src.Name, Err: err})
+			} else {
+				all = append(all, result)
+			}
+			mu.Unlock()
+		}(src)
+	}
+
+	if len(redditSources) > 0 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			fetchRedditSourcesSeriallyWith(ctx, redditSources, cfg.Keywords, since, fetchers.reddit, func(item FailedSource) {
+				mu.Lock()
+				failed = append(failed, item)
+				mu.Unlock()
+			}, func(item sourceFetchResult) {
+				mu.Lock()
+				all = append(all, item)
+				mu.Unlock()
+			})
+		}()
+	}
+
+	wg.Wait()
+	if err := ctx.Err(); err != nil {
+		return nil, nil, err
+	}
+	return all, failed, nil
+}
+
 func fetchRedditSourcesSerially(ctx context.Context, sources []config.Source, keywords []string, since time.Time, appendFailed func(FailedSource), appendResult func(sourceFetchResult)) {
+	fetchRedditSourcesSeriallyWith(ctx, sources, keywords, since, fetchRedditSource, appendFailed, appendResult)
+}
+
+func fetchRedditSourcesSeriallyWith(ctx context.Context, sources []config.Source, keywords []string, since time.Time, fetchReddit sourceFetchFunc, appendFailed func(FailedSource), appendResult func(sourceFetchResult)) {
 	for i, src := range sources {
 		if err := ctx.Err(); err != nil {
 			appendFailed(FailedSource{Name: src.Name, Err: err})
@@ -239,7 +329,7 @@ func fetchRedditSourcesSerially(ctx context.Context, sources []config.Source, ke
 				return
 			}
 		}
-		result, err := fetchRedditSource(ctx, src, keywords, since)
+		result, err := fetchReddit(ctx, src, keywords, since)
 		if err != nil {
 			appendFailed(FailedSource{Name: src.Name, Err: err})
 			continue
@@ -249,6 +339,10 @@ func fetchRedditSourcesSerially(ctx context.Context, sources []config.Source, ke
 }
 
 func fetchWithRetry(ctx context.Context, src config.Source, keywords []string, since time.Time) (sourceFetchResult, error) {
+	return fetchWithRetryUsing(ctx, src, keywords, since, defaultSourceFetchers())
+}
+
+func fetchWithRetryUsing(ctx context.Context, src config.Source, keywords []string, since time.Time, fetchers sourceFetchers) (sourceFetchResult, error) {
 	var result sourceFetchResult
 	var lastErr error
 
@@ -259,15 +353,15 @@ func fetchWithRetry(ctx context.Context, src config.Source, keywords []string, s
 		var err error
 		switch src.Type {
 		case "rss":
-			result, err = fetchRSSSource(ctx, src, keywords, since)
+			result, err = fetchers.rss(ctx, src, keywords, since)
 		case "hackernews":
-			result, err = fetchHackerNewsSource(ctx, src, keywords, since)
+			result, err = fetchers.hackernews(ctx, src, keywords, since)
 		case "reddit":
-			result, err = fetchRedditDirect(ctx, src, keywords, since)
+			result, err = fetchers.reddit(ctx, src, keywords, since)
 		case "docs_page":
-			result, err = fetchDocsPageSource(ctx, src, keywords, since)
+			result, err = fetchers.docsPage(ctx, src, keywords, since)
 		case "repo_page":
-			result, err = fetchRepoPageSource(ctx, src, keywords, since)
+			result, err = fetchers.repoPage(ctx, src, keywords, since)
 		default:
 			return sourceFetchResult{}, fmt.Errorf("unknown source type for %s: %s", src.Name, src.Type)
 		}

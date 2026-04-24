@@ -33,12 +33,20 @@ func FetchRSS(source config.Source, keywords []string, since time.Time) (sourceF
 	return FetchRSSContext(context.Background(), source, keywords, since)
 }
 
+func (c *Client) FetchRSS(source config.Source, keywords []string, since time.Time) (sourceFetchResult, error) {
+	return c.FetchRSSContext(context.Background(), source, keywords, since)
+}
+
 func FetchRSSContext(ctx context.Context, source config.Source, keywords []string, since time.Time) (sourceFetchResult, error) {
+	return NewClient(HTTPClient()).FetchRSSContext(ctx, source, keywords, since)
+}
+
+func (c *Client) FetchRSSContext(ctx context.Context, source config.Source, keywords []string, since time.Time) (sourceFetchResult, error) {
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 
 	fp := gofeed.NewParser()
-	fp.Client = HTTPClient()
+	fp.Client = c.httpClient
 
 	feed, err := fp.ParseURLWithContext(source.URL, ctx)
 	if err != nil {

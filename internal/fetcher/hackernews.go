@@ -27,8 +27,16 @@ func FetchHackerNews(source config.Source, keywords []string, since time.Time) (
 	return FetchHackerNewsContext(context.Background(), source, keywords, since)
 }
 
+func (c *Client) FetchHackerNews(source config.Source, keywords []string, since time.Time) (sourceFetchResult, error) {
+	return c.FetchHackerNewsContext(context.Background(), source, keywords, since)
+}
+
 func FetchHackerNewsContext(ctx context.Context, source config.Source, keywords []string, since time.Time) (sourceFetchResult, error) {
-	client := HTTPClient()
+	return NewClient(HTTPClient()).FetchHackerNewsContext(ctx, source, keywords, since)
+}
+
+func (c *Client) FetchHackerNewsContext(ctx context.Context, source config.Source, keywords []string, since time.Time) (sourceFetchResult, error) {
+	client := c.httpClient
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, hnBaseURL+"/topstories.json", nil)
 	if err != nil {

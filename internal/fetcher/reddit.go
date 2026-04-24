@@ -32,8 +32,16 @@ func FetchReddit(source config.Source, keywords []string, since time.Time) (sour
 	return FetchRedditContext(context.Background(), source, keywords, since)
 }
 
+func (c *Client) FetchReddit(source config.Source, keywords []string, since time.Time) (sourceFetchResult, error) {
+	return c.FetchRedditContext(context.Background(), source, keywords, since)
+}
+
 func FetchRedditContext(ctx context.Context, source config.Source, keywords []string, since time.Time) (sourceFetchResult, error) {
-	client := HTTPClient()
+	return NewClient(HTTPClient()).FetchRedditContext(ctx, source, keywords, since)
+}
+
+func (c *Client) FetchRedditContext(ctx context.Context, source config.Source, keywords []string, since time.Time) (sourceFetchResult, error) {
+	client := c.httpClient
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, source.URL, nil)
 	if err != nil {

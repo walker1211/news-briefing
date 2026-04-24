@@ -14,19 +14,39 @@ func FetchDocsPage(src config.Source, keywords []string, since time.Time) (sourc
 	return FetchDocsPageContext(context.Background(), src, keywords, since)
 }
 
+func (c *Client) FetchDocsPage(src config.Source, keywords []string, since time.Time) (sourceFetchResult, error) {
+	return c.FetchDocsPageContext(context.Background(), src, keywords, since)
+}
+
 func FetchDocsPageContext(ctx context.Context, src config.Source, _ []string, _ time.Time) (sourceFetchResult, error) {
-	return fetchPageSource(ctx, src)
+	return NewClient(HTTPClient()).FetchDocsPageContext(ctx, src, nil, time.Time{})
+}
+
+func (c *Client) FetchDocsPageContext(ctx context.Context, src config.Source, _ []string, _ time.Time) (sourceFetchResult, error) {
+	return c.fetchPageSource(ctx, src)
 }
 
 func FetchRepoPage(src config.Source, keywords []string, since time.Time) (sourceFetchResult, error) {
 	return FetchRepoPageContext(context.Background(), src, keywords, since)
 }
 
+func (c *Client) FetchRepoPage(src config.Source, keywords []string, since time.Time) (sourceFetchResult, error) {
+	return c.FetchRepoPageContext(context.Background(), src, keywords, since)
+}
+
 func FetchRepoPageContext(ctx context.Context, src config.Source, _ []string, _ time.Time) (sourceFetchResult, error) {
-	return fetchPageSource(ctx, src)
+	return NewClient(HTTPClient()).FetchRepoPageContext(ctx, src, nil, time.Time{})
+}
+
+func (c *Client) FetchRepoPageContext(ctx context.Context, src config.Source, _ []string, _ time.Time) (sourceFetchResult, error) {
+	return c.fetchPageSource(ctx, src)
 }
 
 func fetchPageSource(ctx context.Context, src config.Source) (sourceFetchResult, error) {
+	return NewClient(HTTPClient()).fetchPageSource(ctx, src)
+}
+
+func (c *Client) fetchPageSource(ctx context.Context, src config.Source) (sourceFetchResult, error) {
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 
@@ -35,7 +55,7 @@ func fetchPageSource(ctx context.Context, src config.Source) (sourceFetchResult,
 		return sourceFetchResult{}, fmt.Errorf("build page request: %w", err)
 	}
 
-	resp, err := HTTPClient().Do(req)
+	resp, err := c.httpClient.Do(req)
 	if err != nil {
 		return sourceFetchResult{}, err
 	}

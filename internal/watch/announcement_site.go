@@ -12,13 +12,13 @@ import (
 	"github.com/walker1211/news-briefing/internal/model"
 )
 
-func runAnnouncementSite(ctx context.Context, site config.WatchSite, now time.Time, indexState IndexState, articleState ArticleState) ([]model.Article, []model.WatchSeenArticle, []model.WatchEvent, error) {
+func runAnnouncementSite(ctx context.Context, site config.WatchSite, now time.Time, indexState IndexState, articleState ArticleState, fetchHTML fetchHTMLFunc) ([]model.Article, []model.WatchSeenArticle, []model.WatchEvent, error) {
 	type seenPayload struct {
 		summary string
 		body    string
 	}
 
-	homeHTML, err := fetchWatchHTML(ctx, site.HomeURL)
+	homeHTML, err := fetchHTML(ctx, site.HomeURL)
 	if err != nil {
 		return nil, nil, nil, err
 	}
@@ -34,7 +34,7 @@ func runAnnouncementSite(ctx context.Context, site config.WatchSite, now time.Ti
 	prevSnapshot, hasPrev := indexState.Categories[stateKey]
 	if !hasPrev {
 		for _, item := range current.Items {
-			articleHTML, err := fetchWatchHTML(ctx, item.URL)
+			articleHTML, err := fetchHTML(ctx, item.URL)
 			if err != nil {
 				return nil, nil, nil, err
 			}
@@ -75,7 +75,7 @@ func runAnnouncementSite(ctx context.Context, site config.WatchSite, now time.Ti
 			continue
 		}
 		state, ok := articleState[item.URL]
-		articleHTML, err := fetchWatchHTML(ctx, item.URL)
+		articleHTML, err := fetchHTML(ctx, item.URL)
 		if err != nil {
 			return nil, nil, nil, err
 		}
@@ -138,7 +138,7 @@ func runAnnouncementSite(ctx context.Context, site config.WatchSite, now time.Ti
 			continue
 		}
 
-		articleHTML, err := fetchWatchHTML(ctx, url)
+		articleHTML, err := fetchHTML(ctx, url)
 		if err != nil {
 			return nil, nil, nil, err
 		}
@@ -179,7 +179,7 @@ func runAnnouncementSite(ctx context.Context, site config.WatchSite, now time.Ti
 		articles = append(articles, watchEventToArticle(site, event))
 		payload, ok := seenPayloads[event.ArticleURL]
 		if !ok {
-			articleHTML, err := fetchWatchHTML(ctx, event.ArticleURL)
+			articleHTML, err := fetchHTML(ctx, event.ArticleURL)
 			if err != nil {
 				return nil, nil, nil, err
 			}

@@ -10,7 +10,6 @@ import (
 	"time"
 
 	"github.com/walker1211/news-briefing/internal/config"
-	"github.com/walker1211/news-briefing/internal/fetcher"
 	"github.com/walker1211/news-briefing/internal/model"
 	"github.com/walker1211/news-briefing/internal/output"
 )
@@ -57,8 +56,6 @@ func main() {
 		fmt.Fprintf(os.Stderr, "Error loading config: %v\n", err)
 		os.Exit(1)
 	}
-
-	fetcher.InitHTTPClient(cfg.Proxy)
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
