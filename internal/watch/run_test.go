@@ -81,11 +81,8 @@ func TestRunContextReturnsContextErrorWhenCancelled(t *testing.T) {
 }
 
 func TestRunContextPropagatesCancellationFromAnnouncementSite(t *testing.T) {
-	oldFetch := fetchWatchHTML
-	defer func() { fetchWatchHTML = oldFetch }()
-
 	ctx, cancel := context.WithCancel(context.Background())
-	fetchWatchHTML = func(ctx context.Context, url string) (string, error) {
+	fetchHTML := func(ctx context.Context, url string) (string, error) {
 		cancel()
 		return "", ctx.Err()
 	}
@@ -100,22 +97,19 @@ func TestRunContextPropagatesCancellationFromAnnouncementSite(t *testing.T) {
 		}}},
 	}
 
-	_, _, err := RunContext(ctx, cfg, time.Now())
+	_, _, err := runContext(ctx, cfg, time.Now(), fetchHTML)
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("RunContext() error = %v, want context.Canceled", err)
 	}
 }
 
 func TestRunBootstrapsCategoryBaselineWithoutBriefingArticles(t *testing.T) {
-	oldFetch := fetchWatchHTML
-	defer func() { fetchWatchHTML = oldFetch }()
-
 	responses := map[string]string{
 		"https://support.claude.com/zh-CN":                                  mustReadFixture(t, "anthropic/home.html"),
 		"https://support.claude.com/zh-CN/collections/4078535-security":     mustReadFixture(t, "anthropic/category_security.html"),
 		"https://support.claude.com/zh-CN/articles/14328960-claude-上的-身份验证": mustReadFixture(t, "anthropic/article_identity_verification.html"),
 	}
-	fetchWatchHTML = func(ctx context.Context, url string) (string, error) { return responses[url], nil }
+	fetchHTML := func(ctx context.Context, url string) (string, error) { return responses[url], nil }
 
 	cfg := &config.Config{
 		Output: config.OutputCfg{Dir: t.TempDir()},
@@ -129,7 +123,7 @@ func TestRunBootstrapsCategoryBaselineWithoutBriefingArticles(t *testing.T) {
 		}}},
 	}
 
-	articles, report, err := Run(cfg, time.Date(2026, 4, 15, 16, 0, 0, 0, time.UTC))
+	articles, report, err := runContext(context.Background(), cfg, time.Date(2026, 4, 15, 16, 0, 0, 0, time.UTC), fetchHTML)
 	if err != nil {
 		t.Fatalf("Run() error = %v", err)
 	}
@@ -152,15 +146,12 @@ func TestRunBootstrapsCategoryBaselineWithoutBriefingArticles(t *testing.T) {
 }
 
 func TestRunAnnouncementSiteBootstrapsWithoutBriefingOutput(t *testing.T) {
-	oldFetch := fetchWatchHTML
-	defer func() { fetchWatchHTML = oldFetch }()
-
 	responses := map[string]string{
 		"https://www.anthropic.com/news":                   mustReadAnnouncementFixture(t, "anthropic_news_home.html"),
 		"https://www.anthropic.com/news/claude-opus-4-7":   mustReadAnnouncementFixture(t, "anthropic_news_opus47.html"),
 		"https://www.anthropic.com/news/claude-sonnet-4-6": mustReadAnnouncementFixture(t, "anthropic_news_opus47.html"),
 	}
-	fetchWatchHTML = func(ctx context.Context, url string) (string, error) { return responses[url], nil }
+	fetchHTML := func(ctx context.Context, url string) (string, error) { return responses[url], nil }
 
 	cfg := &config.Config{
 		Output: config.OutputCfg{Dir: t.TempDir()},
@@ -175,7 +166,7 @@ func TestRunAnnouncementSiteBootstrapsWithoutBriefingOutput(t *testing.T) {
 		}}},
 	}
 
-	articles, report, err := Run(cfg, time.Date(2026, 4, 17, 9, 0, 0, 0, time.UTC))
+	articles, report, err := runContext(context.Background(), cfg, time.Date(2026, 4, 17, 9, 0, 0, 0, time.UTC), fetchHTML)
 	if err != nil {
 		t.Fatalf("Run() error = %v", err)
 	}
@@ -198,16 +189,13 @@ func TestRunAnnouncementSiteBootstrapsWithoutBriefingOutput(t *testing.T) {
 }
 
 func TestRunAnnouncementSiteIncludesNewArticleInBriefing(t *testing.T) {
-	oldFetch := fetchWatchHTML
-	defer func() { fetchWatchHTML = oldFetch }()
-
 	oldHome := `<html><body><main><a href="/news/claude-sonnet-4-6"><h2>Introducing Claude Sonnet 4.6</h2><p>Feb 17, 2026</p></a></main></body></html>`
 	responses := map[string]string{
 		"https://www.anthropic.com/news":                   mustReadAnnouncementFixture(t, "anthropic_news_home.html"),
 		"https://www.anthropic.com/news/claude-opus-4-7":   mustReadAnnouncementFixture(t, "anthropic_news_opus47.html"),
 		"https://www.anthropic.com/news/claude-sonnet-4-6": mustReadAnnouncementFixture(t, "anthropic_news_sonnet46.html"),
 	}
-	fetchWatchHTML = func(ctx context.Context, url string) (string, error) { return responses[url], nil }
+	fetchHTML := func(ctx context.Context, url string) (string, error) { return responses[url], nil }
 
 	cfg := &config.Config{
 		Output: config.OutputCfg{Dir: t.TempDir()},
@@ -244,7 +232,7 @@ func TestRunAnnouncementSiteIncludesNewArticleInBriefing(t *testing.T) {
 		t.Fatalf("articleStore.Save() error = %v", err)
 	}
 
-	articles, report, err := Run(cfg, time.Date(2026, 4, 17, 10, 0, 0, 0, time.UTC))
+	articles, report, err := runContext(context.Background(), cfg, time.Date(2026, 4, 17, 10, 0, 0, 0, time.UTC), fetchHTML)
 	if err != nil {
 		t.Fatalf("Run() error = %v", err)
 	}
@@ -266,9 +254,6 @@ func TestRunAnnouncementSiteIncludesNewArticleInBriefing(t *testing.T) {
 }
 
 func TestRunClaudeReleaseNotesIncludesNewArticleInBriefing(t *testing.T) {
-	oldFetch := fetchWatchHTML
-	defer func() { fetchWatchHTML = oldFetch }()
-
 	oldHome := `<html><body><main><h3><div id="february-17-2026"><div>February 17, 2026</div></div></h3><ul><li>We've launched <a href="https://www.anthropic.com/news/claude-sonnet-4-6">Claude Sonnet 4.6</a>, our latest balanced model combining speed and intelligence for everyday tasks. Sonnet 4.6 delivers improved agentic search performance while consuming fewer tokens.</li></ul></main></body></html>`
 	responses := map[string]string{
 		"https://platform.claude.com/docs/en/release-notes/overview":                  mustReadAnnouncementFixture(t, "claude_release_notes_home.html"),
@@ -277,7 +262,7 @@ func TestRunClaudeReleaseNotesIncludesNewArticleInBriefing(t *testing.T) {
 		"https://platform.claude.com/docs/en/release-notes/claude-opus-4-7":           mustReadAnnouncementFixture(t, "claude_release_notes_opus47.html"),
 		"https://platform.claude.com/docs/en/release-notes/claude-sonnet-4-6":         mustReadAnnouncementFixture(t, "claude_release_notes_sonnet46.html"),
 	}
-	fetchWatchHTML = func(ctx context.Context, url string) (string, error) { return responses[url], nil }
+	fetchHTML := func(ctx context.Context, url string) (string, error) { return responses[url], nil }
 
 	cfg := &config.Config{
 		Output: config.OutputCfg{Dir: t.TempDir()},
@@ -314,7 +299,7 @@ func TestRunClaudeReleaseNotesIncludesNewArticleInBriefing(t *testing.T) {
 		t.Fatalf("articleStore.Save() error = %v", err)
 	}
 
-	articles, report, err := Run(cfg, time.Date(2026, 4, 17, 10, 0, 0, 0, time.UTC))
+	articles, report, err := runContext(context.Background(), cfg, time.Date(2026, 4, 17, 10, 0, 0, 0, time.UTC), fetchHTML)
 	if err != nil {
 		t.Fatalf("Run() error = %v", err)
 	}
@@ -339,15 +324,12 @@ func TestRunClaudeReleaseNotesIncludesNewArticleInBriefing(t *testing.T) {
 }
 
 func TestRunSkipsFailedAnnouncementSiteAndKeepsOtherWatchSites(t *testing.T) {
-	oldFetch := fetchWatchHTML
-	defer func() { fetchWatchHTML = oldFetch }()
-
 	responses := map[string]string{
 		"https://support.claude.com/zh-CN":                                  mustReadFixture(t, "anthropic/home.html"),
 		"https://support.claude.com/zh-CN/collections/4078535-security":     mustReadFixture(t, "anthropic/category_security.html"),
 		"https://support.claude.com/zh-CN/articles/14328960-claude-上的-身份验证": mustReadFixture(t, "anthropic/article_identity_verification.html"),
 	}
-	fetchWatchHTML = func(ctx context.Context, url string) (string, error) {
+	fetchHTML := func(ctx context.Context, url string) (string, error) {
 		if url == "https://platform.claude.com/docs/en/release-notes/overview" {
 			return "", fmt.Errorf("EOF")
 		}
@@ -377,7 +359,7 @@ func TestRunSkipsFailedAnnouncementSiteAndKeepsOtherWatchSites(t *testing.T) {
 		}},
 	}
 
-	articles, report, err := Run(cfg, time.Date(2026, 4, 15, 16, 0, 0, 0, time.UTC))
+	articles, report, err := runContext(context.Background(), cfg, time.Date(2026, 4, 15, 16, 0, 0, 0, time.UTC), fetchHTML)
 	if err != nil {
 		t.Fatalf("Run() error = %v, want watch to continue when announcement site fails", err)
 	}
@@ -414,9 +396,6 @@ func TestRunSkipsFailedAnnouncementSiteAndKeepsOtherWatchSites(t *testing.T) {
 }
 
 func TestRunBackfillsMissingArticleStateForExistingCategoryBaseline(t *testing.T) {
-	oldFetch := fetchWatchHTML
-	defer func() { fetchWatchHTML = oldFetch }()
-
 	categoryHTML := mustReadFixture(t, "anthropic/category_security.html")
 	snapshot, err := parseAnthropicCategory("安全保障", "https://support.claude.com/zh-CN/collections/4078535-security", categoryHTML)
 	if err != nil {
@@ -428,7 +407,7 @@ func TestRunBackfillsMissingArticleStateForExistingCategoryBaseline(t *testing.T
 		"https://support.claude.com/zh-CN/collections/4078535-security":     categoryHTML,
 		"https://support.claude.com/zh-CN/articles/14328960-claude-上的-身份验证": mustReadFixture(t, "anthropic/article_identity_verification.html"),
 	}
-	fetchWatchHTML = func(ctx context.Context, url string) (string, error) { return responses[url], nil }
+	fetchHTML := func(ctx context.Context, url string) (string, error) { return responses[url], nil }
 
 	cfg := &config.Config{
 		Output: config.OutputCfg{Dir: t.TempDir()},
@@ -450,7 +429,7 @@ func TestRunBackfillsMissingArticleStateForExistingCategoryBaseline(t *testing.T
 		t.Fatalf("indexStore.Save() error = %v", err)
 	}
 
-	articles, report, err := Run(cfg, time.Date(2026, 4, 15, 16, 0, 0, 0, time.UTC))
+	articles, report, err := runContext(context.Background(), cfg, time.Date(2026, 4, 15, 16, 0, 0, 0, time.UTC), fetchHTML)
 	if err != nil {
 		t.Fatalf("Run() error = %v", err)
 	}
@@ -471,7 +450,7 @@ func TestRunBackfillsMissingArticleStateForExistingCategoryBaseline(t *testing.T
 
 	responses["https://support.claude.com/zh-CN/articles/14328960-claude-上的-身份验证"] = `<html><head><title>Claude 上的身份验证</title><meta name="description" content="某些使用场景需要提供政府颁发的身份证件与实时自拍。" /></head><body><article><h1>Claude 上的身份验证</h1><p>某些使用场景需要提供政府颁发的身份证件与实时自拍。</p><p>新增了实时自拍与手机号码交叉校验。</p></article></body></html>`
 
-	articles, report, err = Run(cfg, time.Date(2026, 4, 15, 17, 0, 0, 0, time.UTC))
+	articles, report, err = runContext(context.Background(), cfg, time.Date(2026, 4, 15, 17, 0, 0, 0, time.UTC), fetchHTML)
 	if err != nil {
 		t.Fatalf("Run() second error = %v", err)
 	}
@@ -490,15 +469,12 @@ func TestRunBackfillsMissingArticleStateForExistingCategoryBaseline(t *testing.T
 }
 
 func TestRunDetectsContentChangedForExistingArticle(t *testing.T) {
-	oldFetch := fetchWatchHTML
-	defer func() { fetchWatchHTML = oldFetch }()
-
 	responses := map[string]string{
 		"https://support.claude.com/zh-CN":                                  mustReadFixture(t, "anthropic/home.html"),
 		"https://support.claude.com/zh-CN/collections/4078535-security":     mustReadFixture(t, "anthropic/category_security.html"),
 		"https://support.claude.com/zh-CN/articles/14328960-claude-上的-身份验证": `<html><head><title>Claude 上的身份验证</title><meta name="description" content="某些使用场景需要提供政府颁发的身份证件与实时自拍。" /></head><body><article><h1>Claude 上的身份验证</h1><p>某些使用场景需要提供政府颁发的身份证件与实时自拍。</p><p>新增了实时自拍与手机号码交叉校验。</p></article></body></html>`,
 	}
-	fetchWatchHTML = func(ctx context.Context, url string) (string, error) { return responses[url], nil }
+	fetchHTML := func(ctx context.Context, url string) (string, error) { return responses[url], nil }
 
 	cfg := &config.Config{
 		Output: config.OutputCfg{Dir: t.TempDir()},
@@ -543,7 +519,7 @@ func TestRunDetectsContentChangedForExistingArticle(t *testing.T) {
 		t.Fatalf("articleStore.Save() error = %v", err)
 	}
 
-	articles, report, err := Run(cfg, time.Date(2026, 4, 15, 16, 0, 0, 0, time.UTC))
+	articles, report, err := runContext(context.Background(), cfg, time.Date(2026, 4, 15, 16, 0, 0, 0, time.UTC), fetchHTML)
 	if err != nil {
 		t.Fatalf("Run() error = %v", err)
 	}
@@ -562,16 +538,13 @@ func TestRunDetectsContentChangedForExistingArticle(t *testing.T) {
 }
 
 func TestRunKeepsArticleCountChangedInSidecarOnly(t *testing.T) {
-	oldFetch := fetchWatchHTML
-	defer func() { fetchWatchHTML = oldFetch }()
-
 	responses := map[string]string{
 		"https://support.claude.com/zh-CN":                                  mustReadFixture(t, "anthropic/home.html"),
 		"https://support.claude.com/zh-CN/collections/4078535-security":     mustReadFixture(t, "anthropic/category_security.html"),
 		"https://support.claude.com/zh-CN/articles/14328960-claude-上的-身份验证": mustReadFixture(t, "anthropic/article_identity_verification.html"),
 		"https://support.claude.com/zh-CN/articles/14330000-电话验证":           `<html><head><title>电话验证</title><meta name="description" content="电话验证帮助内容。" /></head><body><article><h1>电话验证</h1><p>电话验证帮助内容。</p></article></body></html>`,
 	}
-	fetchWatchHTML = func(ctx context.Context, url string) (string, error) { return responses[url], nil }
+	fetchHTML := func(ctx context.Context, url string) (string, error) { return responses[url], nil }
 
 	cfg := &config.Config{
 		Output: config.OutputCfg{Dir: t.TempDir()},
@@ -605,7 +578,7 @@ func TestRunKeepsArticleCountChangedInSidecarOnly(t *testing.T) {
 		t.Fatalf("indexStore.Save() error = %v", err)
 	}
 
-	articles, report, err := Run(cfg, time.Date(2026, 4, 15, 16, 0, 0, 0, time.UTC))
+	articles, report, err := runContext(context.Background(), cfg, time.Date(2026, 4, 15, 16, 0, 0, 0, time.UTC), fetchHTML)
 	if err != nil {
 		t.Fatalf("Run() error = %v", err)
 	}
@@ -627,14 +600,11 @@ func TestRunKeepsArticleCountChangedInSidecarOnly(t *testing.T) {
 }
 
 func TestRunDeletesArticleStateForRemovedArticle(t *testing.T) {
-	oldFetch := fetchWatchHTML
-	defer func() { fetchWatchHTML = oldFetch }()
-
 	responses := map[string]string{
 		"https://support.claude.com/zh-CN":                              `<html><body><a href="/zh-CN/collections/4078535-security">安全保障 <span>0 articles</span></a></body></html>`,
 		"https://support.claude.com/zh-CN/collections/4078535-security": `<html><body><h1>安全保障</h1></body></html>`,
 	}
-	fetchWatchHTML = func(ctx context.Context, url string) (string, error) { return responses[url], nil }
+	fetchHTML := func(ctx context.Context, url string) (string, error) { return responses[url], nil }
 
 	cfg := &config.Config{
 		Output: config.OutputCfg{Dir: t.TempDir()},
@@ -680,7 +650,7 @@ func TestRunDeletesArticleStateForRemovedArticle(t *testing.T) {
 		t.Fatalf("articleStore.Save() error = %v", err)
 	}
 
-	_, report, err := Run(cfg, time.Date(2026, 4, 15, 16, 0, 0, 0, time.UTC))
+	_, report, err := runContext(context.Background(), cfg, time.Date(2026, 4, 15, 16, 0, 0, 0, time.UTC), fetchHTML)
 	if err != nil {
 		t.Fatalf("Run() error = %v", err)
 	}
@@ -704,15 +674,12 @@ func TestRunDeletesArticleStateForRemovedArticle(t *testing.T) {
 }
 
 func TestRunWritesSeenStateForContentChangedBriefingArticle(t *testing.T) {
-	oldFetch := fetchWatchHTML
-	defer func() { fetchWatchHTML = oldFetch }()
-
 	responses := map[string]string{
 		"https://support.claude.com/zh-CN":                                  mustReadFixture(t, "anthropic/home.html"),
 		"https://support.claude.com/zh-CN/collections/4078535-security":     mustReadFixture(t, "anthropic/category_security.html"),
 		"https://support.claude.com/zh-CN/articles/14328960-claude-上的-身份验证": `<html><head><title>Claude 上的身份验证</title><meta name="description" content="某些使用场景需要提供政府颁发的身份证件与实时自拍。" /></head><body><article><h1>Claude 上的身份验证</h1><p>某些使用场景需要提供政府颁发的身份证件与实时自拍。</p><p>新增了实时自拍与手机号码交叉校验。</p></article></body></html>`,
 	}
-	fetchWatchHTML = func(ctx context.Context, url string) (string, error) { return responses[url], nil }
+	fetchHTML := func(ctx context.Context, url string) (string, error) { return responses[url], nil }
 
 	cfg := &config.Config{
 		Output: config.OutputCfg{Dir: t.TempDir()},
@@ -758,7 +725,7 @@ func TestRunWritesSeenStateForContentChangedBriefingArticle(t *testing.T) {
 		t.Fatalf("articleStore.Save() error = %v", err)
 	}
 
-	articles, _, err := Run(cfg, time.Date(2026, 4, 15, 16, 0, 0, 0, time.UTC))
+	articles, _, err := runContext(context.Background(), cfg, time.Date(2026, 4, 15, 16, 0, 0, 0, time.UTC), fetchHTML)
 	if err != nil {
 		t.Fatalf("Run() error = %v", err)
 	}
@@ -785,15 +752,12 @@ func TestRunWritesSeenStateForContentChangedBriefingArticle(t *testing.T) {
 }
 
 func TestRunBootstrapDoesNotWriteSeenState(t *testing.T) {
-	oldFetch := fetchWatchHTML
-	defer func() { fetchWatchHTML = oldFetch }()
-
 	responses := map[string]string{
 		"https://support.claude.com/zh-CN":                                  mustReadFixture(t, "anthropic/home.html"),
 		"https://support.claude.com/zh-CN/collections/4078535-security":     mustReadFixture(t, "anthropic/category_security.html"),
 		"https://support.claude.com/zh-CN/articles/14328960-claude-上的-身份验证": mustReadFixture(t, "anthropic/article_identity_verification.html"),
 	}
-	fetchWatchHTML = func(ctx context.Context, url string) (string, error) { return responses[url], nil }
+	fetchHTML := func(ctx context.Context, url string) (string, error) { return responses[url], nil }
 
 	cfg := &config.Config{
 		Output: config.OutputCfg{Dir: t.TempDir()},
@@ -807,7 +771,7 @@ func TestRunBootstrapDoesNotWriteSeenState(t *testing.T) {
 		}}},
 	}
 
-	_, _, err := Run(cfg, time.Date(2026, 4, 15, 16, 0, 0, 0, time.UTC))
+	_, _, err := runContext(context.Background(), cfg, time.Date(2026, 4, 15, 16, 0, 0, 0, time.UTC), fetchHTML)
 	if err != nil {
 		t.Fatalf("Run() error = %v", err)
 	}
@@ -822,15 +786,12 @@ func TestRunBootstrapDoesNotWriteSeenState(t *testing.T) {
 }
 
 func TestRunContentChangedUpdatesSeenState(t *testing.T) {
-	oldFetch := fetchWatchHTML
-	defer func() { fetchWatchHTML = oldFetch }()
-
 	responses := map[string]string{
 		"https://support.claude.com/zh-CN":                                  mustReadFixture(t, "anthropic/home.html"),
 		"https://support.claude.com/zh-CN/collections/4078535-security":     mustReadFixture(t, "anthropic/category_security.html"),
 		"https://support.claude.com/zh-CN/articles/14328960-claude-上的-身份验证": mustReadFixture(t, "anthropic/article_identity_verification.html"),
 	}
-	fetchWatchHTML = func(ctx context.Context, url string) (string, error) { return responses[url], nil }
+	fetchHTML := func(ctx context.Context, url string) (string, error) { return responses[url], nil }
 
 	cfg := &config.Config{
 		Output: config.OutputCfg{Dir: t.TempDir()},
@@ -892,7 +853,7 @@ func TestRunContentChangedUpdatesSeenState(t *testing.T) {
 
 	responses["https://support.claude.com/zh-CN/articles/14328960-claude-上的-身份验证"] = `<html><head><title>Claude 上的身份验证</title><meta name="description" content="某些使用场景需要提供政府颁发的身份证件与实时自拍。" /></head><body><article><h1>Claude 上的身份验证</h1><p>某些使用场景需要提供政府颁发的身份证件与实时自拍。</p><p>新增了实时自拍与手机号码交叉校验。</p></article></body></html>`
 
-	_, _, err := Run(cfg, time.Date(2026, 4, 15, 16, 0, 0, 0, time.UTC))
+	_, _, err := runContext(context.Background(), cfg, time.Date(2026, 4, 15, 16, 0, 0, 0, time.UTC), fetchHTML)
 	if err != nil {
 		t.Fatalf("Run() error = %v", err)
 	}

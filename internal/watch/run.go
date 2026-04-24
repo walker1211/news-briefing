@@ -28,7 +28,7 @@ func NewRunner(httpClient *http.Client) *Runner {
 	return &Runner{httpClient: httpClient}
 }
 
-var fetchWatchHTML = func(ctx context.Context, url string) (string, error) {
+func fetchWatchHTML(ctx context.Context, url string) (string, error) {
 	return fetchWatchHTMLWith(ctx, fetcher.HTTPClient(), url)
 }
 

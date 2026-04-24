@@ -88,6 +88,7 @@ type Runner struct {
 	extraFlags         []string
 	appendSystemPrompt bool
 	proxyEnv           []string
+	retrySleep         sleepFunc
 }
 
 type callKind string
@@ -140,6 +141,7 @@ func NewRunner(command string, args []string, extraFlags []string, appendSystemP
 		extraFlags:         append([]string(nil), extraFlags...),
 		appendSystemPrompt: appendSystemPrompt,
 		proxyEnv:           proxyEnv,
+		retrySleep:         retrySleep,
 	}
 }
 
@@ -194,7 +196,9 @@ func isRetryableAICLIError(err error, stdout string, stderr string) bool {
 	return false
 }
 
-var retrySleep = func(ctx context.Context, d time.Duration) error {
+type sleepFunc func(context.Context, time.Duration) error
+
+func retrySleep(ctx context.Context, d time.Duration) error {
 	timer := time.NewTimer(d)
 	defer timer.Stop()
 	select {
@@ -217,7 +221,7 @@ func (r *Runner) callClaudeWithKindContext(ctx context.Context, kind callKind, p
 			return "", err
 		}
 		if delay > 0 {
-			if err := retrySleep(ctx, delay); err != nil {
+			if err := r.retrySleep(ctx, delay); err != nil {
 				return "", err
 			}
 		}

@@ -196,10 +196,7 @@ func TestCallClaudeIncludesStdoutAndStderrOnExitError(t *testing.T) {
 func TestCallClaudeRetriesRetryableFailureAndEventuallySucceeds(t *testing.T) {
 	dir := t.TempDir()
 	oldPath := os.Getenv("PATH")
-	oldRetrySleep := retrySleep
-	retrySleep = func(context.Context, time.Duration) error { return nil }
 	t.Cleanup(func() {
-		retrySleep = oldRetrySleep
 		_ = os.Setenv("PATH", oldPath)
 		ResetCommandForTest()
 	})
@@ -228,6 +225,7 @@ func TestCallClaudeRetriesRetryableFailureAndEventuallySucceeds(t *testing.T) {
 	}
 
 	runner := NewRunner("flaky-ai", nil, nil, true, "", "")
+	runner.retrySleep = func(context.Context, time.Duration) error { return nil }
 	got, err := runner.callClaudeWithKind(callKindSummarize, "hello world")
 	if err != nil {
 		t.Fatalf("callClaudeWithKind() error = %v", err)
@@ -258,9 +256,7 @@ func TestCallClaudeWithKindContextReturnsContextErrorWithoutRetry(t *testing.T) 
 func TestCallClaudeWithKindContextStopsDuringRetrySleep(t *testing.T) {
 	dir := t.TempDir()
 	oldPath := os.Getenv("PATH")
-	oldRetrySleep := retrySleep
 	t.Cleanup(func() {
-		retrySleep = oldRetrySleep
 		_ = os.Setenv("PATH", oldPath)
 		ResetCommandForTest()
 	})
@@ -278,12 +274,11 @@ func TestCallClaudeWithKindContextStopsDuringRetrySleep(t *testing.T) {
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
-	retrySleep = func(ctx context.Context, d time.Duration) error {
+	runner := NewRunner("cancel-retry-ai", nil, nil, true, "", "")
+	runner.retrySleep = func(ctx context.Context, d time.Duration) error {
 		cancel()
 		return ctx.Err()
 	}
-
-	runner := NewRunner("cancel-retry-ai", nil, nil, true, "", "")
 	_, err := runner.callClaudeWithKindContext(ctx, callKindSummarize, "hello world")
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("callClaudeWithKindContext() error = %v, want context.Canceled", err)
@@ -300,10 +295,7 @@ func TestIsRetryableAICLIErrorRejectsNonRetryableFailure(t *testing.T) {
 func TestCallClaudeReturnsAggregatedErrorAfterRetryExhaustion(t *testing.T) {
 	dir := t.TempDir()
 	oldPath := os.Getenv("PATH")
-	oldRetrySleep := retrySleep
-	retrySleep = func(context.Context, time.Duration) error { return nil }
 	t.Cleanup(func() {
-		retrySleep = oldRetrySleep
 		_ = os.Setenv("PATH", oldPath)
 		ResetCommandForTest()
 	})
@@ -330,6 +322,7 @@ func TestCallClaudeReturnsAggregatedErrorAfterRetryExhaustion(t *testing.T) {
 	}
 
 	runner := NewRunner("always-fail-ai", nil, nil, true, "", "")
+	runner.retrySleep = func(context.Context, time.Duration) error { return nil }
 	_, err := runner.callClaudeWithKind(callKindSummarize, "hello world")
 	if err == nil {
 		t.Fatal("callClaudeWithKind() error = nil, want retry exhaustion")
@@ -354,11 +347,8 @@ func TestCallClaudeWritesFailureLogAfterRetryExhaustion(t *testing.T) {
 	logPath := filepath.Join(dir, "ai-cli-failures.log")
 	oldLogPath := aiCLIFailureLogPath
 	oldPath := os.Getenv("PATH")
-	oldRetrySleep := retrySleep
-	retrySleep = func(context.Context, time.Duration) error { return nil }
 	t.Cleanup(func() {
 		aiCLIFailureLogPath = oldLogPath
-		retrySleep = oldRetrySleep
 		_ = os.Setenv("PATH", oldPath)
 		ResetCommandForTest()
 	})
@@ -378,6 +368,7 @@ func TestCallClaudeWritesFailureLogAfterRetryExhaustion(t *testing.T) {
 	}
 
 	runner := NewRunner("log-fail-ai", nil, nil, true, "", "")
+	runner.retrySleep = func(context.Context, time.Duration) error { return nil }
 	_, err := runner.callClaudeWithKind(callKindTranslate, "hello world")
 	if err == nil {
 		t.Fatal("callClaudeWithKind() error = nil, want failure")
@@ -396,10 +387,7 @@ func TestCallClaudeWritesFailureLogAfterRetryExhaustion(t *testing.T) {
 func TestCallClaudeRetrySuccessStillSanitizesCCSOutput(t *testing.T) {
 	dir := t.TempDir()
 	oldPath := os.Getenv("PATH")
-	oldRetrySleep := retrySleep
-	retrySleep = func(context.Context, time.Duration) error { return nil }
 	t.Cleanup(func() {
-		retrySleep = oldRetrySleep
 		_ = os.Setenv("PATH", oldPath)
 		ResetCommandForTest()
 	})
@@ -428,6 +416,7 @@ func TestCallClaudeRetrySuccessStillSanitizesCCSOutput(t *testing.T) {
 	}
 
 	runner := NewRunner("ccs", []string{"codex"}, nil, true, "", "")
+	runner.retrySleep = func(context.Context, time.Duration) error { return nil }
 	got, err := runner.callClaudeWithKind(callKindSummarize, "hello world")
 	if err != nil {
 		t.Fatalf("callClaudeWithKind() error = %v", err)
@@ -440,10 +429,7 @@ func TestCallClaudeRetrySuccessStillSanitizesCCSOutput(t *testing.T) {
 func TestCallClaudeRetriesWhenSanitizedOutputIsEmpty(t *testing.T) {
 	dir := t.TempDir()
 	oldPath := os.Getenv("PATH")
-	oldRetrySleep := retrySleep
-	retrySleep = func(context.Context, time.Duration) error { return nil }
 	t.Cleanup(func() {
-		retrySleep = oldRetrySleep
 		_ = os.Setenv("PATH", oldPath)
 		ResetCommandForTest()
 	})
@@ -472,6 +458,7 @@ func TestCallClaudeRetriesWhenSanitizedOutputIsEmpty(t *testing.T) {
 	}
 
 	runner := NewRunner("ccs", []string{"codex"}, nil, true, "", "")
+	runner.retrySleep = func(context.Context, time.Duration) error { return nil }
 	got, err := runner.callClaudeWithKind(callKindSummarize, "hello world")
 	if err != nil {
 		t.Fatalf("callClaudeWithKind() error = %v", err)
@@ -494,11 +481,8 @@ func TestTranslateWritesFailureLogWhenSanitizedOutputStaysEmpty(t *testing.T) {
 	statePath := filepath.Join(dir, "attempts.txt")
 	oldLogPath := aiCLIFailureLogPath
 	oldPath := os.Getenv("PATH")
-	oldRetrySleep := retrySleep
-	retrySleep = func(context.Context, time.Duration) error { return nil }
 	t.Cleanup(func() {
 		aiCLIFailureLogPath = oldLogPath
-		retrySleep = oldRetrySleep
 		_ = os.Setenv("PATH", oldPath)
 		ResetCommandForTest()
 	})
@@ -523,6 +507,7 @@ func TestTranslateWritesFailureLogWhenSanitizedOutputStaysEmpty(t *testing.T) {
 	}
 
 	runner := NewRunner("ccs", []string{"codex"}, nil, true, "", "")
+	runner.retrySleep = func(context.Context, time.Duration) error { return nil }
 	_, err := runner.Translate(sampleArticles(), []string{"AI/科技"}, time.Local)
 	if err == nil {
 		t.Fatal("Translate() error = nil, want retry exhaustion")
@@ -556,11 +541,8 @@ func TestSummarizeWritesFailureLogWhenSanitizedOutputStaysEmpty(t *testing.T) {
 	statePath := filepath.Join(dir, "attempts.txt")
 	oldLogPath := aiCLIFailureLogPath
 	oldPath := os.Getenv("PATH")
-	oldRetrySleep := retrySleep
-	retrySleep = func(context.Context, time.Duration) error { return nil }
 	t.Cleanup(func() {
 		aiCLIFailureLogPath = oldLogPath
-		retrySleep = oldRetrySleep
 		_ = os.Setenv("PATH", oldPath)
 		ResetCommandForTest()
 	})
@@ -585,6 +567,7 @@ func TestSummarizeWritesFailureLogWhenSanitizedOutputStaysEmpty(t *testing.T) {
 	}
 
 	runner := NewRunner("ccs", []string{"codex"}, nil, true, "", "")
+	runner.retrySleep = func(context.Context, time.Duration) error { return nil }
 	_, err := runner.Summarize(sampleArticles(), []string{"AI/科技"}, time.Local)
 	if err == nil {
 		t.Fatal("Summarize() error = nil, want retry exhaustion")
@@ -618,11 +601,8 @@ func TestDeepDiveWritesFailureLogWhenSanitizedOutputStaysEmpty(t *testing.T) {
 	statePath := filepath.Join(dir, "attempts.txt")
 	oldLogPath := aiCLIFailureLogPath
 	oldPath := os.Getenv("PATH")
-	oldRetrySleep := retrySleep
-	retrySleep = func(context.Context, time.Duration) error { return nil }
 	t.Cleanup(func() {
 		aiCLIFailureLogPath = oldLogPath
-		retrySleep = oldRetrySleep
 		_ = os.Setenv("PATH", oldPath)
 		ResetCommandForTest()
 	})
@@ -647,6 +627,7 @@ func TestDeepDiveWritesFailureLogWhenSanitizedOutputStaysEmpty(t *testing.T) {
 	}
 
 	runner := NewRunner("ccs", []string{"codex"}, nil, true, "", "")
+	runner.retrySleep = func(context.Context, time.Duration) error { return nil }
 	_, err := runner.DeepDive("OpenAI", sampleArticles(), time.Local)
 	if err == nil {
 		t.Fatal("DeepDive() error = nil, want retry exhaustion")

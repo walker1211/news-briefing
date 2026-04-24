@@ -19,7 +19,9 @@ const (
 	retryDelay = 200 * time.Millisecond
 )
 
-var sleepContext = func(ctx context.Context, d time.Duration) error {
+type sleepFunc func(context.Context, time.Duration) error
+
+func sleepContext(ctx context.Context, d time.Duration) error {
 	timer := time.NewTimer(d)
 	defer timer.Stop()
 	select {
@@ -62,27 +64,27 @@ func NewClient(httpClient *http.Client) *Client {
 	return &Client{httpClient: httpClient}
 }
 
-var fetchRSSSource = func(ctx context.Context, src config.Source, keywords []string, since time.Time) (sourceFetchResult, error) {
+func fetchRSSSource(ctx context.Context, src config.Source, keywords []string, since time.Time) (sourceFetchResult, error) {
 	return FetchRSSContext(ctx, src, keywords, since)
 }
 
-var fetchHackerNewsSource = func(ctx context.Context, src config.Source, keywords []string, since time.Time) (sourceFetchResult, error) {
+func fetchHackerNewsSource(ctx context.Context, src config.Source, keywords []string, since time.Time) (sourceFetchResult, error) {
 	return FetchHackerNewsContext(ctx, src, keywords, since)
 }
 
-var fetchRedditDirect = func(ctx context.Context, src config.Source, keywords []string, since time.Time) (sourceFetchResult, error) {
+func fetchRedditDirect(ctx context.Context, src config.Source, keywords []string, since time.Time) (sourceFetchResult, error) {
 	return FetchRedditContext(ctx, src, keywords, since)
 }
 
-var fetchRedditSource = func(ctx context.Context, src config.Source, keywords []string, since time.Time) (sourceFetchResult, error) {
+func fetchRedditSource(ctx context.Context, src config.Source, keywords []string, since time.Time) (sourceFetchResult, error) {
 	return fetchWithRetry(ctx, src, keywords, since)
 }
 
-var fetchDocsPageSource = func(ctx context.Context, src config.Source, keywords []string, since time.Time) (sourceFetchResult, error) {
+func fetchDocsPageSource(ctx context.Context, src config.Source, keywords []string, since time.Time) (sourceFetchResult, error) {
 	return FetchDocsPageContext(ctx, src, keywords, since)
 }
 
-var fetchRepoPageSource = func(ctx context.Context, src config.Source, keywords []string, since time.Time) (sourceFetchResult, error) {
+func fetchRepoPageSource(ctx context.Context, src config.Source, keywords []string, since time.Time) (sourceFetchResult, error) {
 	return FetchRepoPageContext(ctx, src, keywords, since)
 }
 
@@ -112,8 +114,8 @@ type FailedSource struct {
 	Err  error
 }
 
-var fetchAllSourcesDetailed = func(ctx context.Context, cfg *config.Config, since time.Time) ([]sourceFetchResult, []FailedSource, error) {
-	return fetchAllSourcesDetailedWith(ctx, cfg, since, serialSourceFetchers())
+func fetchAllSourcesDetailed(ctx context.Context, cfg *config.Config, since time.Time) ([]sourceFetchResult, []FailedSource, error) {
+	return fetchAllSourcesDetailedWith(ctx, cfg, since, serialSourceFetchers(), sleepContext)
 }
 
 // FetchAll 并发抓取所有新闻源，支持重试。
@@ -230,13 +232,13 @@ func applyDedupContext(ctx context.Context, articles []model.Article, markSeen b
 }
 
 func (c *Client) fetchAllSourcesDetailed(ctx context.Context, cfg *config.Config, since time.Time) ([]sourceFetchResult, []FailedSource, error) {
-	return fetchAllSourcesDetailedWith(ctx, cfg, since, c.serialSourceFetchers())
+	return fetchAllSourcesDetailedWith(ctx, cfg, since, c.serialSourceFetchers(sleepContext), sleepContext)
 }
 
-func (c *Client) serialSourceFetchers() sourceFetchers {
+func (c *Client) serialSourceFetchers(sleep sleepFunc) sourceFetchers {
 	fetchers := c.sourceFetchers()
 	fetchers.reddit = func(ctx context.Context, src config.Source, keywords []string, since time.Time) (sourceFetchResult, error) {
-		return fetchWithRetryUsing(ctx, src, keywords, since, c.sourceFetchers())
+		return fetchWithRetryUsing(ctx, src, keywords, since, c.sourceFetchers(), sleep)
 	}
 	return fetchers
 }
@@ -251,7 +253,7 @@ func (c *Client) sourceFetchers() sourceFetchers {
 	}
 }
 
-func fetchAllSourcesDetailedWith(ctx context.Context, cfg *config.Config, since time.Time, fetchers sourceFetchers) ([]sourceFetchResult, []FailedSource, error) {
+func fetchAllSourcesDetailedWith(ctx context.Context, cfg *config.Config, since time.Time, fetchers sourceFetchers, sleep sleepFunc) ([]sourceFetchResult, []FailedSource, error) {
 	var (
 		mu     sync.Mutex
 		all    []sourceFetchResult
@@ -270,16 +272,14 @@ func fetchAllSourcesDetailedWith(ctx context.Context, cfg *config.Config, since 
 	}
 
 	for _, src := range otherSources {
-		wg.Add(1)
-		go func(src config.Source) {
-			defer wg.Done()
+		wg.Go(func() {
 			if err := ctx.Err(); err != nil {
 				mu.Lock()
 				failed = append(failed, FailedSource{Name: src.Name, Err: err})
 				mu.Unlock()
 				return
 			}
-			result, err := fetchWithRetryUsing(ctx, src, cfg.Keywords, since, fetchers)
+			result, err := fetchWithRetryUsing(ctx, src, cfg.Keywords, since, fetchers, sleep)
 			mu.Lock()
 			if err != nil {
 				failed = append(failed, FailedSource{Name: src.Name, Err: err})
@@ -287,14 +287,12 @@ func fetchAllSourcesDetailedWith(ctx context.Context, cfg *config.Config, since 
 				all = append(all, result)
 			}
 			mu.Unlock()
-		}(src)
+		})
 	}
 
 	if len(redditSources) > 0 {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			fetchRedditSourcesSeriallyWith(ctx, redditSources, cfg.Keywords, since, fetchers.reddit, func(item FailedSource) {
+		wg.Go(func() {
+			fetchRedditSourcesSeriallyWith(ctx, redditSources, cfg.Keywords, since, fetchers.reddit, sleep, func(item FailedSource) {
 				mu.Lock()
 				failed = append(failed, item)
 				mu.Unlock()
@@ -303,7 +301,7 @@ func fetchAllSourcesDetailedWith(ctx context.Context, cfg *config.Config, since 
 				all = append(all, item)
 				mu.Unlock()
 			})
-		}()
+		})
 	}
 
 	wg.Wait()
@@ -313,18 +311,14 @@ func fetchAllSourcesDetailedWith(ctx context.Context, cfg *config.Config, since 
 	return all, failed, nil
 }
 
-func fetchRedditSourcesSerially(ctx context.Context, sources []config.Source, keywords []string, since time.Time, appendFailed func(FailedSource), appendResult func(sourceFetchResult)) {
-	fetchRedditSourcesSeriallyWith(ctx, sources, keywords, since, fetchRedditSource, appendFailed, appendResult)
-}
-
-func fetchRedditSourcesSeriallyWith(ctx context.Context, sources []config.Source, keywords []string, since time.Time, fetchReddit sourceFetchFunc, appendFailed func(FailedSource), appendResult func(sourceFetchResult)) {
+func fetchRedditSourcesSeriallyWith(ctx context.Context, sources []config.Source, keywords []string, since time.Time, fetchReddit sourceFetchFunc, sleep sleepFunc, appendFailed func(FailedSource), appendResult func(sourceFetchResult)) {
 	for i, src := range sources {
 		if err := ctx.Err(); err != nil {
 			appendFailed(FailedSource{Name: src.Name, Err: err})
 			return
 		}
 		if i > 0 {
-			if err := sleepContext(ctx, 2*time.Second); err != nil {
+			if err := sleep(ctx, 2*time.Second); err != nil {
 				appendFailed(FailedSource{Name: src.Name, Err: err})
 				return
 			}
@@ -339,10 +333,10 @@ func fetchRedditSourcesSeriallyWith(ctx context.Context, sources []config.Source
 }
 
 func fetchWithRetry(ctx context.Context, src config.Source, keywords []string, since time.Time) (sourceFetchResult, error) {
-	return fetchWithRetryUsing(ctx, src, keywords, since, defaultSourceFetchers())
+	return fetchWithRetryUsing(ctx, src, keywords, since, defaultSourceFetchers(), sleepContext)
 }
 
-func fetchWithRetryUsing(ctx context.Context, src config.Source, keywords []string, since time.Time, fetchers sourceFetchers) (sourceFetchResult, error) {
+func fetchWithRetryUsing(ctx context.Context, src config.Source, keywords []string, since time.Time, fetchers sourceFetchers, sleep sleepFunc) (sourceFetchResult, error) {
 	var result sourceFetchResult
 	var lastErr error
 
@@ -377,7 +371,7 @@ func fetchWithRetryUsing(ctx context.Context, src config.Source, keywords []stri
 			break
 		}
 		if attempt < maxRetries {
-			if err := sleepContext(ctx, retryDelay); err != nil {
+			if err := sleep(ctx, retryDelay); err != nil {
 				return sourceFetchResult{}, err
 			}
 		}
@@ -386,15 +380,16 @@ func fetchWithRetryUsing(ctx context.Context, src config.Source, keywords []stri
 }
 
 // isTTY 检测 stdout 是否为终端
-var ttyChecked bool
-var ttyResult bool
+var (
+	ttyOnce   sync.Once
+	ttyResult bool
+)
 
 func checkTTY() bool {
-	if !ttyChecked {
+	ttyOnce.Do(func() {
 		fi, _ := os.Stdout.Stat()
 		ttyResult = (fi.Mode() & os.ModeCharDevice) != 0
-		ttyChecked = true
-	}
+	})
 	return ttyResult
 }
 
