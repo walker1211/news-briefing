@@ -6,6 +6,7 @@ import (
 
 	"github.com/robfig/cron/v3"
 	"github.com/walker1211/news-briefing/internal/config"
+	"github.com/walker1211/news-briefing/internal/logutil"
 )
 
 type Window struct {
@@ -37,15 +38,15 @@ func Start(cfg *config.Config, runFunc func(Window)) error {
 		entryID, err = c.AddFunc(expr, func() {
 			entry := c.Entry(entryID)
 			if entry.Prev.IsZero() {
-				fmt.Printf("[scheduler] 跳过定时任务 %s：上次触发时间为空\n", expr)
+				logutil.Printf("[scheduler] 跳过定时任务 %s：上次触发时间为空", expr)
 				return
 			}
 			window, buildErr := buildWindow(entry.Prev, expr, cfg.Schedule, loc)
 			if buildErr != nil {
-				fmt.Printf("[scheduler] 跳过定时任务 %s：%v\n", expr, buildErr)
+				logutil.Printf("[scheduler] 跳过定时任务 %s：%v", expr, buildErr)
 				return
 			}
-			fmt.Printf("[scheduler] 触发定时任务: %s [%s -> %s] ...\n", expr, window.From.In(loc).Format(time.RFC3339), window.To.In(loc).Format(time.RFC3339))
+			logutil.Printf("[scheduler] 触发定时任务: %s [%s -> %s] ...", expr, window.From.In(loc).Format(time.RFC3339), window.To.In(loc).Format(time.RFC3339))
 			runFunc(window)
 		})
 		if err != nil {
@@ -54,9 +55,9 @@ func Start(cfg *config.Config, runFunc func(Window)) error {
 	}
 
 	c.Start()
-	fmt.Printf("[scheduler] 已启动，共 %d 个时间点 (%s)\n", len(cfg.Schedule), loc.String())
+	logutil.Printf("[scheduler] 已启动，共 %d 个时间点 (%s)", len(cfg.Schedule), loc.String())
 	for _, expr := range cfg.Schedule {
-		fmt.Printf("  - %s\n", expr)
+		logutil.Printf("  - %s", expr)
 	}
 
 	return nil

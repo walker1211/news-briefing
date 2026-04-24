@@ -323,20 +323,69 @@ schedule:
 ./restart.sh
 ```
 
+如果使用 macOS `launchd` 托管服务，可以改用下面的脚本；这些脚本默认使用 `~/Library/LaunchAgents/com.news-briefing.briefing.plist` 和 Label `com.news-briefing.briefing`：
+
+```bash
+./launch-start.sh
+./launch-stop.sh
+./launch-restart.sh
+./launch-status.sh
+```
+
 ### 方式二：macOS launchd
 
-launchd 可以托管常驻的 `./news-briefing serve` 进程，实际触发时间仍以 `configs/config.yaml` 中的 `schedule` 为准。
+`launchd` 可以托管常驻的 `./news-briefing serve` 进程，实际触发时间仍以 `configs/config.yaml` 中的 `schedule` 为准。
 
-版本库不再跟踪 `com.news-briefing.briefing.plist` 模板；如果你本地已有历史 plist 文件，可以继续按本机路径调整后使用。否则请自行创建
-`~/Library/LaunchAgents/com.news-briefing.briefing.plist`，让它执行当前仓库里的 `./news-briefing serve`。
+建议创建 `~/Library/LaunchAgents/com.news-briefing.briefing.plist`，并让它直接执行当前仓库里的 `./news-briefing serve`。由于程序会从当前工作目录读取 `configs/config.yaml` 和 `.env`，plist 里要显式设置 `WorkingDirectory`。
+
+最小示例：
+
+```xml
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.news-briefing.briefing</string>
+
+  <key>WorkingDirectory</key>
+  <string>/绝对路径/news-briefing</string>
+
+  <key>ProgramArguments</key>
+  <array>
+    <string>/绝对路径/news-briefing/news-briefing</string>
+    <string>serve</string>
+  </array>
+
+  <key>RunAtLoad</key>
+  <true/>
+
+  <key>KeepAlive</key>
+  <true/>
+
+  <key>StandardOutPath</key>
+  <string>/绝对路径/news-briefing/logs/out.log</string>
+
+  <key>StandardErrorPath</key>
+  <string>/绝对路径/news-briefing/logs/err.log</string>
+</dict>
+</plist>
+```
 
 常用命令：
 
 ```bash
 mkdir -p logs
-launchctl load ~/Library/LaunchAgents/com.news-briefing.briefing.plist
-launchctl list | grep news-briefing
-launchctl unload ~/Library/LaunchAgents/com.news-briefing.briefing.plist
+launchctl bootout gui/$(id -u) ~/Library/LaunchAgents/com.news-briefing.briefing.plist 2>/dev/null || true
+launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.news-briefing.briefing.plist
+launchctl kickstart -k gui/$(id -u)/com.news-briefing.briefing
+launchctl print gui/$(id -u)/com.news-briefing.briefing
+```
+
+停止并卸载：
+
+```bash
+launchctl bootout gui/$(id -u) ~/Library/LaunchAgents/com.news-briefing.briefing.plist
 ```
 
 ## 开发 / 测试

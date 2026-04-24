@@ -9,6 +9,7 @@ import (
 
 	"github.com/walker1211/news-briefing/internal/config"
 	"github.com/walker1211/news-briefing/internal/fetcher"
+	"github.com/walker1211/news-briefing/internal/logutil"
 	"github.com/walker1211/news-briefing/internal/model"
 	"github.com/walker1211/news-briefing/internal/output"
 	"github.com/walker1211/news-briefing/internal/scheduler"
@@ -109,10 +110,10 @@ func execute(app *app, cmd command) error {
 	case fetchCommand:
 		return app.runFetch(c)
 	case serveCommand:
-		fmt.Println("Starting news aggregator in scheduled mode...")
+		logutil.Println("Starting news aggregator in scheduled mode...")
 		if err := app.startCron(app.cfg, func(window scheduler.Window) {
 			if err := app.runScheduledBriefing(window, true); err != nil {
-				fmt.Fprintf(os.Stderr, "scheduled run failed: %v\n", err)
+				logutil.Errorf("scheduled run failed: %v", err)
 			}
 		}); err != nil {
 			return err

@@ -321,19 +321,69 @@ Example email subjects:
 ./restart.sh
 ```
 
+When using macOS `launchd` to supervise the service, use these helpers instead. They assume `~/Library/LaunchAgents/com.news-briefing.briefing.plist` and the Label `com.news-briefing.briefing`:
+
+```bash
+./launch-start.sh
+./launch-stop.sh
+./launch-restart.sh
+./launch-status.sh
+```
+
 ### Option 2: macOS launchd
 
 `launchd` can supervise a long-running `./news-briefing serve` process. The actual trigger times still come from `schedule` in `configs/config.yaml`.
 
-This repository no longer tracks a `com.news-briefing.briefing.plist` template. If you already have a historical local plist, you can continue using it after adjusting paths on your machine. Otherwise, create `~/Library/LaunchAgents/com.news-briefing.briefing.plist` yourself and have it execute `./news-briefing serve` from this repository.
+Create `~/Library/LaunchAgents/com.news-briefing.briefing.plist` and have it execute `./news-briefing serve` from this repository. Because the program reads `configs/config.yaml` and `.env` from the current working directory, set `WorkingDirectory` explicitly in the plist.
+
+Minimal example:
+
+```xml
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.news-briefing.briefing</string>
+
+  <key>WorkingDirectory</key>
+  <string>/absolute/path/to/news-briefing</string>
+
+  <key>ProgramArguments</key>
+  <array>
+    <string>/absolute/path/to/news-briefing/news-briefing</string>
+    <string>serve</string>
+  </array>
+
+  <key>RunAtLoad</key>
+  <true/>
+
+  <key>KeepAlive</key>
+  <true/>
+
+  <key>StandardOutPath</key>
+  <string>/absolute/path/to/news-briefing/logs/out.log</string>
+
+  <key>StandardErrorPath</key>
+  <string>/absolute/path/to/news-briefing/logs/err.log</string>
+</dict>
+</plist>
+```
 
 Common commands:
 
 ```bash
 mkdir -p logs
-launchctl load ~/Library/LaunchAgents/com.news-briefing.briefing.plist
-launchctl list | grep news-briefing
-launchctl unload ~/Library/LaunchAgents/com.news-briefing.briefing.plist
+launchctl bootout gui/$(id -u) ~/Library/LaunchAgents/com.news-briefing.briefing.plist 2>/dev/null || true
+launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.news-briefing.briefing.plist
+launchctl kickstart -k gui/$(id -u)/com.news-briefing.briefing
+launchctl print gui/$(id -u)/com.news-briefing.briefing
+```
+
+Stop and unload:
+
+```bash
+launchctl bootout gui/$(id -u) ~/Library/LaunchAgents/com.news-briefing.briefing.plist
 ```
 
 ## Development / testing
