@@ -99,6 +99,46 @@ func TestBuildDeepEmailBodyAppendsFailedSection(t *testing.T) {
 	}
 }
 
+func TestEmailSenderRejectsNilInputs(t *testing.T) {
+	sender := NewEmailSender()
+	cfg := &config.Config{}
+	briefing := &model.Briefing{}
+	tests := []struct {
+		name    string
+		send    func() error
+		wantErr string
+	}{
+		{
+			name:    "send email nil config",
+			send:    func() error { return sender.SendEmail(briefing, nil, nil) },
+			wantErr: "config is nil",
+		},
+		{
+			name:    "send email nil briefing",
+			send:    func() error { return sender.SendEmail(nil, cfg, nil) },
+			wantErr: "briefing is nil",
+		},
+		{
+			name:    "send deep email nil config",
+			send:    func() error { return sender.SendDeepEmail("Claude", briefing, nil, nil) },
+			wantErr: "config is nil",
+		},
+		{
+			name:    "send deep email nil briefing",
+			send:    func() error { return sender.SendDeepEmail("Claude", nil, cfg, nil) },
+			wantErr: "briefing is nil",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := tt.send()
+			if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
+				t.Fatalf("send() error = %v, want %q", err, tt.wantErr)
+			}
+		})
+	}
+}
+
 func TestBriefingSubjectFromMarkdownFilename(t *testing.T) {
 	subject, err := briefingSubjectFromMarkdownFilename("output/26.04.13-晚间-1800.md")
 	if err != nil {

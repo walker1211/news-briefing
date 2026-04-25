@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -19,6 +20,92 @@ import (
 )
 
 type contextTestKey struct{}
+
+func executeTestConfig(t *testing.T, mode model.OutputMode) *config.Config {
+	t.Helper()
+	return &config.Config{Output: config.OutputCfg{Dir: t.TempDir(), Mode: mode}}
+}
+
+func silentOutputDeps() outputDeps {
+	return outputDeps{
+		printText:     func(string) {},
+		printFailed:   func([]fetcher.FailedSource) {},
+		printArticles: func([]model.Article) {},
+		printCLI:      func(*model.Briefing) {},
+	}
+}
+
+func TestNewAppWiresInstanceDependencies(t *testing.T) {
+	cfg := executeTestConfig(t, model.OutputModeOriginalOnly)
+	app := newApp(cfg)
+
+	funcs := map[string]any{
+		"scheduler.startCron":        app.scheduler.startCron,
+		"scheduler.startCronContext": app.scheduler.startCronContext,
+		"fetch.fetchAll":             app.fetch.fetchAll,
+		"fetch.fetchAllContext":      app.fetch.fetchAllContext,
+		"fetch.fetchWindow":          app.fetch.fetchWindow,
+		"fetch.fetchWindowContext":   app.fetch.fetchWindowContext,
+		"fetch.markSeen":             app.fetch.markSeen,
+		"watch.fetchWatch":           app.watch.fetchWatch,
+		"watch.fetchWatchContext":    app.watch.fetchWatchContext,
+		"ai.summarize":               app.ai.summarize,
+		"ai.summarizeContext":        app.ai.summarizeContext,
+		"ai.translate":               app.ai.translate,
+		"ai.translateContext":        app.ai.translateContext,
+		"ai.deepDive":                app.ai.deepDive,
+		"ai.deepDiveContext":         app.ai.deepDiveContext,
+		"output.composeBody":         app.output.composeBody,
+		"output.printText":           app.output.printText,
+		"output.printFailed":         app.output.printFailed,
+		"output.printArticles":       app.output.printArticles,
+		"output.printCLI":            app.output.printCLI,
+		"output.writeMarkdown":       app.output.writeMarkdown,
+		"output.writeWatchMarkdown":  app.output.writeWatchMarkdown,
+		"output.writeDeepDive":       app.output.writeDeepDive,
+		"email.sendEmail":            app.email.sendEmail,
+		"email.sendDeepEmail":        app.email.sendDeepEmail,
+		"email.resendMarkdownEmail":  app.email.resendMarkdownEmail,
+	}
+	for name, fn := range funcs {
+		if reflect.ValueOf(fn).IsNil() {
+			t.Fatalf("newApp did not wire %s", name)
+		}
+	}
+}
+
+func TestNewAppMarkSeenUsesConfiguredOutputDir(t *testing.T) {
+	cfg := executeTestConfig(t, model.OutputModeOriginalOnly)
+	app := newApp(cfg)
+
+	if err := app.fetch.markSeen(sampleExecuteArticles()); err != nil {
+		t.Fatalf("markSeen() error = %v", err)
+	}
+	data, err := os.ReadFile(filepath.Join(cfg.Output.Dir, "state", "seen.json"))
+	if err != nil {
+		t.Fatalf("ReadFile(seen.json) error = %v", err)
+	}
+	if !strings.Contains(string(data), "https://example.com/news") {
+		t.Fatalf("seen.json = %s", data)
+	}
+}
+
+func TestNewAppWaitContextHonorsCancellation(t *testing.T) {
+	app := newApp(executeTestConfig(t, model.OutputModeOriginalOnly))
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	done := make(chan struct{})
+	go func() {
+		app.scheduler.waitForeverContext(ctx)
+		close(done)
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("waitForeverContext did not return after context cancellation")
+	}
+}
 
 func TestExecuteServeUsesScheduler(t *testing.T) {
 	called := false
@@ -84,17 +171,14 @@ func TestExecuteContextFetchPassesContext(t *testing.T) {
 	ctx := context.WithValue(context.Background(), contextTestKey{}, "fetch")
 	called := false
 	app := &app{
-		cfg: &config.Config{Output: config.OutputCfg{Mode: model.OutputModeOriginalOnly}},
+		cfg: executeTestConfig(t, model.OutputModeOriginalOnly),
 		fetch: fetchDeps{
 			fetchAllContext: func(got context.Context, cfg *config.Config, markSeen bool) ([]model.Article, []fetcher.FailedSource, error) {
 				called = got.Value(contextTestKey{}) == "fetch"
 				return nil, nil, nil
 			},
 		},
-		output: outputDeps{
-			printArticles: func([]model.Article) {},
-			printFailed:   func([]fetcher.FailedSource) {},
-		},
+		output: silentOutputDeps(),
 	}
 
 	if err := executeContext(ctx, app, fetchCommand{}); err != nil {

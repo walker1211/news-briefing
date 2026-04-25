@@ -96,6 +96,9 @@ func SendEmail(briefing *model.Briefing, cfg *config.Config, failed []fetcher.Fa
 }
 
 func (s *EmailSender) SendEmail(briefing *model.Briefing, cfg *config.Config, failed []fetcher.FailedSource) error {
+	if err := validateEmailInputs(briefing, cfg); err != nil {
+		return err
+	}
 	return s.sendEmailWithContent(cfg, briefingEmailSubject(briefing.Date, briefing.Period), buildEmailBody(briefing, failed))
 }
 
@@ -104,7 +107,20 @@ func SendDeepEmail(topic string, briefing *model.Briefing, cfg *config.Config, f
 }
 
 func (s *EmailSender) SendDeepEmail(topic string, briefing *model.Briefing, cfg *config.Config, failed []fetcher.FailedSource) error {
+	if err := validateEmailInputs(briefing, cfg); err != nil {
+		return err
+	}
 	return s.sendEmailWithContent(cfg, deepEmailSubject(topic), buildDeepEmailBody(topic, briefing, failed))
+}
+
+func validateEmailInputs(briefing *model.Briefing, cfg *config.Config) error {
+	if cfg == nil {
+		return fmt.Errorf("config is nil")
+	}
+	if briefing == nil {
+		return fmt.Errorf("briefing is nil")
+	}
+	return nil
 }
 
 func SendMarkdownFile(path string, cfg *config.Config) error {

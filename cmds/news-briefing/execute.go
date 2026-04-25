@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"fmt"
-	"os"
 	"strings"
 	"time"
 	"unicode"
@@ -298,12 +297,12 @@ func (app *app) runFetch(cmd fetchCommand) error {
 }
 
 func (app *app) runFetchContext(ctx context.Context, cmd fetchCommand) error {
-	fmt.Println("Fetching news...")
+	logutil.Println("Fetching news...")
 	articles, failed, err := app.fetchAllArticles(ctx, false)
 	if err != nil {
 		return err
 	}
-	fmt.Printf("Found %d articles after filtering.\n\n", len(articles))
+	logutil.Printf("Found %d articles after filtering.", len(articles))
 	if app.output.composeBody == nil {
 		app.output.composeBody = output.FormatBody
 	}
@@ -326,7 +325,7 @@ func (app *app) runFetchContext(ctx context.Context, cmd fetchCommand) error {
 		Original: output.GroupedArticleListView(articles, categoryOrder, app.displayLocation()),
 	}
 	if outputNeedsTranslatedContent(app.cfg.Output.Mode) {
-		fmt.Println("Translating with AI CLI...")
+		logutil.Println("Translating with AI CLI...")
 		translated, err := app.translateArticles(ctx, articles, categoryOrder, app.displayLocation())
 		if err != nil {
 			return err
@@ -348,7 +347,7 @@ func (app *app) runBriefing(commandPath string, period string, showRaw bool, sen
 }
 
 func (app *app) runBriefingContext(ctx context.Context, commandPath string, period string, showRaw bool, sendEmail bool) error {
-	fmt.Println("Fetching news...")
+	logutil.Println("Fetching news...")
 	now := app.currentTime()
 	articles, failed, err := app.fetchAllArticles(ctx, false)
 	if err != nil {
@@ -376,7 +375,7 @@ func (app *app) runScheduledBriefing(window scheduler.Window, sendEmail bool) er
 }
 
 func (app *app) runScheduledBriefingContext(ctx context.Context, window scheduler.Window, sendEmail bool) error {
-	fmt.Println("Fetching news...")
+	logutil.Println("Fetching news...")
 	articles, failed, err := app.fetchWindowArticles(ctx, window.From, window.To, false, false)
 	if err != nil {
 		return err
@@ -421,7 +420,7 @@ func (app *app) runRegenContext(ctx context.Context, cmd regenCommand) error {
 		period = defaultPeriodFrom(to)
 	}
 
-	fmt.Printf("Fetching news for window %s ~ %s...\n", from.Format("2006-01-02 15:04"), to.Format("2006-01-02 15:04"))
+	logutil.Printf("Fetching news for window %s ~ %s...", from.Format("2006-01-02 15:04"), to.Format("2006-01-02 15:04"))
 	articles, failed, err := app.fetchWindowArticles(ctx, from, to, false, cmd.ignoreSeen)
 	if err != nil {
 		return err
@@ -434,7 +433,7 @@ func (app *app) renderBriefing(commandPath string, date string, period string, a
 }
 
 func (app *app) renderBriefingContext(ctx context.Context, commandPath string, date string, period string, articles []model.Article, seenArticles []model.Article, failed []fetcher.FailedSource, showRaw bool, sendEmail bool) error {
-	fmt.Printf("Found %d articles after filtering.\n", len(articles))
+	logutil.Printf("Found %d articles after filtering.", len(articles))
 	app.output.printFailed(failed)
 	if app.output.composeBody == nil {
 		app.output.composeBody = output.FormatBody
@@ -453,7 +452,7 @@ func (app *app) renderBriefingContext(ctx context.Context, commandPath string, d
 	}
 	summary := ""
 	if outputNeedsTranslatedContent(app.cfg.Output.Mode) {
-		fmt.Println("Generating summary with AI CLI...")
+		logutil.Println("Generating summary with AI CLI...")
 		var err error
 		summary, err = app.summarizeArticles(ctx, articles, categoryOrder, app.displayLocation())
 		if err != nil {
@@ -489,7 +488,7 @@ func (app *app) renderBriefingContext(ctx context.Context, commandPath string, d
 	}); err != nil {
 		return fmt.Errorf("write markdown: %w", err)
 	}
-	fmt.Printf("Markdown saved: %s\n", path)
+	logutil.Printf("Markdown saved: %s", path)
 
 	if app.fetch.markSeen != nil && len(seenArticles) > 0 {
 		if err := runIfActive(ctx, func() error {
@@ -500,7 +499,7 @@ func (app *app) renderBriefingContext(ctx context.Context, commandPath string, d
 	}
 
 	if !sendEmail {
-		fmt.Println("Skipping email")
+		logutil.Println("Skipping email")
 		return nil
 	}
 	if err := runIfActive(ctx, func() error {
@@ -509,9 +508,9 @@ func (app *app) renderBriefingContext(ctx context.Context, commandPath string, d
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			return ctxErr
 		}
-		fmt.Fprintf(os.Stderr, "Error sending email: %v\n", err)
+		logutil.Errorf("Error sending email: %v", err)
 	} else {
-		fmt.Printf("Email sent to %s\n", app.cfg.Email.To)
+		logutil.Printf("Email sent to %s", app.cfg.Email.To)
 	}
 	return nil
 }
@@ -521,7 +520,7 @@ func (app *app) runDeepDive(cmd deepCommand) error {
 }
 
 func (app *app) runDeepDiveContext(ctx context.Context, cmd deepCommand) error {
-	fmt.Printf("Deep diving into: %s\n", cmd.topic)
+	logutil.Printf("Deep diving into: %s", cmd.topic)
 
 	var (
 		articles     []model.Article
@@ -582,7 +581,7 @@ func (app *app) runDeepDiveContext(ctx context.Context, cmd deepCommand) error {
 		Original: output.ArticleListView(relevant, app.displayLocation()),
 	}
 	if outputNeedsTranslatedContent(app.cfg.Output.Mode) {
-		fmt.Printf("Found %d relevant articles. Generating deep dive...\n", len(relevant))
+		logutil.Printf("Found %d relevant articles. Generating deep dive...", len(relevant))
 		content, err := app.deepDiveArticles(ctx, cmd.topic, relevant, app.displayLocation())
 		if err != nil {
 			return err
@@ -592,7 +591,7 @@ func (app *app) runDeepDiveContext(ctx context.Context, cmd deepCommand) error {
 		}
 		formattedContent.Translated = content
 	} else {
-		fmt.Printf("Found %d relevant articles.\n", len(relevant))
+		logutil.Printf("Found %d relevant articles.", len(relevant))
 	}
 
 	body, err := app.output.composeBody("deep", app.cfg.Output.Mode, formattedContent)
@@ -608,9 +607,9 @@ func (app *app) runDeepDiveContext(ctx context.Context, cmd deepCommand) error {
 
 	path, err := app.output.writeDeepDive(cmd.topic, body, app.cfg.Output.Dir, briefing.Date)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error writing deep dive: %v\n", err)
+		logutil.Errorf("Error writing deep dive: %v", err)
 	} else {
-		fmt.Printf("Deep dive saved: %s\n", path)
+		logutil.Printf("Deep dive saved: %s", path)
 	}
 
 	if cmd.sendEmail {
@@ -618,9 +617,9 @@ func (app *app) runDeepDiveContext(ctx context.Context, cmd deepCommand) error {
 			app.email.sendDeepEmail = output.SendDeepEmail
 		}
 		if err := app.email.sendDeepEmail(cmd.topic, briefing, app.cfg, failed); err != nil {
-			fmt.Fprintf(os.Stderr, "Error sending email: %v\n", err)
+			logutil.Errorf("Error sending email: %v", err)
 		} else {
-			fmt.Printf("Email sent to %s\n", app.cfg.Email.To)
+			logutil.Printf("Email sent to %s", app.cfg.Email.To)
 		}
 	}
 
