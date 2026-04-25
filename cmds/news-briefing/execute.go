@@ -116,7 +116,7 @@ func newApp(cfg *config.Config) *app {
 		},
 		output: outputDeps{
 			composeBody: output.FormatBody,
-			printText:   func(s string) { fmt.Println(s) },
+			printText:   defaultPrintText,
 			printFailed: fetcher.PrintFailed,
 			printArticles: func(articles []model.Article) {
 				loc := cfg.ScheduleLocation
@@ -135,6 +135,40 @@ func newApp(cfg *config.Config) *app {
 			sendDeepEmail:       emailSender.SendDeepEmail,
 			resendMarkdownEmail: emailSender.SendMarkdownFile,
 		},
+	}
+}
+
+func defaultPrintText(s string) {
+	fmt.Println(s)
+}
+
+func (app *app) ensureTextOutputDeps() {
+	if app.output.composeBody == nil {
+		app.output.composeBody = output.FormatBody
+	}
+	if app.output.printText == nil {
+		app.output.printText = defaultPrintText
+	}
+}
+
+func (app *app) ensureBriefingOutputDeps() {
+	if app.output.composeBody == nil {
+		app.output.composeBody = output.FormatBody
+	}
+}
+
+func (app *app) ensureResendEmailDeps() {
+	if app.email.resendMarkdownEmail == nil {
+		app.email.resendMarkdownEmail = output.SendMarkdownFile
+	}
+	if app.output.printText == nil {
+		app.output.printText = defaultPrintText
+	}
+}
+
+func (app *app) ensureDeepEmailDeps() {
+	if app.email.sendDeepEmail == nil {
+		app.email.sendDeepEmail = output.SendDeepEmail
 	}
 }
 
@@ -185,9 +219,7 @@ func executeContext(ctx context.Context, app *app, cmd command) error {
 	case deepCommand:
 		return app.runDeepDiveContext(ctx, c)
 	case resendMDCommand:
-		if app.email.resendMarkdownEmail == nil {
-			app.email.resendMarkdownEmail = output.SendMarkdownFile
-		}
+		app.ensureResendEmailDeps()
 		if err := app.email.resendMarkdownEmail(c.file, app.cfg); err != nil {
 			return err
 		}
@@ -303,12 +335,7 @@ func (app *app) runFetchContext(ctx context.Context, cmd fetchCommand) error {
 		return err
 	}
 	logutil.Printf("Found %d articles after filtering.", len(articles))
-	if app.output.composeBody == nil {
-		app.output.composeBody = output.FormatBody
-	}
-	if app.output.printText == nil {
-		app.output.printText = func(s string) { fmt.Println(s) }
-	}
+	app.ensureTextOutputDeps()
 
 	if !cmd.zh {
 		app.output.printArticles(articles)
@@ -435,9 +462,7 @@ func (app *app) renderBriefing(commandPath string, date string, period string, a
 func (app *app) renderBriefingContext(ctx context.Context, commandPath string, date string, period string, articles []model.Article, seenArticles []model.Article, failed []fetcher.FailedSource, showRaw bool, sendEmail bool) error {
 	logutil.Printf("Found %d articles after filtering.", len(articles))
 	app.output.printFailed(failed)
-	if app.output.composeBody == nil {
-		app.output.composeBody = output.FormatBody
-	}
+	app.ensureBriefingOutputDeps()
 
 	if showRaw {
 		fmt.Println("\n--- Raw Articles ---")
@@ -522,107 +547,136 @@ func (app *app) runDeepDive(cmd deepCommand) error {
 func (app *app) runDeepDiveContext(ctx context.Context, cmd deepCommand) error {
 	logutil.Printf("Deep diving into: %s", cmd.topic)
 
-	var (
-		articles     []model.Article
-		failed       []fetcher.FailedSource
-		err          error
-		briefingDate = app.currentTime().In(app.displayLocation()).Format("06.01.02")
-	)
-	windowTo := app.currentTime()
-	windowFrom := windowTo.Add(-12 * time.Hour)
+	req, err := app.resolveDeepDiveRequest(cmd)
+	if err != nil {
+		return err
+	}
+	articles, failed, err := app.loadDeepDiveArticles(ctx, req)
+	if err != nil {
+		return err
+	}
+	app.output.printFailed(failed)
+	app.ensureTextOutputDeps()
+
+	relevant, body, err := app.buildDeepDiveBody(ctx, cmd.topic, articles)
+	if err != nil {
+		return err
+	}
+	return app.finalizeDeepDive(cmd, req.briefingDate, relevant, body, failed)
+}
+
+type deepDiveRequest struct {
+	from         time.Time
+	to           time.Time
+	briefingDate string
+	useWindow    bool
+	ignoreSeen   bool
+}
+
+func (app *app) resolveDeepDiveRequest(cmd deepCommand) (deepDiveRequest, error) {
+	now := app.currentTime()
+	loc := app.displayLocation()
+	req := deepDiveRequest{
+		from:         now.Add(-12 * time.Hour),
+		to:           now,
+		briefingDate: now.In(loc).Format("06.01.02"),
+	}
 	if cmd.fromRaw != "" || cmd.toRaw != "" {
-		loc := app.displayLocation()
 		from, err := parseRegenTime(cmd.fromRaw, loc)
 		if err != nil {
-			return fmt.Errorf("parse --from: %w", err)
+			return deepDiveRequest{}, fmt.Errorf("parse --from: %w", err)
 		}
 		to, err := parseRegenTime(cmd.toRaw, loc)
 		if err != nil {
-			return fmt.Errorf("parse --to: %w", err)
+			return deepDiveRequest{}, fmt.Errorf("parse --to: %w", err)
 		}
 		if to.Before(from) {
-			return fmt.Errorf("--to must be after or equal to --from")
+			return deepDiveRequest{}, fmt.Errorf("--to must be after or equal to --from")
 		}
-		windowFrom = from
-		windowTo = to
-		briefingDate = to.In(app.displayLocation()).Format("06.01.02")
-		articles, failed, err = app.fetchWindowArticles(ctx, from, to, false, cmd.ignoreSeen)
-	} else if cmd.ignoreSeen {
-		to := app.currentTime()
-		from := to.Add(-12 * time.Hour)
-		windowFrom = from
-		windowTo = to
-		articles, failed, err = app.fetchWindowArticles(ctx, from, to, false, true)
+		req.from = from
+		req.to = to
+		req.briefingDate = to.In(loc).Format("06.01.02")
+		req.useWindow = true
+		req.ignoreSeen = cmd.ignoreSeen
+		return req, nil
+	}
+	if cmd.ignoreSeen {
+		req.useWindow = true
+		req.ignoreSeen = true
+	}
+	return req, nil
+}
+
+func (app *app) loadDeepDiveArticles(ctx context.Context, req deepDiveRequest) ([]model.Article, []fetcher.FailedSource, error) {
+	var (
+		articles []model.Article
+		failed   []fetcher.FailedSource
+		err      error
+	)
+	if req.useWindow {
+		articles, failed, err = app.fetchWindowArticles(ctx, req.from, req.to, false, req.ignoreSeen)
 	} else {
 		articles, failed, err = app.fetchAllArticles(ctx, false)
 	}
 	if err != nil {
-		return err
+		return nil, nil, err
 	}
-	watchArticles, err := loadWatchSeenArticles(app.cfg.Output.Dir, windowFrom, windowTo)
+	watchArticles, err := loadWatchSeenArticles(app.cfg.Output.Dir, req.from, req.to)
 	if err != nil {
-		return err
+		return nil, nil, err
 	}
 	articles = append(articles, watchArticles...)
-	app.output.printFailed(failed)
-	if app.output.composeBody == nil {
-		app.output.composeBody = output.FormatBody
-	}
-	if app.output.printText == nil {
-		app.output.printText = func(s string) { fmt.Println(s) }
-	}
+	return articles, failed, nil
+}
 
-	relevant, err := selectDeepDiveArticles(cmd.topic, articles)
+func (app *app) buildDeepDiveBody(ctx context.Context, topic string, articles []model.Article) ([]model.Article, string, error) {
+	relevant, err := selectDeepDiveArticles(topic, articles)
 	if err != nil {
-		return err
+		return nil, "", err
 	}
-
 	formattedContent := model.OutputContent{
 		Original: output.ArticleListView(relevant, app.displayLocation()),
 	}
 	if outputNeedsTranslatedContent(app.cfg.Output.Mode) {
 		logutil.Printf("Found %d relevant articles. Generating deep dive...", len(relevant))
-		content, err := app.deepDiveArticles(ctx, cmd.topic, relevant, app.displayLocation())
+		content, err := app.deepDiveArticles(ctx, topic, relevant, app.displayLocation())
 		if err != nil {
-			return err
+			return nil, "", err
 		}
 		if looksLikeInteractiveFollowUp(content) {
-			return fmt.Errorf("deep dive returned interactive follow-up instead of final content")
+			return nil, "", fmt.Errorf("deep dive returned interactive follow-up instead of final content")
 		}
 		formattedContent.Translated = content
 	} else {
 		logutil.Printf("Found %d relevant articles.", len(relevant))
 	}
-
 	body, err := app.output.composeBody("deep", app.cfg.Output.Mode, formattedContent)
 	if err != nil {
-		return err
+		return nil, "", err
 	}
+	return relevant, body, nil
+}
 
+func (app *app) finalizeDeepDive(cmd deepCommand, briefingDate string, relevant []model.Article, body string, failed []fetcher.FailedSource) error {
 	briefing := &model.Briefing{
 		Date:       briefingDate,
 		Articles:   relevant,
 		RawContent: body,
 	}
-
 	path, err := app.output.writeDeepDive(cmd.topic, body, app.cfg.Output.Dir, briefing.Date)
 	if err != nil {
 		logutil.Errorf("Error writing deep dive: %v", err)
 	} else {
 		logutil.Printf("Deep dive saved: %s", path)
 	}
-
 	if cmd.sendEmail {
-		if app.email.sendDeepEmail == nil {
-			app.email.sendDeepEmail = output.SendDeepEmail
-		}
+		app.ensureDeepEmailDeps()
 		if err := app.email.sendDeepEmail(cmd.topic, briefing, app.cfg, failed); err != nil {
 			logutil.Errorf("Error sending email: %v", err)
 		} else {
 			logutil.Printf("Email sent to %s", app.cfg.Email.To)
 		}
 	}
-
 	fmt.Println()
 	app.output.printText(body)
 	return nil

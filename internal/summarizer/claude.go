@@ -12,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/walker1211/news-briefing/internal/logutil"
 	"github.com/walker1211/news-briefing/internal/model"
 	"github.com/walker1211/news-briefing/internal/output"
 )
@@ -292,7 +293,7 @@ func (r *Runner) callClaudeWithKindContext(ctx context.Context, kind callKind, p
 			}
 			if body != "" {
 				if attempt > 0 {
-					fmt.Fprintf(os.Stderr, "AI CLI retry succeeded on attempt %d\n", attempt+1)
+					logutil.Warnf("AI CLI retry succeeded on attempt %d", attempt+1)
 				}
 				return body, nil
 			}

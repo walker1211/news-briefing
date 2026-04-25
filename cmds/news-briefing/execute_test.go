@@ -35,6 +35,17 @@ func silentOutputDeps() outputDeps {
 	}
 }
 
+func silentDeepDiveOutputDeps(body string) outputDeps {
+	deps := silentOutputDeps()
+	deps.composeBody = func(string, model.OutputMode, model.OutputContent) (string, error) {
+		return body, nil
+	}
+	deps.writeDeepDive = func(string, string, string, string) (string, error) {
+		return "", nil
+	}
+	return deps
+}
+
 func TestNewAppWiresInstanceDependencies(t *testing.T) {
 	cfg := executeTestConfig(t, model.OutputModeOriginalOnly)
 	app := newApp(cfg)
@@ -382,12 +393,7 @@ func TestRunDeepDiveContextPassesContextToFetcherAndRunner(t *testing.T) {
 				return "deep content", nil
 			},
 		},
-		output: outputDeps{
-			printFailed:   func([]fetcher.FailedSource) {},
-			composeBody:   func(string, model.OutputMode, model.OutputContent) (string, error) { return "COMPOSED DEEP", nil },
-			writeDeepDive: func(string, string, string, string) (string, error) { return "", nil },
-			printText:     func(string) {},
-		},
+		output: silentDeepDiveOutputDeps("COMPOSED DEEP"),
 	}
 
 	if err := app.runDeepDiveContext(ctx, deepCommand{topic: "OpenAI"}); err != nil {
@@ -1415,16 +1421,7 @@ func TestRunDeepDiveSendEmailUsesDeepSender(t *testing.T) {
 				return "DEEP TRANSLATED", nil
 			},
 		},
-		output: outputDeps{
-			printFailed: func([]fetcher.FailedSource) {},
-			composeBody: func(path string, mode model.OutputMode, content model.OutputContent) (string, error) {
-				return "COMPOSED DEEP", nil
-			},
-			writeDeepDive: func(topic, content, outputDir, date string) (string, error) {
-				return "", nil
-			},
-			printText: func(string) {},
-		},
+		output: silentDeepDiveOutputDeps("COMPOSED DEEP"),
 		email: emailDeps{
 			sendDeepEmail: func(topic string, briefing *model.Briefing, cfg *config.Config, gotFailed []fetcher.FailedSource) error {
 				emailedTopic = topic
@@ -1502,16 +1499,7 @@ func TestRunDeepDiveSendEmailDoesNotUseRegularSender(t *testing.T) {
 				return []model.Article{{Title: "Claude ships feature", Summary: "Claude update"}}, nil, nil
 			},
 		},
-		output: outputDeps{
-			printFailed: func([]fetcher.FailedSource) {},
-			composeBody: func(path string, mode model.OutputMode, content model.OutputContent) (string, error) {
-				return "ORIGINAL ONLY", nil
-			},
-			writeDeepDive: func(topic, content, outputDir, date string) (string, error) {
-				return "", nil
-			},
-			printText: func(string) {},
-		},
+		output: silentDeepDiveOutputDeps("ORIGINAL ONLY"),
 		email: emailDeps{
 			sendEmail: func(*model.Briefing, *config.Config, []fetcher.FailedSource) error {
 				t.Fatal("sendEmail() should not be used for deep")
@@ -1882,16 +1870,7 @@ func TestRunDeepDiveExplicitWindowWithIgnoreSeenPassesIgnoreSeen(t *testing.T) {
 				return []model.Article{{Title: "Claude ships feature", Summary: "Claude update"}}, nil, nil
 			},
 		},
-		output: outputDeps{
-			printFailed: func([]fetcher.FailedSource) {},
-			composeBody: func(path string, mode model.OutputMode, content model.OutputContent) (string, error) {
-				return "ORIGINAL ONLY", nil
-			},
-			writeDeepDive: func(topic, content, outputDir, date string) (string, error) {
-				return "", nil
-			},
-			printText: func(string) {},
-		},
+		output: silentDeepDiveOutputDeps("ORIGINAL ONLY"),
 		email: emailDeps{
 			sendDeepEmail: func(topic string, briefing *model.Briefing, cfg *config.Config, gotFailed []fetcher.FailedSource) error {
 				emailed = true
@@ -1958,16 +1937,7 @@ func TestRunDeepDiveDisplayedTimeMatchesConfiguredWindowTimezone(t *testing.T) {
 				return []model.Article{article}, nil, nil
 			},
 		},
-		output: outputDeps{
-			printFailed: func([]fetcher.FailedSource) {},
-			composeBody: func(path string, mode model.OutputMode, content model.OutputContent) (string, error) {
-				return "ORIGINAL ONLY", nil
-			},
-			writeDeepDive: func(topic, content, outputDir, date string) (string, error) {
-				return "", nil
-			},
-			printText: func(string) {},
-		},
+		output: silentDeepDiveOutputDeps("ORIGINAL ONLY"),
 	}
 
 	if err := app.runDeepDive(deepCommand{topic: "Claude", fromRaw: "2026-03-18 07:00", toRaw: "2026-03-18 07:00"}); err != nil {
@@ -2058,16 +2028,7 @@ func TestRunDeepDiveIncludesWatchSeenArticles(t *testing.T) {
 				return "DEEP TRANSLATED", nil
 			},
 		},
-		output: outputDeps{
-			printFailed: func([]fetcher.FailedSource) {},
-			composeBody: func(path string, mode model.OutputMode, content model.OutputContent) (string, error) {
-				return "COMPOSED DEEP", nil
-			},
-			writeDeepDive: func(topic, content, outputDir, date string) (string, error) {
-				return "", nil
-			},
-			printText: func(string) {},
-		},
+		output: silentDeepDiveOutputDeps("COMPOSED DEEP"),
 	}
 
 	if err := app.runDeepDive(deepCommand{topic: "身份验证"}); err != nil {
@@ -2092,16 +2053,7 @@ func TestRunDeepDiveWithoutWatchSeenFileStaysCompatible(t *testing.T) {
 				return []model.Article{{Title: "Claude ships feature", Summary: "Claude update"}}, nil, nil
 			},
 		},
-		output: outputDeps{
-			printFailed: func([]fetcher.FailedSource) {},
-			composeBody: func(path string, mode model.OutputMode, content model.OutputContent) (string, error) {
-				return "ORIGINAL ONLY", nil
-			},
-			writeDeepDive: func(topic, content, outputDir, date string) (string, error) {
-				return "", nil
-			},
-			printText: func(string) {},
-		},
+		output: silentDeepDiveOutputDeps("ORIGINAL ONLY"),
 	}
 
 	if err := app.runDeepDive(deepCommand{topic: "Claude"}); err != nil {

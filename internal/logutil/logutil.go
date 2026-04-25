@@ -18,6 +18,14 @@ func Printf(format string, args ...any) {
 	fmt.Fprintln(os.Stdout, Stamp(time.Now(), fmt.Sprintf(format, args...)))
 }
 
+func Warnf(format string, args ...any) {
+	stderrf(format, args...)
+}
+
 func Errorf(format string, args ...any) {
+	stderrf(format, args...)
+}
+
+func stderrf(format string, args ...any) {
 	fmt.Fprintln(os.Stderr, Stamp(time.Now(), fmt.Sprintf(format, args...)))
 }
