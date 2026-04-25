@@ -558,6 +558,35 @@ proxy: {}
 	}
 }
 
+func TestValidateEmailForSendingRequiresCompleteIdentity(t *testing.T) {
+	tests := []struct {
+		name    string
+		email   Email
+		wantErr string
+	}{
+		{name: "missing smtp host", email: Email{SMTPPort: 465, From: "from@example.com", To: "to@example.com"}, wantErr: "email.smtp_host"},
+		{name: "bad port", email: Email{SMTPHost: "smtp.example.com", SMTPPort: 70000, From: "from@example.com", To: "to@example.com"}, wantErr: "email.smtp_port"},
+		{name: "bad from", email: Email{SMTPHost: "smtp.example.com", SMTPPort: 465, From: "not-an-address", To: "to@example.com"}, wantErr: "email.from"},
+		{name: "bad to", email: Email{SMTPHost: "smtp.example.com", SMTPPort: 465, From: "from@example.com", To: "not-an-address"}, wantErr: "email.to"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := ValidateEmailForSending(tt.email)
+			if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
+				t.Fatalf("ValidateEmailForSending() error = %v, want %q", err, tt.wantErr)
+			}
+		})
+	}
+}
+
+func TestValidateEmailForSendingAcceptsCompleteIdentity(t *testing.T) {
+	err := ValidateEmailForSending(Email{SMTPHost: "smtp.example.com", SMTPPort: 465, From: "from@example.com", To: "to@example.com"})
+	if err != nil {
+		t.Fatalf("ValidateEmailForSending() error = %v", err)
+	}
+}
+
 func TestLoadRejectsInvalidEmailIdentityConfig(t *testing.T) {
 	tests := []struct {
 		name    string

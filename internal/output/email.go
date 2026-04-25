@@ -69,6 +69,22 @@ func newEmailDialContext(cfg *config.Config) (func(context.Context, string, stri
 	return NewEmailSender().newEmailDialContext(cfg)
 }
 
+func ValidateEmailReadyForSending(cfg *config.Config) error {
+	if cfg == nil {
+		return fmt.Errorf("config is nil")
+	}
+	if err := config.ValidateEmailForSending(cfg.Email); err != nil {
+		return err
+	}
+	if os.Getenv("EMAIL_SMTP_AUTH_CODE") == "" {
+		return fmt.Errorf("EMAIL_SMTP_AUTH_CODE not set in .env")
+	}
+	if cfg.Email.UseProxy && strings.TrimSpace(cfg.Proxy.Socks5) == "" {
+		return fmt.Errorf("email.use_proxy requires proxy.socks5")
+	}
+	return nil
+}
+
 func (s *EmailSender) newEmailDialContext(cfg *config.Config) (func(context.Context, string, string) (net.Conn, error), error) {
 	if cfg == nil {
 		return nil, fmt.Errorf("config is nil")

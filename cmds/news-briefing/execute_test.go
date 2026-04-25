@@ -26,6 +26,18 @@ func executeTestConfig(t *testing.T, mode model.OutputMode) *config.Config {
 	return &config.Config{Output: config.OutputCfg{Dir: t.TempDir(), Mode: mode}}
 }
 
+func executeTestConfigWithEmail(t *testing.T, mode model.OutputMode) *config.Config {
+	t.Helper()
+	cfg := executeTestConfig(t, mode)
+	cfg.Email = config.Email{
+		SMTPHost: "smtp.example.com",
+		SMTPPort: 465,
+		From:     "from@example.com",
+		To:       "to@example.com",
+	}
+	return cfg
+}
+
 func silentOutputDeps() outputDeps {
 	return outputDeps{
 		printText:     func(string) {},
@@ -33,6 +45,17 @@ func silentOutputDeps() outputDeps {
 		printArticles: func([]model.Article) {},
 		printCLI:      func(*model.Briefing) {},
 	}
+}
+
+func silentBriefingOutputDeps(body string) outputDeps {
+	deps := silentOutputDeps()
+	deps.composeBody = func(string, model.OutputMode, model.OutputContent) (string, error) {
+		return body, nil
+	}
+	deps.writeMarkdown = func(*model.Briefing, string) (string, error) {
+		return "", nil
+	}
+	return deps
 }
 
 func silentDeepDiveOutputDeps(body string) outputDeps {
@@ -119,10 +142,11 @@ func TestNewAppWaitContextHonorsCancellation(t *testing.T) {
 }
 
 func TestExecuteServeUsesScheduler(t *testing.T) {
+	t.Setenv("EMAIL_SMTP_AUTH_CODE", "test")
 	called := false
 	waited := false
 	app := &app{
-		cfg: &config.Config{},
+		cfg: executeTestConfigWithEmail(t, model.OutputModeOriginalOnly),
 		scheduler: schedulerDeps{
 			startCron: func(cfg *config.Config, run func(scheduler.Window)) error {
 				called = true
@@ -201,13 +225,14 @@ func TestExecuteContextFetchPassesContext(t *testing.T) {
 }
 
 func TestExecuteContextServePassesContextToSchedulerAndRun(t *testing.T) {
+	t.Setenv("EMAIL_SMTP_AUTH_CODE", "test")
 	ctx := context.WithValue(context.Background(), contextTestKey{}, "serve")
 	window := scheduler.Window{Period: "0800", From: time.Date(2026, 3, 18, 7, 0, 0, 0, time.UTC), To: time.Date(2026, 3, 18, 8, 0, 0, 0, time.UTC)}
 	startCtxOK := false
 	fetchCtxOK := false
 	waitCtxOK := false
 	app := &app{
-		cfg: &config.Config{Output: config.OutputCfg{Dir: t.TempDir(), Mode: model.OutputModeOriginalOnly}},
+		cfg: executeTestConfigWithEmail(t, model.OutputModeOriginalOnly),
 		scheduler: schedulerDeps{
 			startCronContext: func(got context.Context, cfg *config.Config, run func(scheduler.Window)) error {
 				startCtxOK = got.Value(contextTestKey{}) == "serve"
@@ -224,14 +249,7 @@ func TestExecuteContextServePassesContextToSchedulerAndRun(t *testing.T) {
 				return sampleExecuteArticles(), nil, nil
 			},
 		},
-		output: outputDeps{
-			composeBody: func(path string, mode model.OutputMode, content model.OutputContent) (string, error) {
-				return "ORIGINAL ONLY", nil
-			},
-			printCLI:      func(*model.Briefing) {},
-			printFailed:   func([]fetcher.FailedSource) {},
-			writeMarkdown: func(*model.Briefing, string) (string, error) { return "", nil },
-		},
+		output: silentBriefingOutputDeps("ORIGINAL ONLY"),
 		email: emailDeps{
 			sendEmail: func(*model.Briefing, *config.Config, []fetcher.FailedSource) error { return nil },
 		},
@@ -256,12 +274,7 @@ func TestRenderBriefingContextPassesContextToSummarize(t *testing.T) {
 				return "summary", nil
 			},
 		},
-		output: outputDeps{
-			composeBody:   func(string, model.OutputMode, model.OutputContent) (string, error) { return "COMPOSED", nil },
-			printCLI:      func(*model.Briefing) {},
-			printFailed:   func([]fetcher.FailedSource) {},
-			writeMarkdown: func(*model.Briefing, string) (string, error) { return "", nil },
-		},
+		output: silentBriefingOutputDeps("COMPOSED"),
 	}
 
 	if err := app.renderBriefingContext(ctx, "run", "26.03.27", "1400", sampleExecuteArticles(), nil, nil, false, false); err != nil {
@@ -434,6 +447,7 @@ func TestExecuteFetchTranslateUsesRunner(t *testing.T) {
 }
 
 func TestExecuteRegenUsesParsedWindowAndFlags(t *testing.T) {
+	t.Setenv("EMAIL_SMTP_AUTH_CODE", "test")
 	oldArgs := os.Args
 	defer func() { os.Args = oldArgs }()
 	os.Args = []string{"news-briefing", "regen", "--from", "bad", "--to", "bad"}
@@ -448,7 +462,7 @@ func TestExecuteRegenUsesParsedWindowAndFlags(t *testing.T) {
 	called := false
 	emailCalled := false
 	app := &app{
-		cfg: &config.Config{Output: config.OutputCfg{Dir: t.TempDir(), Mode: model.OutputModeTranslatedOnly}},
+		cfg: executeTestConfigWithEmail(t, model.OutputModeTranslatedOnly),
 		fetch: fetchDeps{
 			fetchWindow: func(cfg *config.Config, gotFrom, gotTo time.Time, markSeen bool, ignoreSeen bool) ([]model.Article, []fetcher.FailedSource, error) {
 				called = gotFrom.Equal(from) && gotTo.Equal(to) && !markSeen && ignoreSeen
@@ -458,12 +472,7 @@ func TestExecuteRegenUsesParsedWindowAndFlags(t *testing.T) {
 		ai: aiDeps{
 			summarize: func([]model.Article, []string, *time.Location) (string, error) { return "summary", nil },
 		},
-		output: outputDeps{
-			printFailed:   func([]fetcher.FailedSource) {},
-			printArticles: func([]model.Article) {},
-			printCLI:      func(*model.Briefing) {},
-			writeMarkdown: func(*model.Briefing, string) (string, error) { return "", nil },
-		},
+		output: silentBriefingOutputDeps(""),
 		email: emailDeps{
 			sendEmail: func(*model.Briefing, *config.Config, []fetcher.FailedSource) error {
 				emailCalled = true
@@ -504,12 +513,7 @@ func TestExecuteRegenParsesRawWindowInConfiguredTimezone(t *testing.T) {
 				return []model.Article{{Title: "a"}}, nil, nil
 			},
 		},
-		output: outputDeps{
-			printFailed:   func([]fetcher.FailedSource) {},
-			printArticles: func([]model.Article) {},
-			printCLI:      func(*model.Briefing) {},
-			writeMarkdown: func(*model.Briefing, string) (string, error) { return "", nil },
-		},
+		output: silentBriefingOutputDeps(""),
 	}
 
 	if err := execute(app, regenCommand{fromRaw: "2026-03-18 08:00", toRaw: "2026-03-18 14:00", ignoreSeen: true}); err != nil {
@@ -668,12 +672,7 @@ func TestRunBriefingSkipsMarkSeenWhenSummarizeFails(t *testing.T) {
 				return "", errors.New("ai cli failed")
 			},
 		},
-		output: outputDeps{
-			printFailed:   func([]fetcher.FailedSource) {},
-			printArticles: func([]model.Article) {},
-			printCLI:      func(*model.Briefing) {},
-			writeMarkdown: func(*model.Briefing, string) (string, error) { return "", nil },
-		},
+		output: silentBriefingOutputDeps(""),
 	}
 
 	err := app.runBriefing("run", "0700", false, false)
@@ -998,10 +997,11 @@ func TestRunRegenSkipsWatch(t *testing.T) {
 }
 
 func TestExecuteServeScheduledBriefingUsesServePathForOutputMode(t *testing.T) {
+	t.Setenv("EMAIL_SMTP_AUTH_CODE", "test")
 	var gotPath string
 	window := scheduler.Window{Period: "0800", From: time.Date(2026, 3, 18, 7, 0, 0, 0, time.UTC), To: time.Date(2026, 3, 18, 8, 0, 0, 0, time.UTC)}
 	app := &app{
-		cfg: &config.Config{Output: config.OutputCfg{Dir: t.TempDir(), Mode: model.OutputModeTranslatedOnly}},
+		cfg: executeTestConfigWithEmail(t, model.OutputModeTranslatedOnly),
 		scheduler: schedulerDeps{
 			startCron: func(cfg *config.Config, run func(scheduler.Window)) error {
 				run(window)
@@ -1040,12 +1040,13 @@ func TestExecuteServeScheduledBriefingUsesServePathForOutputMode(t *testing.T) {
 }
 
 func TestExecuteServeOriginalOnlySkipsSummarize(t *testing.T) {
+	t.Setenv("EMAIL_SMTP_AUTH_CODE", "test")
 	summarizeCalled := false
 	var gotContent model.OutputContent
 
 	window := scheduler.Window{Period: "0800", From: time.Date(2026, 3, 18, 7, 0, 0, 0, time.UTC), To: time.Date(2026, 3, 18, 8, 0, 0, 0, time.UTC)}
 	app := &app{
-		cfg: &config.Config{Sources: []config.Source{{Category: "AI/科技"}}, Output: config.OutputCfg{Dir: t.TempDir(), Mode: model.OutputModeOriginalOnly}},
+		cfg: executeTestConfigWithEmail(t, model.OutputModeOriginalOnly),
 		scheduler: schedulerDeps{
 			startCron: func(cfg *config.Config, run func(scheduler.Window)) error {
 				run(window)
@@ -1554,10 +1555,11 @@ func TestRunDeepDiveSendEmailFailureDoesNotFailCommand(t *testing.T) {
 }
 
 func TestExecuteResendMDSendsMarkdownFile(t *testing.T) {
+	t.Setenv("EMAIL_SMTP_AUTH_CODE", "test")
 	called := false
 	var gotPath string
 	app := &app{
-		cfg: &config.Config{Email: config.Email{To: "test@example.com"}},
+		cfg: executeTestConfigWithEmail(t, model.OutputModeOriginalOnly),
 		output: outputDeps{
 			printText: func(string) {},
 		},
@@ -1582,8 +1584,9 @@ func TestExecuteResendMDSendsMarkdownFile(t *testing.T) {
 }
 
 func TestExecuteResendMDReturnsSendError(t *testing.T) {
+	t.Setenv("EMAIL_SMTP_AUTH_CODE", "test")
 	app := &app{
-		cfg: &config.Config{},
+		cfg: executeTestConfigWithEmail(t, model.OutputModeOriginalOnly),
 		output: outputDeps{
 			printText: func(string) {},
 		},
@@ -1601,9 +1604,10 @@ func TestExecuteResendMDReturnsSendError(t *testing.T) {
 }
 
 func TestExecuteResendMDPrintsSuccessMessage(t *testing.T) {
+	t.Setenv("EMAIL_SMTP_AUTH_CODE", "test")
 	var printed []string
 	app := &app{
-		cfg: &config.Config{Email: config.Email{To: "test@example.com"}},
+		cfg: executeTestConfigWithEmail(t, model.OutputModeOriginalOnly),
 		output: outputDeps{
 			printText: func(s string) { printed = append(printed, s) },
 		},
@@ -1618,8 +1622,198 @@ func TestExecuteResendMDPrintsSuccessMessage(t *testing.T) {
 		t.Fatalf("execute() error = %v", err)
 	}
 	joined := strings.Join(printed, "\n")
-	if !strings.Contains(joined, "Email resent to test@example.com") {
+	if !strings.Contains(joined, "Email resent to to@example.com") {
 		t.Fatalf("printed = %q", joined)
+	}
+}
+
+func TestExecuteRunEmailPreflightFailsBeforeFetch(t *testing.T) {
+	fetchCalled := false
+	app := &app{
+		cfg: executeTestConfig(t, model.OutputModeOriginalOnly),
+		fetch: fetchDeps{
+			fetchAll: func(*config.Config, bool) ([]model.Article, []fetcher.FailedSource, error) {
+				fetchCalled = true
+				return nil, nil, nil
+			},
+		},
+	}
+
+	err := execute(app, runCommand{})
+	if err == nil || !strings.Contains(err.Error(), "validate email.smtp_host") {
+		t.Fatalf("execute() error = %v, want email preflight error", err)
+	}
+	if fetchCalled {
+		t.Fatal("fetchAll() should not run after failed email preflight")
+	}
+}
+
+func TestExecuteRunNoEmailSkipsEmailPreflight(t *testing.T) {
+	fetchCalled := false
+	app := &app{
+		cfg: executeTestConfig(t, model.OutputModeOriginalOnly),
+		fetch: fetchDeps{
+			fetchAll: func(*config.Config, bool) ([]model.Article, []fetcher.FailedSource, error) {
+				fetchCalled = true
+				return sampleExecuteArticles(), nil, nil
+			},
+		},
+		output: silentBriefingOutputDeps("ORIGINAL ONLY"),
+	}
+
+	if err := execute(app, runCommand{noEmail: true}); err != nil {
+		t.Fatalf("execute() error = %v", err)
+	}
+	if !fetchCalled {
+		t.Fatal("fetchAll() was not called")
+	}
+}
+
+func TestExecuteServeEmailPreflightFailsBeforeScheduler(t *testing.T) {
+	started := false
+	app := &app{
+		cfg: executeTestConfig(t, model.OutputModeOriginalOnly),
+		scheduler: schedulerDeps{
+			startCron: func(*config.Config, func(scheduler.Window)) error {
+				started = true
+				return nil
+			},
+		},
+	}
+
+	err := execute(app, serveCommand{})
+	if err == nil || !strings.Contains(err.Error(), "validate email.smtp_host") {
+		t.Fatalf("execute() error = %v, want email preflight error", err)
+	}
+	if started {
+		t.Fatal("scheduler should not start after failed email preflight")
+	}
+}
+
+func TestExecuteRegenSendEmailPreflightFailsBeforeFetch(t *testing.T) {
+	fetchCalled := false
+	app := &app{
+		cfg: executeTestConfig(t, model.OutputModeOriginalOnly),
+		fetch: fetchDeps{
+			fetchWindow: func(*config.Config, time.Time, time.Time, bool, bool) ([]model.Article, []fetcher.FailedSource, error) {
+				fetchCalled = true
+				return nil, nil, nil
+			},
+		},
+	}
+
+	err := execute(app, regenCommand{fromRaw: "2026-04-15 07:00", toRaw: "2026-04-15 16:00", sendEmail: true})
+	if err == nil || !strings.Contains(err.Error(), "validate email.smtp_host") {
+		t.Fatalf("execute() error = %v, want email preflight error", err)
+	}
+	if fetchCalled {
+		t.Fatal("fetchWindow() should not run after failed email preflight")
+	}
+}
+
+func TestExecuteRegenWithoutSendEmailSkipsEmailPreflight(t *testing.T) {
+	fetchCalled := false
+	app := &app{
+		cfg: executeTestConfig(t, model.OutputModeOriginalOnly),
+		fetch: fetchDeps{
+			fetchWindow: func(*config.Config, time.Time, time.Time, bool, bool) ([]model.Article, []fetcher.FailedSource, error) {
+				fetchCalled = true
+				return sampleExecuteArticles(), nil, nil
+			},
+		},
+		output: silentBriefingOutputDeps("ORIGINAL ONLY"),
+	}
+
+	if err := execute(app, regenCommand{fromRaw: "2026-04-15 07:00", toRaw: "2026-04-15 16:00"}); err != nil {
+		t.Fatalf("execute() error = %v", err)
+	}
+	if !fetchCalled {
+		t.Fatal("fetchWindow() was not called")
+	}
+}
+
+func TestExecuteDeepSendEmailPreflightFailsBeforeFetch(t *testing.T) {
+	fetchCalled := false
+	app := &app{
+		cfg: executeTestConfig(t, model.OutputModeOriginalOnly),
+		fetch: fetchDeps{
+			fetchAll: func(*config.Config, bool) ([]model.Article, []fetcher.FailedSource, error) {
+				fetchCalled = true
+				return nil, nil, nil
+			},
+		},
+	}
+
+	err := execute(app, deepCommand{topic: "Claude", sendEmail: true})
+	if err == nil || !strings.Contains(err.Error(), "validate email.smtp_host") {
+		t.Fatalf("execute() error = %v, want email preflight error", err)
+	}
+	if fetchCalled {
+		t.Fatal("fetchAll() should not run after failed email preflight")
+	}
+}
+
+func TestExecuteDeepWithoutSendEmailSkipsEmailPreflight(t *testing.T) {
+	fetchCalled := false
+	app := &app{
+		cfg: executeTestConfig(t, model.OutputModeOriginalOnly),
+		fetch: fetchDeps{
+			fetchAll: func(*config.Config, bool) ([]model.Article, []fetcher.FailedSource, error) {
+				fetchCalled = true
+				return []model.Article{{Title: "Claude ships feature", Summary: "Claude update"}}, nil, nil
+			},
+		},
+		output: silentDeepDiveOutputDeps("ORIGINAL ONLY"),
+	}
+
+	if err := execute(app, deepCommand{topic: "Claude"}); err != nil {
+		t.Fatalf("execute() error = %v", err)
+	}
+	if !fetchCalled {
+		t.Fatal("fetchAll() was not called")
+	}
+}
+
+func TestExecuteResendMDEmailPreflightFailsBeforeSend(t *testing.T) {
+	sent := false
+	app := &app{
+		cfg: executeTestConfig(t, model.OutputModeOriginalOnly),
+		email: emailDeps{
+			resendMarkdownEmail: func(string, *config.Config) error {
+				sent = true
+				return nil
+			},
+		},
+	}
+
+	err := execute(app, resendMDCommand{file: "output/26.04.13-晚间-1800.md"})
+	if err == nil || !strings.Contains(err.Error(), "validate email.smtp_host") {
+		t.Fatalf("execute() error = %v, want email preflight error", err)
+	}
+	if sent {
+		t.Fatal("resendMarkdownEmail() should not run after failed email preflight")
+	}
+}
+
+func TestExecuteEmailPreflightRequiresSMTPAuthCode(t *testing.T) {
+	t.Setenv("EMAIL_SMTP_AUTH_CODE", "")
+	app := &app{cfg: executeTestConfigWithEmail(t, model.OutputModeOriginalOnly)}
+
+	err := execute(app, runCommand{})
+	if err == nil || !strings.Contains(err.Error(), "EMAIL_SMTP_AUTH_CODE") {
+		t.Fatalf("execute() error = %v, want missing SMTP auth code", err)
+	}
+}
+
+func TestExecuteEmailPreflightRequiresSocks5WhenEmailProxyEnabled(t *testing.T) {
+	t.Setenv("EMAIL_SMTP_AUTH_CODE", "test")
+	cfg := executeTestConfigWithEmail(t, model.OutputModeOriginalOnly)
+	cfg.Email.UseProxy = true
+	app := &app{cfg: cfg}
+
+	err := execute(app, runCommand{})
+	if err == nil || !strings.Contains(err.Error(), "email.use_proxy requires proxy.socks5") {
+		t.Fatalf("execute() error = %v, want proxy.socks5 preflight error", err)
 	}
 }
 

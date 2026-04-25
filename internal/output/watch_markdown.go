@@ -2,22 +2,19 @@ package output
 
 import (
 	"fmt"
-	"os"
 	"path/filepath"
 	"sort"
 	"strings"
 
 	"github.com/walker1211/news-briefing/internal/model"
+	"github.com/walker1211/news-briefing/internal/statefile"
 )
 
 func WriteWatchMarkdown(report *model.WatchReport, outputDir string, date string, period string) (string, error) {
 	watchDir := filepath.Join(outputDir, "watch")
-	if err := os.MkdirAll(watchDir, 0o755); err != nil {
-		return "", fmt.Errorf("create watch dir: %w", err)
-	}
 	path := filepath.Join(watchDir, watchFileName(date, period))
 	body := RenderWatchMarkdown(report, date, period)
-	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+	if err := statefile.WriteAtomic(path, []byte(body), 0o644); err != nil {
 		return "", fmt.Errorf("write watch markdown: %w", err)
 	}
 	return path, nil

@@ -219,6 +219,35 @@ func TestSendMarkdownFileRejectsSymlinkPathOutsideOutputDirEvenWhenTargetInside(
 	}
 }
 
+func TestValidateEmailReadyForSending(t *testing.T) {
+	t.Setenv("EMAIL_SMTP_AUTH_CODE", "secret")
+	cfg := &config.Config{Email: config.Email{SMTPHost: "smtp.example.com", SMTPPort: 465, From: "from@example.com", To: "to@example.com"}}
+
+	if err := ValidateEmailReadyForSending(cfg); err != nil {
+		t.Fatalf("ValidateEmailReadyForSending() error = %v", err)
+	}
+}
+
+func TestValidateEmailReadyForSendingRejectsMissingAuthCode(t *testing.T) {
+	t.Setenv("EMAIL_SMTP_AUTH_CODE", "")
+	cfg := &config.Config{Email: config.Email{SMTPHost: "smtp.example.com", SMTPPort: 465, From: "from@example.com", To: "to@example.com"}}
+
+	err := ValidateEmailReadyForSending(cfg)
+	if err == nil || !strings.Contains(err.Error(), "EMAIL_SMTP_AUTH_CODE") {
+		t.Fatalf("ValidateEmailReadyForSending() error = %v, want SMTP auth code error", err)
+	}
+}
+
+func TestValidateEmailReadyForSendingRejectsMissingSocks5ProxyWhenEnabled(t *testing.T) {
+	t.Setenv("EMAIL_SMTP_AUTH_CODE", "secret")
+	cfg := &config.Config{Email: config.Email{SMTPHost: "smtp.example.com", SMTPPort: 465, From: "from@example.com", To: "to@example.com", UseProxy: true}}
+
+	err := ValidateEmailReadyForSending(cfg)
+	if err == nil || !strings.Contains(err.Error(), "proxy.socks5") {
+		t.Fatalf("ValidateEmailReadyForSending() error = %v, want proxy.socks5 error", err)
+	}
+}
+
 func TestEmailDialContextUsesConfiguredSocks5Proxy(t *testing.T) {
 	capturedAddr := ""
 	capturedTimeout := time.Duration(0)

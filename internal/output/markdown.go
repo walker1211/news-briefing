@@ -2,24 +2,20 @@ package output
 
 import (
 	"fmt"
-	"os"
 	"path/filepath"
 
 	"github.com/walker1211/news-briefing/internal/model"
+	"github.com/walker1211/news-briefing/internal/statefile"
 )
 
 func WriteMarkdown(briefing *model.Briefing, outputDir string) (string, error) {
-	if err := os.MkdirAll(outputDir, 0755); err != nil {
-		return "", fmt.Errorf("create output dir: %w", err)
-	}
-
 	filename := briefingFileName(briefing.Date, briefing.Period)
 	path := filepath.Join(outputDir, filename)
 
 	header := briefingMarkdownHeader(briefing.Date, briefing.Period) + "\n\n"
 	content := header + briefing.RawContent
 
-	if err := os.WriteFile(path, []byte(content), 0644); err != nil {
+	if err := statefile.WriteAtomic(path, []byte(content), 0644); err != nil {
 		return "", fmt.Errorf("write markdown: %w", err)
 	}
 
@@ -28,17 +24,13 @@ func WriteMarkdown(briefing *model.Briefing, outputDir string) (string, error) {
 
 func WriteDeepDive(topic, content, outputDir string, date string) (string, error) {
 	deepDir := filepath.Join(outputDir, "deep")
-	if err := os.MkdirAll(deepDir, 0755); err != nil {
-		return "", fmt.Errorf("create deep dir: %w", err)
-	}
-
 	filename := fmt.Sprintf("%s-%s.md", date, sanitize(topic))
 	path := filepath.Join(deepDir, filename)
 
 	header := fmt.Sprintf("# 话题深挖包：%s\n\n", topic)
 	full := header + content
 
-	if err := os.WriteFile(path, []byte(full), 0644); err != nil {
+	if err := statefile.WriteAtomic(path, []byte(full), 0644); err != nil {
 		return "", fmt.Errorf("write deep dive: %w", err)
 	}
 

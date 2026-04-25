@@ -198,6 +198,9 @@ func execute(app *app, cmd command) error {
 }
 
 func executeContext(ctx context.Context, app *app, cmd command) error {
+	if err := app.preflightCommand(cmd); err != nil {
+		return err
+	}
 	switch c := cmd.(type) {
 	case runCommand:
 		return app.runBriefingContext(ctx, "run", currentPeriod(), c.raw, !c.noEmail)
@@ -235,6 +238,37 @@ func executeContext(ctx context.Context, app *app, cmd command) error {
 
 func outputNeedsTranslatedContent(mode model.OutputMode) bool {
 	return mode != model.OutputModeOriginalOnly
+}
+
+func (app *app) preflightCommand(cmd command) error {
+	if !commandSendsEmail(cmd) {
+		return nil
+	}
+	return app.preflightEmailSending()
+}
+
+func commandSendsEmail(cmd command) bool {
+	switch c := cmd.(type) {
+	case runCommand:
+		return !c.noEmail
+	case serveCommand:
+		return true
+	case regenCommand:
+		return c.sendEmail
+	case deepCommand:
+		return c.sendEmail
+	case resendMDCommand:
+		return true
+	default:
+		return false
+	}
+}
+
+func (app *app) preflightEmailSending() error {
+	if app == nil || app.cfg == nil {
+		return fmt.Errorf("preflight email: config is nil")
+	}
+	return output.ValidateEmailReadyForSending(app.cfg)
 }
 
 func (app *app) startScheduler(ctx context.Context, cfg *config.Config, run func(scheduler.Window)) error {
@@ -285,6 +319,24 @@ func (app *app) fetchWatchArticles(ctx context.Context, now time.Time) ([]model.
 		return app.watch.fetchWatch(app.cfg, now)
 	}
 	return nil, nil, nil
+}
+
+func (app *app) mergeWatchArticlesContext(ctx context.Context, articles []model.Article, watchTime time.Time, sidecarDate string, period string) ([]model.Article, error) {
+	if app.watch.fetchWatchContext == nil && app.watch.fetchWatch == nil {
+		return articles, nil
+	}
+	watchArticles, report, err := app.fetchWatchArticles(ctx, watchTime)
+	if err != nil {
+		return nil, err
+	}
+	articles = append(articles, watchArticles...)
+	app.printWatchSiteErrors(report)
+	if app.output.writeWatchMarkdown != nil && report != nil {
+		if _, err := app.output.writeWatchMarkdown(report, app.cfg.Output.Dir, sidecarDate, period); err != nil {
+			return nil, err
+		}
+	}
+	return articles, nil
 }
 
 func (app *app) summarizeArticles(ctx context.Context, articles []model.Article, categoryOrder []string, loc *time.Location) (string, error) {
@@ -381,18 +433,9 @@ func (app *app) runBriefingContext(ctx context.Context, commandPath string, peri
 		return err
 	}
 	seenArticles := append([]model.Article(nil), articles...)
-	if app.watch.fetchWatchContext != nil || app.watch.fetchWatch != nil {
-		watchArticles, report, err := app.fetchWatchArticles(ctx, now)
-		if err != nil {
-			return err
-		}
-		articles = append(articles, watchArticles...)
-		app.printWatchSiteErrors(report)
-		if app.output.writeWatchMarkdown != nil && report != nil {
-			if _, err := app.output.writeWatchMarkdown(report, app.cfg.Output.Dir, now.Format("06.01.02"), period); err != nil {
-				return err
-			}
-		}
+	articles, err = app.mergeWatchArticlesContext(ctx, articles, now, now.Format("06.01.02"), period)
+	if err != nil {
+		return err
 	}
 	return app.renderBriefingContext(ctx, commandPath, now.Format("06.01.02"), period, articles, seenArticles, failed, showRaw, sendEmail)
 }
@@ -409,20 +452,12 @@ func (app *app) runScheduledBriefingContext(ctx context.Context, window schedule
 	}
 	seenArticles := append([]model.Article(nil), articles...)
 	loc := app.displayLocation()
-	if app.watch.fetchWatchContext != nil || app.watch.fetchWatch != nil {
-		watchArticles, report, err := app.fetchWatchArticles(ctx, window.To)
-		if err != nil {
-			return err
-		}
-		articles = append(articles, watchArticles...)
-		app.printWatchSiteErrors(report)
-		if app.output.writeWatchMarkdown != nil && report != nil {
-			if _, err := app.output.writeWatchMarkdown(report, app.cfg.Output.Dir, window.To.In(loc).Format("06.01.02"), window.Period); err != nil {
-				return err
-			}
-		}
+	date := window.To.In(loc).Format("06.01.02")
+	articles, err = app.mergeWatchArticlesContext(ctx, articles, window.To, date, window.Period)
+	if err != nil {
+		return err
 	}
-	return app.renderBriefingContext(ctx, "serve", window.To.In(loc).Format("06.01.02"), window.Period, articles, seenArticles, failed, false, sendEmail)
+	return app.renderBriefingContext(ctx, "serve", date, window.Period, articles, seenArticles, failed, false, sendEmail)
 }
 
 func (app *app) runRegen(cmd regenCommand) error {

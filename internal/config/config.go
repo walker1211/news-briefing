@@ -261,6 +261,10 @@ func validateEmail(email Email) error {
 	if strings.TrimSpace(email.SMTPHost) == "" && email.SMTPPort == 0 && strings.TrimSpace(email.From) == "" && strings.TrimSpace(email.To) == "" {
 		return nil
 	}
+	return ValidateEmailForSending(email)
+}
+
+func ValidateEmailForSending(email Email) error {
 	if strings.TrimSpace(email.SMTPHost) == "" {
 		return fmt.Errorf("validate email.smtp_host: must not be empty")
 	}
