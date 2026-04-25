@@ -15,7 +15,7 @@ func WriteMarkdown(briefing *model.Briefing, outputDir string) (string, error) {
 	header := briefingMarkdownHeader(briefing.Date, briefing.Period) + "\n\n"
 	content := header + briefing.RawContent
 
-	if err := statefile.WriteAtomic(path, []byte(content), 0644); err != nil {
+	if err := statefile.WriteAtomicReplaceOnly(path, []byte(content), 0644); err != nil {
 		return "", fmt.Errorf("write markdown: %w", err)
 	}
 
@@ -30,7 +30,7 @@ func WriteDeepDive(topic, content, outputDir string, date string) (string, error
 	header := fmt.Sprintf("# 话题深挖包：%s\n\n", topic)
 	full := header + content
 
-	if err := statefile.WriteAtomic(path, []byte(full), 0644); err != nil {
+	if err := statefile.WriteAtomicReplaceOnly(path, []byte(full), 0644); err != nil {
 		return "", fmt.Errorf("write deep dive: %w", err)
 	}
 

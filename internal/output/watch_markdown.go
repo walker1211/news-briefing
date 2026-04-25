@@ -14,7 +14,7 @@ func WriteWatchMarkdown(report *model.WatchReport, outputDir string, date string
 	watchDir := filepath.Join(outputDir, "watch")
 	path := filepath.Join(watchDir, watchFileName(date, period))
 	body := RenderWatchMarkdown(report, date, period)
-	if err := statefile.WriteAtomic(path, []byte(body), 0o644); err != nil {
+	if err := statefile.WriteAtomicReplaceOnly(path, []byte(body), 0o644); err != nil {
 		return "", fmt.Errorf("write watch markdown: %w", err)
 	}
 	return path, nil
