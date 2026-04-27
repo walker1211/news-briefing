@@ -36,11 +36,13 @@ type schedulerDeps struct {
 }
 
 type fetchDeps struct {
-	fetchAll           func(*config.Config, bool) ([]model.Article, []fetcher.FailedSource, error)
-	fetchAllContext    func(context.Context, *config.Config, bool) ([]model.Article, []fetcher.FailedSource, error)
-	fetchWindow        func(*config.Config, time.Time, time.Time, bool, bool) ([]model.Article, []fetcher.FailedSource, error)
-	fetchWindowContext func(context.Context, *config.Config, time.Time, time.Time, bool, bool) ([]model.Article, []fetcher.FailedSource, error)
-	markSeen           func([]model.Article) error
+	fetchAll                   func(*config.Config, bool) ([]model.Article, []fetcher.FailedSource, error)
+	fetchAllContext            func(context.Context, *config.Config, bool) ([]model.Article, []fetcher.FailedSource, error)
+	fetchAllDetailedContext    func(context.Context, *config.Config, bool) (fetcher.FetchResult, error)
+	fetchWindow                func(*config.Config, time.Time, time.Time, bool, bool) ([]model.Article, []fetcher.FailedSource, error)
+	fetchWindowContext         func(context.Context, *config.Config, time.Time, time.Time, bool, bool) ([]model.Article, []fetcher.FailedSource, error)
+	fetchWindowDetailedContext func(context.Context, *config.Config, time.Time, time.Time, bool, bool) (fetcher.FetchResult, error)
+	markSeen                   func([]model.Article) error
 }
 
 type watchDeps struct {
@@ -94,10 +96,12 @@ func newApp(cfg *config.Config) *app {
 			},
 		},
 		fetch: fetchDeps{
-			fetchAll:           fetchClient.FetchAll,
-			fetchAllContext:    fetchClient.FetchAllContext,
-			fetchWindow:        fetchClient.FetchWindow,
-			fetchWindowContext: fetchClient.FetchWindowContext,
+			fetchAll:                   fetchClient.FetchAll,
+			fetchAllContext:            fetchClient.FetchAllContext,
+			fetchAllDetailedContext:    fetchClient.FetchAllDetailedContext,
+			fetchWindow:                fetchClient.FetchWindow,
+			fetchWindowContext:         fetchClient.FetchWindowContext,
+			fetchWindowDetailedContext: fetchClient.FetchWindowDetailedContext,
 			markSeen: func(articles []model.Article) error {
 				return fetcher.MarkArticlesSeen(cfg.Output.Dir, articles)
 			},
@@ -311,6 +315,22 @@ func (app *app) fetchWindowArticles(ctx context.Context, from, to time.Time, mar
 	return fetcher.FetchWindowContext(ctx, app.cfg, from, to, markSeen, ignoreSeen)
 }
 
+func (app *app) fetchAllArticlesDetailed(ctx context.Context, markSeen bool) (fetcher.FetchResult, error) {
+	if app.fetch.fetchAllDetailedContext != nil {
+		return app.fetch.fetchAllDetailedContext(ctx, app.cfg, markSeen)
+	}
+	articles, failed, err := app.fetchAllArticles(ctx, markSeen)
+	return fetcher.FetchResult{Articles: articles, Failed: failed}, err
+}
+
+func (app *app) fetchWindowArticlesDetailed(ctx context.Context, from, to time.Time, markSeen bool, ignoreSeen bool) (fetcher.FetchResult, error) {
+	if app.fetch.fetchWindowDetailedContext != nil {
+		return app.fetch.fetchWindowDetailedContext(ctx, app.cfg, from, to, markSeen, ignoreSeen)
+	}
+	articles, failed, err := app.fetchWindowArticles(ctx, from, to, markSeen, ignoreSeen)
+	return fetcher.FetchResult{Articles: articles, Failed: failed}, err
+}
+
 func (app *app) fetchWatchArticles(ctx context.Context, now time.Time) ([]model.Article, *model.WatchReport, error) {
 	if app.watch.fetchWatchContext != nil {
 		return app.watch.fetchWatchContext(ctx, app.cfg, now)
@@ -328,9 +348,10 @@ type watchFetchResult struct {
 }
 
 type briefingFetchResult struct {
-	articles     []model.Article
-	seenArticles []model.Article
-	failed       []fetcher.FailedSource
+	articles         []model.Article
+	filteredArticles []model.Article
+	seenArticles     []model.Article
+	failed           []fetcher.FailedSource
 }
 
 func (app *app) startWatchFetch(ctx context.Context, watchTime time.Time) func() watchFetchResult {
@@ -362,21 +383,21 @@ func (app *app) mergeWatchFetchResult(ctx context.Context, articles []model.Arti
 	return articles, nil
 }
 
-func (app *app) fetchBriefingArticlesWithWatch(ctx context.Context, watchTime time.Time, sidecarDate string, period string, fetchMain func(context.Context) ([]model.Article, []fetcher.FailedSource, error)) (briefingFetchResult, error) {
+func (app *app) fetchBriefingArticlesWithWatch(ctx context.Context, watchTime time.Time, sidecarDate string, period string, fetchMain func(context.Context) (fetcher.FetchResult, error)) (briefingFetchResult, error) {
 	watchCtx, cancelWatch := context.WithCancel(ctx)
 	defer cancelWatch()
 	waitWatch := app.startWatchFetch(watchCtx, watchTime)
 
-	articles, failed, err := fetchMain(ctx)
+	result, err := fetchMain(ctx)
 	if err != nil {
 		return briefingFetchResult{}, err
 	}
-	seenArticles := append([]model.Article(nil), articles...)
-	articles, err = app.mergeWatchFetchResult(ctx, articles, waitWatch(), sidecarDate, period)
+	seenArticles := append([]model.Article(nil), result.Articles...)
+	result.Articles, err = app.mergeWatchFetchResult(ctx, result.Articles, waitWatch(), sidecarDate, period)
 	if err != nil {
 		return briefingFetchResult{}, err
 	}
-	return briefingFetchResult{articles: articles, seenArticles: seenArticles, failed: failed}, nil
+	return briefingFetchResult{articles: result.Articles, filteredArticles: result.FilteredArticles, seenArticles: seenArticles, failed: result.Failed}, nil
 }
 
 func (app *app) summarizeArticles(ctx context.Context, articles []model.Article, categoryOrder []string, loc *time.Location) (string, error) {
@@ -469,13 +490,13 @@ func (app *app) runBriefingContext(ctx context.Context, commandPath string, peri
 	logutil.Println("Fetching news...")
 	now := app.currentTime()
 	date := now.Format("06.01.02")
-	result, err := app.fetchBriefingArticlesWithWatch(ctx, now, date, period, func(ctx context.Context) ([]model.Article, []fetcher.FailedSource, error) {
-		return app.fetchAllArticles(ctx, false)
+	result, err := app.fetchBriefingArticlesWithWatch(ctx, now, date, period, func(ctx context.Context) (fetcher.FetchResult, error) {
+		return app.fetchAllArticlesDetailed(ctx, false)
 	})
 	if err != nil {
 		return err
 	}
-	return app.renderBriefingContext(ctx, commandPath, date, period, result.articles, result.seenArticles, result.failed, showRaw, sendEmail)
+	return app.renderBriefingContext(ctx, commandPath, date, period, result.articles, result.filteredArticles, result.seenArticles, result.failed, showRaw, sendEmail)
 }
 
 func (app *app) runScheduledBriefing(window scheduler.Window, sendEmail bool) error {
@@ -486,13 +507,13 @@ func (app *app) runScheduledBriefingContext(ctx context.Context, window schedule
 	logutil.Println("Fetching news...")
 	loc := app.displayLocation()
 	date := window.To.In(loc).Format("06.01.02")
-	result, err := app.fetchBriefingArticlesWithWatch(ctx, window.To, date, window.Period, func(ctx context.Context) ([]model.Article, []fetcher.FailedSource, error) {
-		return app.fetchWindowArticles(ctx, window.From, window.To, false, false)
+	result, err := app.fetchBriefingArticlesWithWatch(ctx, window.To, date, window.Period, func(ctx context.Context) (fetcher.FetchResult, error) {
+		return app.fetchWindowArticlesDetailed(ctx, window.From, window.To, false, false)
 	})
 	if err != nil {
 		return err
 	}
-	return app.renderBriefingContext(ctx, "serve", date, window.Period, result.articles, result.seenArticles, result.failed, false, sendEmail)
+	return app.renderBriefingContext(ctx, "serve", date, window.Period, result.articles, result.filteredArticles, result.seenArticles, result.failed, false, sendEmail)
 }
 
 func (app *app) runRegen(cmd regenCommand) error {
@@ -518,18 +539,18 @@ func (app *app) runRegenContext(ctx context.Context, cmd regenCommand) error {
 	}
 
 	logutil.Printf("Fetching news for window %s ~ %s...", from.Format("2006-01-02 15:04"), to.Format("2006-01-02 15:04"))
-	articles, failed, err := app.fetchWindowArticles(ctx, from, to, false, cmd.ignoreSeen)
+	result, err := app.fetchWindowArticlesDetailed(ctx, from, to, false, cmd.ignoreSeen)
 	if err != nil {
 		return err
 	}
-	return app.renderBriefingContext(ctx, "regen", to.Format("06.01.02"), period, articles, nil, failed, cmd.raw, cmd.sendEmail)
+	return app.renderBriefingContext(ctx, "regen", to.Format("06.01.02"), period, result.Articles, result.FilteredArticles, nil, result.Failed, cmd.raw, cmd.sendEmail)
 }
 
-func (app *app) renderBriefing(commandPath string, date string, period string, articles []model.Article, seenArticles []model.Article, failed []fetcher.FailedSource, showRaw bool, sendEmail bool) error {
-	return app.renderBriefingContext(context.Background(), commandPath, date, period, articles, seenArticles, failed, showRaw, sendEmail)
+func (app *app) renderBriefing(commandPath string, date string, period string, articles []model.Article, filteredArticles []model.Article, seenArticles []model.Article, failed []fetcher.FailedSource, showRaw bool, sendEmail bool) error {
+	return app.renderBriefingContext(context.Background(), commandPath, date, period, articles, filteredArticles, seenArticles, failed, showRaw, sendEmail)
 }
 
-func (app *app) renderBriefingContext(ctx context.Context, commandPath string, date string, period string, articles []model.Article, seenArticles []model.Article, failed []fetcher.FailedSource, showRaw bool, sendEmail bool) error {
+func (app *app) renderBriefingContext(ctx context.Context, commandPath string, date string, period string, articles []model.Article, filteredArticles []model.Article, seenArticles []model.Article, failed []fetcher.FailedSource, showRaw bool, sendEmail bool) error {
 	logutil.Printf("Found %d articles after filtering.", len(articles))
 	app.output.printFailed(failed)
 	app.ensureBriefingOutputDeps()

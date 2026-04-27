@@ -226,7 +226,7 @@ func TestRenderBriefingContextPassesContextToSummarize(t *testing.T) {
 		output: silentBriefingOutputDeps("COMPOSED"),
 	}
 
-	if err := app.renderBriefingContext(ctx, "run", "26.03.27", "1400", sampleExecuteArticles(), nil, nil, false, false); err != nil {
+	if err := app.renderBriefingContext(ctx, "run", "26.03.27", "1400", sampleExecuteArticles(), nil, nil, nil, false, false); err != nil {
 		t.Fatalf("renderBriefingContext() error = %v", err)
 	}
 	if !called {
@@ -265,7 +265,7 @@ func TestRenderBriefingContextStopsBeforeSideEffectsWhenCancelled(t *testing.T) 
 		},
 	}
 
-	err := app.renderBriefingContext(ctx, "run", "26.03.27", "1400", sampleExecuteArticles(), sampleExecuteArticles(), nil, false, true)
+	err := app.renderBriefingContext(ctx, "run", "26.03.27", "1400", sampleExecuteArticles(), nil, sampleExecuteArticles(), nil, false, true)
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("renderBriefingContext() error = %v, want context.Canceled", err)
 	}
@@ -297,7 +297,7 @@ func TestRenderBriefingContextStopsBeforeMarkSeenAndEmailWhenCancelledAfterWrite
 		},
 	}
 
-	err := app.renderBriefingContext(ctx, "run", "26.03.27", "1400", sampleExecuteArticles(), sampleExecuteArticles(), nil, false, true)
+	err := app.renderBriefingContext(ctx, "run", "26.03.27", "1400", sampleExecuteArticles(), nil, sampleExecuteArticles(), nil, false, true)
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("renderBriefingContext() error = %v, want context.Canceled", err)
 	}
@@ -328,7 +328,7 @@ func TestRenderBriefingContextStopsBeforeEmailWhenCancelledAfterMarkSeen(t *test
 		},
 	}
 
-	err := app.renderBriefingContext(ctx, "run", "26.03.27", "1400", sampleExecuteArticles(), sampleExecuteArticles(), nil, false, true)
+	err := app.renderBriefingContext(ctx, "run", "26.03.27", "1400", sampleExecuteArticles(), nil, sampleExecuteArticles(), nil, false, true)
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("renderBriefingContext() error = %v, want context.Canceled", err)
 	}
@@ -487,7 +487,7 @@ func TestRenderBriefingUsesComposedBodyForRun(t *testing.T) {
 		},
 	}
 
-	err := app.renderBriefing("run", "26.03.27", "1400", articles, nil, nil, false, false)
+	err := app.renderBriefing("run", "26.03.27", "1400", articles, nil, nil, nil, false, false)
 	if err != nil {
 		t.Fatalf("renderBriefing() error = %v", err)
 	}
@@ -534,7 +534,7 @@ func TestRenderBriefingUsesComposedBodyForRegen(t *testing.T) {
 		},
 	}
 
-	err := app.renderBriefing("regen", "26.03.27", "1400", articles, nil, nil, false, false)
+	err := app.renderBriefing("regen", "26.03.27", "1400", articles, nil, nil, nil, false, false)
 	if err != nil {
 		t.Fatalf("renderBriefing() error = %v", err)
 	}
@@ -780,7 +780,7 @@ func TestRenderBriefingOriginalOnlySkipsSummarize(t *testing.T) {
 		},
 	}
 
-	if err := app.renderBriefing("run", "26.03.27", "1400", articles, nil, nil, false, false); err != nil {
+	if err := app.renderBriefing("run", "26.03.27", "1400", articles, nil, nil, nil, false, false); err != nil {
 		t.Fatalf("renderBriefing() error = %v", err)
 	}
 	if summarizeCalled {
@@ -822,7 +822,7 @@ func TestRenderBriefingReturnsWriteMarkdownErrorBeforeMarkSeenAndEmail(t *testin
 		},
 	}
 
-	err := app.renderBriefing("run", "26.03.27", "1400", articles, articles, nil, false, true)
+	err := app.renderBriefing("run", "26.03.27", "1400", articles, nil, articles, nil, false, true)
 	if err == nil || !strings.Contains(err.Error(), "write markdown: disk full") {
 		t.Fatalf("renderBriefing() error = %v, want wrapped write markdown error", err)
 	}
