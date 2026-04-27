@@ -231,8 +231,11 @@ func TestFetchWindowDetailedDoesNotMarkFilteredCandidatesSeen(t *testing.T) {
 	if err != nil {
 		t.Fatalf("fetchWindowDetailedContext() error = %v", err)
 	}
-	if len(result.Articles) != 1 || len(result.FilteredArticles) != 1 {
-		t.Fatalf("result = %#v, want one accepted and one filtered article", result)
+	if len(result.Articles) != 1 || result.Articles[0].Link != "https://example.com/include" {
+		t.Fatalf("result.Articles = %#v, want accepted article", result.Articles)
+	}
+	if len(result.FilteredArticles) != 1 || result.FilteredArticles[0].Link != "https://example.com/miss" {
+		t.Fatalf("result.FilteredArticles = %#v, want filtered article", result.FilteredArticles)
 	}
 
 	data, err := os.ReadFile(filepath.Join(cfg.Output.Dir, "state", "seen.json"))
