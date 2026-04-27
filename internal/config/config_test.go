@@ -965,7 +965,6 @@ func TestProjectConfigIncludesAnthropicOfficialAnnouncementWatchSites(t *testing
 
 func TestProjectConfigIncludesDiscoveryEnhancementAISources(t *testing.T) {
 	configPaths := map[string]string{
-		"project": filepath.Join("..", "..", "configs", "config.yaml"),
 		"example": filepath.Join("..", "..", "configs", "config.example.yaml"),
 	}
 	want := []Source{

@@ -558,7 +558,11 @@ func (app *app) appendFilteredArticlesAppendix(body string, filteredArticles []m
 	if appendix == "" {
 		return body
 	}
-	return strings.TrimSpace(body) + "\n\n## 未命中关键词的候选新闻\n\n" + appendix
+	body = strings.TrimSpace(body)
+	if body == "" {
+		return "## 未命中关键词的候选新闻\n\n" + appendix
+	}
+	return body + "\n\n## 未命中关键词的候选新闻\n\n" + appendix
 }
 
 func (app *app) renderBriefingContext(ctx context.Context, commandPath string, date string, period string, articles []model.Article, filteredArticles []model.Article, seenArticles []model.Article, failed []fetcher.FailedSource, showRaw bool, sendEmail bool) error {
