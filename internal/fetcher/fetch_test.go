@@ -210,6 +210,44 @@ func TestFetchWindowDetailedReturnsFilteredCandidates(t *testing.T) {
 	}
 }
 
+func TestFetchWindowDetailedDoesNotMarkFilteredCandidatesSeen(t *testing.T) {
+	from := time.Date(2026, 3, 18, 8, 0, 0, 0, time.UTC)
+	to := from.Add(6 * time.Hour)
+	cfg := &config.Config{Output: config.OutputCfg{Dir: t.TempDir()}, Sources: []config.Source{
+		{Name: "RSS", Type: config.SourceTypeRSS, Category: "AI/科技"},
+	}}
+
+	fetchAll := func(ctx context.Context, cfg *config.Config, since time.Time) ([]sourceFetchResult, []FailedSource, error) {
+		return []sourceFetchResult{{
+			Source: config.Source{Name: "RSS", Type: config.SourceTypeRSS, Category: "AI/科技"},
+			Candidates: []fetchedCandidate{
+				{Article: model.Article{Title: "miss keyword", Link: "https://example.com/miss", Source: "RSS", Category: "AI/科技", Published: from.Add(time.Hour)}},
+				{Article: model.Article{Title: "include", Link: "https://example.com/include", Source: "RSS", Category: "AI/科技", Published: from.Add(2 * time.Hour)}, MatchedKeywords: []string{"AI"}},
+			},
+		}}, nil, nil
+	}
+
+	result, err := fetchWindowDetailedContext(context.Background(), cfg, from, to, true, false, fetchAll)
+	if err != nil {
+		t.Fatalf("fetchWindowDetailedContext() error = %v", err)
+	}
+	if len(result.Articles) != 1 || len(result.FilteredArticles) != 1 {
+		t.Fatalf("result = %#v, want one accepted and one filtered article", result)
+	}
+
+	data, err := os.ReadFile(filepath.Join(cfg.Output.Dir, "state", "seen.json"))
+	if err != nil {
+		t.Fatalf("ReadFile(seen.json) error = %v", err)
+	}
+	seen := string(data)
+	if !strings.Contains(seen, "https://example.com/include") {
+		t.Fatalf("seen.json = %s, want accepted article", seen)
+	}
+	if strings.Contains(seen, "https://example.com/miss") {
+		t.Fatalf("seen.json = %s, filtered article should not be marked seen", seen)
+	}
+}
+
 func TestFetchWindowDedupsAcceptedCandidates(t *testing.T) {
 	from := time.Date(2026, 3, 18, 8, 0, 0, 0, time.UTC)
 	to := from.Add(6 * time.Hour)
