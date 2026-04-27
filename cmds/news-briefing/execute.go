@@ -550,6 +550,17 @@ func (app *app) renderBriefing(commandPath string, date string, period string, a
 	return app.renderBriefingContext(context.Background(), commandPath, date, period, articles, filteredArticles, seenArticles, failed, showRaw, sendEmail)
 }
 
+func (app *app) appendFilteredArticlesAppendix(body string, filteredArticles []model.Article, categoryOrder []string) string {
+	if app.cfg == nil || !app.cfg.Output.IncludeFilteredArticles || len(filteredArticles) == 0 {
+		return body
+	}
+	appendix := strings.TrimSpace(output.GroupedArticleListView(filteredArticles, categoryOrder, app.displayLocation()))
+	if appendix == "" {
+		return body
+	}
+	return strings.TrimSpace(body) + "\n\n## 未命中关键词的候选新闻\n\n" + appendix
+}
+
 func (app *app) renderBriefingContext(ctx context.Context, commandPath string, date string, period string, articles []model.Article, filteredArticles []model.Article, seenArticles []model.Article, failed []fetcher.FailedSource, showRaw bool, sendEmail bool) error {
 	logutil.Printf("Found %d articles after filtering.", len(articles))
 	app.output.printFailed(failed)
@@ -580,6 +591,7 @@ func (app *app) renderBriefingContext(ctx context.Context, commandPath string, d
 	if err != nil {
 		return err
 	}
+	body = app.appendFilteredArticlesAppendix(body, filteredArticles, categoryOrder)
 
 	briefing := &model.Briefing{
 		Date:       date,

@@ -514,6 +514,95 @@ func TestRenderBriefingUsesComposedBodyForRun(t *testing.T) {
 	}
 }
 
+func TestRenderBriefingAppendsFilteredArticlesWhenEnabled(t *testing.T) {
+	articles := sampleExecuteArticles()
+	filtered := []model.Article{{
+		Title:     "Market update without keyword",
+		Link:      "https://example.com/market",
+		Summary:   "Market summary",
+		Source:    "Example",
+		Category:  "国际政治",
+		Published: time.Date(2026, 3, 18, 13, 0, 0, 0, time.UTC),
+	}}
+	var printed *model.Briefing
+	var summarized []model.Article
+
+	app := &app{
+		cfg: &config.Config{
+			Sources: []config.Source{{Category: "AI/科技"}, {Category: "国际政治"}},
+			Output:  config.OutputCfg{Dir: t.TempDir(), Mode: model.OutputModeTranslatedOnly, IncludeFilteredArticles: true},
+		},
+		ai: aiDeps{
+			summarizeContext: func(ctx context.Context, got []model.Article, categoryOrder []string, loc *time.Location) (string, error) {
+				summarized = append([]model.Article(nil), got...)
+				return "SUMMARY", nil
+			},
+		},
+		output: outputDeps{
+			composeBody: func(path string, mode model.OutputMode, content model.OutputContent) (string, error) {
+				return content.Translated, nil
+			},
+			printCLI:      func(b *model.Briefing) { printed = b },
+			writeMarkdown: func(*model.Briefing, string) (string, error) { return "", nil },
+			printFailed:   func([]fetcher.FailedSource) {},
+		},
+	}
+
+	err := app.renderBriefing("run", "26.03.27", "1400", articles, filtered, nil, nil, false, false)
+	if err != nil {
+		t.Fatalf("renderBriefing() error = %v", err)
+	}
+	if printed == nil {
+		t.Fatal("printCLI() briefing = nil")
+	}
+	if !strings.Contains(printed.RawContent, "SUMMARY") {
+		t.Fatalf("RawContent = %q, want composed summary", printed.RawContent)
+	}
+	if !strings.Contains(printed.RawContent, "## 未命中关键词的候选新闻") {
+		t.Fatalf("RawContent = %q, want filtered appendix heading", printed.RawContent)
+	}
+	if !strings.Contains(printed.RawContent, "Market update without keyword") {
+		t.Fatalf("RawContent = %q, want filtered article", printed.RawContent)
+	}
+	if len(summarized) != 1 || summarized[0].Title != "OpenAI ships feature" {
+		t.Fatalf("summarized = %#v, want accepted articles only", summarized)
+	}
+}
+
+func TestRenderBriefingDoesNotAppendFilteredArticlesWhenDisabled(t *testing.T) {
+	articles := sampleExecuteArticles()
+	filtered := []model.Article{{
+		Title:     "Market update without keyword",
+		Link:      "https://example.com/market",
+		Summary:   "Market summary",
+		Source:    "Example",
+		Category:  "国际政治",
+		Published: time.Date(2026, 3, 18, 13, 0, 0, 0, time.UTC),
+	}}
+	var printed *model.Briefing
+
+	app := &app{
+		cfg: &config.Config{Output: config.OutputCfg{Dir: t.TempDir(), Mode: model.OutputModeOriginalOnly}},
+		output: outputDeps{
+			composeBody:   func(string, model.OutputMode, model.OutputContent) (string, error) { return "BODY", nil },
+			printCLI:      func(b *model.Briefing) { printed = b },
+			writeMarkdown: func(*model.Briefing, string) (string, error) { return "", nil },
+			printFailed:   func([]fetcher.FailedSource) {},
+		},
+	}
+
+	err := app.renderBriefing("run", "26.03.27", "1400", articles, filtered, nil, nil, false, false)
+	if err != nil {
+		t.Fatalf("renderBriefing() error = %v", err)
+	}
+	if printed == nil {
+		t.Fatal("printCLI() briefing = nil")
+	}
+	if strings.Contains(printed.RawContent, "未命中关键词的候选新闻") || strings.Contains(printed.RawContent, "Market update without keyword") {
+		t.Fatalf("RawContent = %q, filtered appendix should be omitted", printed.RawContent)
+	}
+}
+
 func TestRenderBriefingUsesComposedBodyForRegen(t *testing.T) {
 	articles := sampleExecuteArticles()
 	var gotPath string
