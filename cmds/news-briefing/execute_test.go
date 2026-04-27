@@ -23,32 +23,34 @@ func TestNewAppWiresInstanceDependencies(t *testing.T) {
 	app := newApp(cfg)
 
 	funcs := map[string]any{
-		"scheduler.startCron":        app.scheduler.startCron,
-		"scheduler.startCronContext": app.scheduler.startCronContext,
-		"fetch.fetchAll":             app.fetch.fetchAll,
-		"fetch.fetchAllContext":      app.fetch.fetchAllContext,
-		"fetch.fetchWindow":          app.fetch.fetchWindow,
-		"fetch.fetchWindowContext":   app.fetch.fetchWindowContext,
-		"fetch.markSeen":             app.fetch.markSeen,
-		"watch.fetchWatch":           app.watch.fetchWatch,
-		"watch.fetchWatchContext":    app.watch.fetchWatchContext,
-		"ai.summarize":               app.ai.summarize,
-		"ai.summarizeContext":        app.ai.summarizeContext,
-		"ai.translate":               app.ai.translate,
-		"ai.translateContext":        app.ai.translateContext,
-		"ai.deepDive":                app.ai.deepDive,
-		"ai.deepDiveContext":         app.ai.deepDiveContext,
-		"output.composeBody":         app.output.composeBody,
-		"output.printText":           app.output.printText,
-		"output.printFailed":         app.output.printFailed,
-		"output.printArticles":       app.output.printArticles,
-		"output.printCLI":            app.output.printCLI,
-		"output.writeMarkdown":       app.output.writeMarkdown,
-		"output.writeWatchMarkdown":  app.output.writeWatchMarkdown,
-		"output.writeDeepDive":       app.output.writeDeepDive,
-		"email.sendEmail":            app.email.sendEmail,
-		"email.sendDeepEmail":        app.email.sendDeepEmail,
-		"email.resendMarkdownEmail":  app.email.resendMarkdownEmail,
+		"scheduler.startCron":              app.scheduler.startCron,
+		"scheduler.startCronContext":       app.scheduler.startCronContext,
+		"fetch.fetchAll":                   app.fetch.fetchAll,
+		"fetch.fetchAllContext":            app.fetch.fetchAllContext,
+		"fetch.fetchAllDetailedContext":    app.fetch.fetchAllDetailedContext,
+		"fetch.fetchWindow":                app.fetch.fetchWindow,
+		"fetch.fetchWindowContext":         app.fetch.fetchWindowContext,
+		"fetch.fetchWindowDetailedContext": app.fetch.fetchWindowDetailedContext,
+		"fetch.markSeen":                   app.fetch.markSeen,
+		"watch.fetchWatch":                 app.watch.fetchWatch,
+		"watch.fetchWatchContext":          app.watch.fetchWatchContext,
+		"ai.summarize":                     app.ai.summarize,
+		"ai.summarizeContext":              app.ai.summarizeContext,
+		"ai.translate":                     app.ai.translate,
+		"ai.translateContext":              app.ai.translateContext,
+		"ai.deepDive":                      app.ai.deepDive,
+		"ai.deepDiveContext":               app.ai.deepDiveContext,
+		"output.composeBody":               app.output.composeBody,
+		"output.printText":                 app.output.printText,
+		"output.printFailed":               app.output.printFailed,
+		"output.printArticles":             app.output.printArticles,
+		"output.printCLI":                  app.output.printCLI,
+		"output.writeMarkdown":             app.output.writeMarkdown,
+		"output.writeWatchMarkdown":        app.output.writeWatchMarkdown,
+		"output.writeDeepDive":             app.output.writeDeepDive,
+		"email.sendEmail":                  app.email.sendEmail,
+		"email.sendDeepEmail":              app.email.sendDeepEmail,
+		"email.resendMarkdownEmail":        app.email.resendMarkdownEmail,
 	}
 	for name, fn := range funcs {
 		if reflect.ValueOf(fn).IsNil() {
@@ -575,6 +577,144 @@ func TestRunBriefingUsesFetchAll(t *testing.T) {
 	}
 	if !fetchCalled {
 		t.Fatal("fetchAll() was not called")
+	}
+}
+
+func TestRunBriefingPrefersFetchAllDetailedContext(t *testing.T) {
+	articles := sampleExecuteArticles()
+	detailedCalled := false
+
+	app := &app{
+		cfg: &config.Config{Output: config.OutputCfg{Dir: t.TempDir(), Mode: model.OutputModeOriginalOnly}},
+		fetch: fetchDeps{
+			fetchAllContext: func(ctx context.Context, cfg *config.Config, markSeen bool) ([]model.Article, []fetcher.FailedSource, error) {
+				t.Fatal("fetchAllContext() should not be called when detailed fetch is available")
+				return nil, nil, nil
+			},
+			fetchAllDetailedContext: func(ctx context.Context, cfg *config.Config, markSeen bool) (fetcher.FetchResult, error) {
+				detailedCalled = true
+				if markSeen {
+					t.Fatalf("fetchAllDetailedContext() markSeen=%v, want false", markSeen)
+				}
+				return fetcher.FetchResult{Articles: articles}, nil
+			},
+		},
+		output: silentBriefingOutputDeps("ORIGINAL ONLY"),
+	}
+
+	if err := app.runBriefing("run", "1400", false, false); err != nil {
+		t.Fatalf("runBriefing() error = %v", err)
+	}
+	if !detailedCalled {
+		t.Fatal("fetchAllDetailedContext() was not called")
+	}
+}
+
+func TestRunScheduledBriefingPrefersFetchWindowDetailedContext(t *testing.T) {
+	loc := time.FixedZone("CST", 8*3600)
+	window := scheduler.Window{
+		Period: "0800",
+		From:   time.Date(2026, 3, 18, 7, 0, 0, 0, loc),
+		To:     time.Date(2026, 3, 18, 8, 0, 0, 0, loc),
+	}
+	detailedCalled := false
+
+	app := &app{
+		cfg: &config.Config{ScheduleLocation: loc, Output: config.OutputCfg{Dir: t.TempDir(), Mode: model.OutputModeOriginalOnly}},
+		fetch: fetchDeps{
+			fetchWindowContext: func(ctx context.Context, cfg *config.Config, from, to time.Time, markSeen bool, ignoreSeen bool) ([]model.Article, []fetcher.FailedSource, error) {
+				t.Fatal("fetchWindowContext() should not be called when detailed fetch is available")
+				return nil, nil, nil
+			},
+			fetchWindowDetailedContext: func(ctx context.Context, cfg *config.Config, from, to time.Time, markSeen bool, ignoreSeen bool) (fetcher.FetchResult, error) {
+				detailedCalled = true
+				if !from.Equal(window.From) || !to.Equal(window.To) || markSeen || ignoreSeen {
+					t.Fatalf("fetchWindowDetailedContext() args from=%v to=%v markSeen=%v ignoreSeen=%v", from, to, markSeen, ignoreSeen)
+				}
+				return fetcher.FetchResult{Articles: sampleExecuteArticles()}, nil
+			},
+		},
+		output: silentBriefingOutputDeps("ORIGINAL ONLY"),
+	}
+
+	if err := app.runScheduledBriefing(window, false); err != nil {
+		t.Fatalf("runScheduledBriefing() error = %v", err)
+	}
+	if !detailedCalled {
+		t.Fatal("fetchWindowDetailedContext() was not called")
+	}
+}
+
+func TestRunRegenPrefersFetchWindowDetailedContextAndPreservesIgnoreSeen(t *testing.T) {
+	loc, err := time.LoadLocation("Asia/Shanghai")
+	if err != nil {
+		t.Fatalf("LoadLocation() error = %v", err)
+	}
+	from := time.Date(2026, 3, 18, 8, 0, 0, 0, loc)
+	to := time.Date(2026, 3, 18, 14, 0, 0, 0, loc)
+	detailedCalled := false
+
+	app := &app{
+		cfg: &config.Config{ScheduleLocation: loc, Output: config.OutputCfg{Dir: t.TempDir(), Mode: model.OutputModeOriginalOnly}},
+		fetch: fetchDeps{
+			fetchWindowContext: func(ctx context.Context, cfg *config.Config, from, to time.Time, markSeen bool, ignoreSeen bool) ([]model.Article, []fetcher.FailedSource, error) {
+				t.Fatal("fetchWindowContext() should not be called when detailed fetch is available")
+				return nil, nil, nil
+			},
+			fetchWindowDetailedContext: func(ctx context.Context, cfg *config.Config, gotFrom, gotTo time.Time, markSeen bool, ignoreSeen bool) (fetcher.FetchResult, error) {
+				detailedCalled = true
+				if !gotFrom.Equal(from) || !gotTo.Equal(to) || markSeen || !ignoreSeen {
+					t.Fatalf("fetchWindowDetailedContext() args from=%v to=%v markSeen=%v ignoreSeen=%v", gotFrom, gotTo, markSeen, ignoreSeen)
+				}
+				return fetcher.FetchResult{Articles: sampleExecuteArticles()}, nil
+			},
+		},
+		output: silentBriefingOutputDeps("ORIGINAL ONLY"),
+	}
+
+	if err := app.runRegen(regenCommand{fromRaw: "2026-03-18 08:00", toRaw: "2026-03-18 14:00", ignoreSeen: true}); err != nil {
+		t.Fatalf("runRegen() error = %v", err)
+	}
+	if !detailedCalled {
+		t.Fatal("fetchWindowDetailedContext() was not called")
+	}
+}
+
+func TestFetchBriefingArticlesWithWatchCarriesFilteredArticlesAndMarksOnlyAcceptedMain(t *testing.T) {
+	now := time.Date(2026, 4, 15, 16, 0, 0, 0, time.UTC)
+	accepted := model.Article{Title: "accepted", Category: "AI/科技", Published: now.Add(-time.Hour)}
+	filtered := model.Article{Title: "filtered", Category: "AI/科技", Published: now.Add(-2 * time.Hour)}
+	watchArticle := model.Article{Title: "watch", Category: "AI/科技", Published: now}
+
+	app := &app{
+		cfg: &config.Config{Output: config.OutputCfg{Dir: t.TempDir(), Mode: model.OutputModeOriginalOnly}},
+		watch: watchDeps{
+			fetchWatchContext: func(ctx context.Context, cfg *config.Config, gotNow time.Time) ([]model.Article, *model.WatchReport, error) {
+				if !gotNow.Equal(now) {
+					t.Fatalf("fetchWatchContext() now=%v, want %v", gotNow, now)
+				}
+				return []model.Article{watchArticle}, nil, nil
+			},
+		},
+	}
+
+	result, err := app.fetchBriefingArticlesWithWatch(context.Background(), now, "26.04.15", "1600", func(ctx context.Context) (fetcher.FetchResult, error) {
+		return fetcher.FetchResult{
+			Articles:         []model.Article{accepted},
+			FilteredArticles: []model.Article{filtered},
+		}, nil
+	})
+	if err != nil {
+		t.Fatalf("fetchBriefingArticlesWithWatch() error = %v", err)
+	}
+	if !reflect.DeepEqual(result.filteredArticles, []model.Article{filtered}) {
+		t.Fatalf("filteredArticles = %#v, want %#v", result.filteredArticles, []model.Article{filtered})
+	}
+	if !reflect.DeepEqual(result.seenArticles, []model.Article{accepted}) {
+		t.Fatalf("seenArticles = %#v, want only accepted main article", result.seenArticles)
+	}
+	if !reflect.DeepEqual(result.articles, []model.Article{accepted, watchArticle}) {
+		t.Fatalf("articles = %#v, want accepted plus watch article", result.articles)
 	}
 }
 
