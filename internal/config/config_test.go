@@ -957,8 +957,8 @@ func TestProjectConfigIncludesDiscoveryEnhancementAIKeywords(t *testing.T) {
 		"project": filepath.Join("..", "..", "configs", "config.yaml"),
 		"example": filepath.Join("..", "..", "configs", "config.example.yaml"),
 	}
-	want := []string{"AllenAI", "Ai2", "GLM"}
-	rejected := []string{"BigModel", "z.ai", "ACE Studio", "StepFun", "HappyHorse", "Paper Review", "BYOK", "Terafab"}
+	want := []string{"AllenAI", "Ai2", "GLM", "Qwen", "千问", "HappyHorse"}
+	rejected := []string{"BigModel", "z.ai", "ACE Studio", "StepFun", "Paper Review", "BYOK", "Terafab"}
 
 	for name, configPath := range configPaths {
 		t.Run(name, func(t *testing.T) {
