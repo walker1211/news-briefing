@@ -146,7 +146,7 @@ ai:
 
 注意：这里不要把 `-p` 写进 `args`，程序会在运行时自动追加 prompt 参数。
 
-### 4. output.mode 输出模式
+### 4. output 输出配置
 
 示例：
 
@@ -154,14 +154,17 @@ ai:
 output:
   dir: output
   mode: translated_only
+  include_filtered_articles: false
 ```
 
-允许值：
+`mode` 允许值：
 
 - `original_only`：只显示原文/原始文章整理块
 - `translated_only`：只显示 AI 生成的中文内容块
 - `bilingual_translated_first`：先显示中文，再显示原文
 - `bilingual_original_first`：先显示原文，再显示中文
+
+`include_filtered_articles` 默认关闭。设为 `true` 后，`run`、`regen` 和 `serve` 会把时间窗口内但未命中关键词的候选新闻追加到简报末尾；这些候选新闻不会进入 AI 摘要，也不会写入已读状态。
 
 作用范围：
 

@@ -146,20 +146,23 @@ ai:
 
 Do not put `-p` into `args`; the program appends the prompt argument automatically.
 
-### 4. output.mode
+### 4. output configuration
 
 ```yaml
 output:
   dir: output
   mode: translated_only
+  include_filtered_articles: false
 ```
 
-Allowed values:
+Allowed `mode` values:
 
 - `original_only` — show only the original/raw article block
 - `translated_only` — show only the Chinese AI-generated block
 - `bilingual_translated_first` — show Chinese first, then the original block
 - `bilingual_original_first` — show the original block first, then the Chinese block
+
+`include_filtered_articles` defaults to `false`. When set to `true`, `run`, `regen`, and `serve` append in-window candidates that did not match any keyword to the end of the briefing. These candidates are not included in the AI summary and are not written to the seen state.
 
 This setting affects:
 
