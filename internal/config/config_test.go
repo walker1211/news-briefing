@@ -122,6 +122,63 @@ proxy: {}
 	}
 }
 
+func TestLoadDefaultsIncludeFilteredArticlesToFalse(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	content := `sources: []
+keywords: []
+email:
+  smtp_host: smtp.example.com
+  smtp_port: 465
+  from: from@example.com
+  to: to@example.com
+schedule: []
+output: {}
+proxy: {}
+`
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+
+	if cfg.Output.IncludeFilteredArticles {
+		t.Fatalf("Output.IncludeFilteredArticles = true, want false")
+	}
+}
+
+func TestLoadParsesIncludeFilteredArticles(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	content := `sources: []
+keywords: []
+email:
+  smtp_host: smtp.example.com
+  smtp_port: 465
+  from: from@example.com
+  to: to@example.com
+schedule: []
+output:
+  include_filtered_articles: true
+proxy: {}
+`
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+
+	if !cfg.Output.IncludeFilteredArticles {
+		t.Fatalf("Output.IncludeFilteredArticles = false, want true")
+	}
+}
+
 func TestLoadAcceptsValidOutputModes(t *testing.T) {
 	modes := []model.OutputMode{
 		model.OutputModeOriginalOnly,

@@ -79,8 +79,9 @@ type Email struct {
 type Schedule []string
 
 type OutputCfg struct {
-	Dir  string           `yaml:"dir"`
-	Mode model.OutputMode `yaml:"mode"`
+	Dir                     string           `yaml:"dir"`
+	Mode                    model.OutputMode `yaml:"mode"`
+	IncludeFilteredArticles bool             `yaml:"include_filtered_articles"`
 }
 
 type Proxy struct {

@@ -224,6 +224,7 @@ schedule:
 output:
   dir: output
   mode: translated_only
+  include_filtered_articles: false
 
 proxy:
   http: http://127.0.0.1:7897
