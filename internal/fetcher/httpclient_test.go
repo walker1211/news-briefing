@@ -222,6 +222,13 @@ func TestClientFetchHackerNewsUsesInjectedHTTPClient(t *testing.T) {
 	if len(result.Candidates) != 1 || result.Candidates[0].Article.Title != "AI launch" {
 		t.Fatalf("Candidates = %#v", result.Candidates)
 	}
+	summary := result.Candidates[0].Article.Summary
+	if !strings.Contains(summary, "HN Score: 42") {
+		t.Fatalf("Summary = %q, want HN score", summary)
+	}
+	if !strings.Contains(summary, "\n简介：") || !strings.Contains(summary, "example.com") || !strings.Contains(summary, "AI launch") {
+		t.Fatalf("Summary = %q, want generated HN intro with domain and title on next line", summary)
+	}
 }
 
 func TestClientFetchPageUsesInjectedHTTPClient(t *testing.T) {

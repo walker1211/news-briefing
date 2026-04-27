@@ -162,7 +162,7 @@ Allowed `mode` values:
 - `bilingual_translated_first` — show Chinese first, then the original block
 - `bilingual_original_first` — show the original block first, then the Chinese block
 
-`include_filtered_articles` defaults to `false`. When set to `true`, `run`, `regen`, and `serve` append in-window candidates that did not match any keyword to the end of the briefing. These candidates are not included in the AI summary and are not written to the seen state.
+`include_filtered_articles` defaults to `false`. When set to `true`, `run`, `regen`, and `serve` append in-window candidates that did not match any keyword to the end of the briefing as a Chinese-translated appendix. These candidates are not included in the AI summary and are not written to the seen state.
 
 This setting affects:
 

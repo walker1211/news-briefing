@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"net/url"
+	"strings"
 	"sync"
 	"time"
 
@@ -88,7 +90,7 @@ func (c *Client) FetchHackerNewsContext(ctx context.Context, source config.Sourc
 				Article: model.Article{
 					Title:     item.Title,
 					Link:      item.URL,
-					Summary:   fmt.Sprintf("HN Score: %d", item.Score),
+					Summary:   hnSummary(item),
 					Source:    source.Name,
 					Category:  source.Category,
 					Published: pub,
@@ -104,6 +106,24 @@ func (c *Client) FetchHackerNewsContext(ctx context.Context, source config.Sourc
 		return sourceFetchResult{}, err
 	}
 	return sourceFetchResult{Source: source, Candidates: candidates}, nil
+}
+
+func hnSummary(item *hnItem) string {
+	title := strings.TrimSpace(item.Title)
+	domain := ""
+	if u, err := url.Parse(strings.TrimSpace(item.URL)); err == nil {
+		domain = strings.TrimPrefix(strings.ToLower(u.Hostname()), "www.")
+	}
+	if title == "" {
+		if domain == "" {
+			return fmt.Sprintf("HN Score: %d", item.Score)
+		}
+		return fmt.Sprintf("HN Score: %d\n简介：Hacker News 社区正在讨论来自 %s 的这条链接。", item.Score, domain)
+	}
+	if domain == "" {
+		return fmt.Sprintf("HN Score: %d\n简介：Hacker News 社区正在讨论“%s”。", item.Score, title)
+	}
+	return fmt.Sprintf("HN Score: %d\n简介：Hacker News 社区正在讨论来自 %s 的“%s”。", item.Score, domain, title)
 }
 
 func fetchHNItem(ctx context.Context, client *http.Client, id int) (*hnItem, error) {

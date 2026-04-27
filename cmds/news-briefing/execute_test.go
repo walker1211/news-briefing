@@ -514,7 +514,7 @@ func TestRenderBriefingUsesComposedBodyForRun(t *testing.T) {
 	}
 }
 
-func TestRenderBriefingAppendsFilteredArticlesWhenEnabled(t *testing.T) {
+func TestRenderBriefingAppendsTranslatedFilteredArticlesWhenEnabled(t *testing.T) {
 	articles := sampleExecuteArticles()
 	filtered := []model.Article{{
 		Title:     "Market update without keyword",
@@ -528,6 +528,7 @@ func TestRenderBriefingAppendsFilteredArticlesWhenEnabled(t *testing.T) {
 	var written *model.Briefing
 	var emailed *model.Briefing
 	var summarized []model.Article
+	var translated []model.Article
 
 	app := &app{
 		cfg: &config.Config{
@@ -538,6 +539,13 @@ func TestRenderBriefingAppendsFilteredArticlesWhenEnabled(t *testing.T) {
 			summarizeContext: func(ctx context.Context, got []model.Article, categoryOrder []string, loc *time.Location) (string, error) {
 				summarized = append([]model.Article(nil), got...)
 				return "SUMMARY", nil
+			},
+			translateContext: func(ctx context.Context, got []model.Article, categoryOrder []string, loc *time.Location) (string, error) {
+				if strings.Join(categoryOrder, ",") != "AI/科技,国际政治" {
+					t.Fatalf("translate() categoryOrder = %v", categoryOrder)
+				}
+				translated = append([]model.Article(nil), got...)
+				return "== 国际政治 ==\n1. 市场无关键词更新\n摘要：市场摘要\n来源: Example | 2026-03-18 13:00\nhttps://example.com/market", nil
 			},
 		},
 		output: outputDeps{
@@ -572,8 +580,11 @@ func TestRenderBriefingAppendsFilteredArticlesWhenEnabled(t *testing.T) {
 	if !strings.Contains(printed.RawContent, "## 未命中关键词的候选新闻") {
 		t.Fatalf("RawContent = %q, want filtered appendix heading", printed.RawContent)
 	}
-	if !strings.Contains(printed.RawContent, "Market update without keyword") {
-		t.Fatalf("RawContent = %q, want filtered article", printed.RawContent)
+	if !strings.Contains(printed.RawContent, "市场无关键词更新") {
+		t.Fatalf("RawContent = %q, want translated filtered article", printed.RawContent)
+	}
+	if strings.Contains(printed.RawContent, "Market update without keyword") {
+		t.Fatalf("RawContent = %q, want translated-only filtered appendix", printed.RawContent)
 	}
 	for name, briefing := range map[string]*model.Briefing{
 		"writeMarkdown": written,
@@ -585,18 +596,97 @@ func TestRenderBriefingAppendsFilteredArticlesWhenEnabled(t *testing.T) {
 		if !strings.Contains(briefing.RawContent, "## 未命中关键词的候选新闻") {
 			t.Fatalf("%s RawContent = %q, want filtered appendix heading", name, briefing.RawContent)
 		}
-		if !strings.Contains(briefing.RawContent, "Market update without keyword") {
-			t.Fatalf("%s RawContent = %q, want filtered article", name, briefing.RawContent)
+		if !strings.Contains(briefing.RawContent, "市场无关键词更新") {
+			t.Fatalf("%s RawContent = %q, want translated filtered article", name, briefing.RawContent)
 		}
 	}
 	if len(summarized) != 1 || summarized[0].Title != "OpenAI ships feature" {
 		t.Fatalf("summarized = %#v, want accepted articles only", summarized)
 	}
+	if len(translated) != 1 || translated[0].Title != "Market update without keyword" {
+		t.Fatalf("translated = %#v, want filtered articles only", translated)
+	}
+}
+
+func TestRenderBriefingReturnsFilteredAppendixTranslateErrorBeforeSideEffects(t *testing.T) {
+	articles := sampleExecuteArticles()
+	filtered := []model.Article{{Title: "Market update without keyword", Category: "国际政治"}}
+	printed := false
+	wrote := false
+	emailed := false
+
+	app := &app{
+		cfg: &config.Config{
+			Output: config.OutputCfg{Dir: t.TempDir(), Mode: model.OutputModeTranslatedOnly, IncludeFilteredArticles: true},
+		},
+		ai: aiDeps{
+			summarizeContext: func(ctx context.Context, articles []model.Article, categoryOrder []string, loc *time.Location) (string, error) {
+				return "SUMMARY", nil
+			},
+			translateContext: func(ctx context.Context, articles []model.Article, categoryOrder []string, loc *time.Location) (string, error) {
+				return "", errors.New("translate failed")
+			},
+		},
+		output: outputDeps{
+			composeBody:   func(string, model.OutputMode, model.OutputContent) (string, error) { return "SUMMARY", nil },
+			printCLI:      func(*model.Briefing) { printed = true },
+			writeMarkdown: func(*model.Briefing, string) (string, error) { wrote = true; return "", nil },
+			printFailed:   func([]fetcher.FailedSource) {},
+		},
+		email: emailDeps{
+			sendEmail: func(*model.Briefing, *config.Config, []fetcher.FailedSource) error {
+				emailed = true
+				return nil
+			},
+		},
+	}
+
+	err := app.renderBriefing("run", "26.03.27", "1400", articles, filtered, nil, nil, false, true)
+	if err == nil || !strings.Contains(err.Error(), "translate filtered articles") {
+		t.Fatalf("renderBriefing() error = %v, want filtered appendix translation error", err)
+	}
+	if printed || wrote || emailed {
+		t.Fatalf("side effects ran after translation failure: printed=%v wrote=%v emailed=%v", printed, wrote, emailed)
+	}
+}
+
+func TestRenderBriefingSkipsFilteredAppendixTranslateWhenNoFilteredArticles(t *testing.T) {
+	translateCalled := false
+	var printed *model.Briefing
+
+	app := &app{
+		cfg: &config.Config{Output: config.OutputCfg{Dir: t.TempDir(), Mode: model.OutputModeOriginalOnly, IncludeFilteredArticles: true}},
+		ai: aiDeps{
+			translateContext: func(ctx context.Context, articles []model.Article, categoryOrder []string, loc *time.Location) (string, error) {
+				translateCalled = true
+				return "TRANSLATED", nil
+			},
+		},
+		output: outputDeps{
+			composeBody:   func(string, model.OutputMode, model.OutputContent) (string, error) { return "BODY", nil },
+			printCLI:      func(b *model.Briefing) { printed = b },
+			writeMarkdown: func(*model.Briefing, string) (string, error) { return "", nil },
+			printFailed:   func([]fetcher.FailedSource) {},
+		},
+	}
+
+	if err := app.renderBriefing("run", "26.03.27", "1400", sampleExecuteArticles(), nil, nil, nil, false, false); err != nil {
+		t.Fatalf("renderBriefing() error = %v", err)
+	}
+	if translateCalled {
+		t.Fatal("translate() was called without filtered articles")
+	}
+	if printed == nil || printed.RawContent != "BODY" {
+		t.Fatalf("RawContent = %q, want BODY", printed.RawContent)
+	}
 }
 
 func TestAppendFilteredArticlesAppendixAllowsNilConfig(t *testing.T) {
 	filtered := []model.Article{{Title: "Market update without keyword"}}
-	got := (&app{}).appendFilteredArticlesAppendix("BODY", filtered, []string{"国际政治"})
+	got, err := (&app{}).appendFilteredArticlesAppendix(context.Background(), "BODY", filtered, []string{"国际政治"})
+	if err != nil {
+		t.Fatalf("appendFilteredArticlesAppendix() error = %v", err)
+	}
 	if got != "BODY" {
 		t.Fatalf("appendFilteredArticlesAppendix() = %q, want BODY", got)
 	}
@@ -610,17 +700,27 @@ func TestAppendFilteredArticlesAppendixHandlesEmptyBody(t *testing.T) {
 		Source:   "Example",
 		Category: "国际政治",
 	}}
-	app := &app{cfg: &config.Config{Output: config.OutputCfg{IncludeFilteredArticles: true}}}
+	app := &app{
+		cfg: &config.Config{Output: config.OutputCfg{IncludeFilteredArticles: true}},
+		ai: aiDeps{
+			translateContext: func(ctx context.Context, articles []model.Article, categoryOrder []string, loc *time.Location) (string, error) {
+				return "市场无关键词更新", nil
+			},
+		},
+	}
 
-	got := app.appendFilteredArticlesAppendix("", filtered, []string{"国际政治"})
+	got, err := app.appendFilteredArticlesAppendix(context.Background(), "", filtered, []string{"国际政治"})
+	if err != nil {
+		t.Fatalf("appendFilteredArticlesAppendix() error = %v", err)
+	}
 	if strings.HasPrefix(got, " ") || strings.HasPrefix(got, "\n") || strings.HasPrefix(got, "\x00") {
 		t.Fatalf("appendFilteredArticlesAppendix() = %q, want no leading garbage", got)
 	}
 	if !strings.Contains(got, "## 未命中关键词的候选新闻") {
 		t.Fatalf("appendFilteredArticlesAppendix() = %q, want filtered appendix heading", got)
 	}
-	if !strings.Contains(got, "Market update without keyword") {
-		t.Fatalf("appendFilteredArticlesAppendix() = %q, want filtered article", got)
+	if !strings.Contains(got, "市场无关键词更新") {
+		t.Fatalf("appendFilteredArticlesAppendix() = %q, want translated filtered article", got)
 	}
 }
 

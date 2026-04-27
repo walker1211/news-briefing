@@ -550,19 +550,23 @@ func (app *app) renderBriefing(commandPath string, date string, period string, a
 	return app.renderBriefingContext(context.Background(), commandPath, date, period, articles, filteredArticles, seenArticles, failed, showRaw, sendEmail)
 }
 
-func (app *app) appendFilteredArticlesAppendix(body string, filteredArticles []model.Article, categoryOrder []string) string {
+func (app *app) appendFilteredArticlesAppendix(ctx context.Context, body string, filteredArticles []model.Article, categoryOrder []string) (string, error) {
 	if app.cfg == nil || !app.cfg.Output.IncludeFilteredArticles || len(filteredArticles) == 0 {
-		return body
+		return body, nil
 	}
-	appendix := strings.TrimSpace(output.GroupedArticleListView(filteredArticles, categoryOrder, app.displayLocation()))
+	appendix, err := app.translateArticles(ctx, filteredArticles, categoryOrder, app.displayLocation())
+	if err != nil {
+		return "", fmt.Errorf("translate filtered articles: %w", err)
+	}
+	appendix = strings.TrimSpace(appendix)
 	if appendix == "" {
-		return body
+		return body, nil
 	}
 	body = strings.TrimSpace(body)
 	if body == "" {
-		return "## 未命中关键词的候选新闻\n\n" + appendix
+		return "## 未命中关键词的候选新闻\n\n" + appendix, nil
 	}
-	return body + "\n\n## 未命中关键词的候选新闻\n\n" + appendix
+	return body + "\n\n## 未命中关键词的候选新闻\n\n" + appendix, nil
 }
 
 func (app *app) renderBriefingContext(ctx context.Context, commandPath string, date string, period string, articles []model.Article, filteredArticles []model.Article, seenArticles []model.Article, failed []fetcher.FailedSource, showRaw bool, sendEmail bool) error {
@@ -595,7 +599,10 @@ func (app *app) renderBriefingContext(ctx context.Context, commandPath string, d
 	if err != nil {
 		return err
 	}
-	body = app.appendFilteredArticlesAppendix(body, filteredArticles, categoryOrder)
+	body, err = app.appendFilteredArticlesAppendix(ctx, body, filteredArticles, categoryOrder)
+	if err != nil {
+		return err
+	}
 
 	briefing := &model.Briefing{
 		Date:       date,

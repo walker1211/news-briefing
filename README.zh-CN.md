@@ -164,7 +164,7 @@ output:
 - `bilingual_translated_first`：先显示中文，再显示原文
 - `bilingual_original_first`：先显示原文，再显示中文
 
-`include_filtered_articles` 默认关闭。设为 `true` 后，`run`、`regen` 和 `serve` 会把时间窗口内但未命中关键词的候选新闻追加到简报末尾；这些候选新闻不会进入 AI 摘要，也不会写入已读状态。
+`include_filtered_articles` 默认关闭。设为 `true` 后，`run`、`regen` 和 `serve` 会把时间窗口内但未命中关键词的候选新闻以中文译文附录追加到简报末尾；这些候选新闻不会进入 AI 摘要，也不会写入已读状态。
 
 作用范围：
 
