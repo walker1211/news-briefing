@@ -177,6 +177,39 @@ func TestFetchWindowFiltersCandidatesAndPreservesFailures(t *testing.T) {
 	}
 }
 
+func TestFetchWindowDetailedReturnsFilteredCandidates(t *testing.T) {
+	from := time.Date(2026, 3, 18, 8, 0, 0, 0, time.UTC)
+	to := from.Add(6 * time.Hour)
+	cfg := &config.Config{Output: config.OutputCfg{Dir: "output"}, Sources: []config.Source{
+		{Name: "RSS", Type: config.SourceTypeRSS, Category: "AI/科技"},
+	}}
+
+	fetchAll := func(ctx context.Context, cfg *config.Config, since time.Time) ([]sourceFetchResult, []FailedSource, error) {
+		return []sourceFetchResult{{
+			Source: config.Source{Name: "RSS", Type: config.SourceTypeRSS, Category: "AI/科技"},
+			Candidates: []fetchedCandidate{
+				{Article: model.Article{Title: "miss keyword", Link: "https://example.com/miss", Source: "RSS", Category: "AI/科技", Published: from.Add(time.Hour)}},
+				{Article: model.Article{Title: "out window miss", Link: "https://example.com/out-miss", Source: "RSS", Category: "AI/科技", Published: to.Add(time.Minute)}},
+				{Article: model.Article{Title: "include", Link: "https://example.com/include", Source: "RSS", Category: "AI/科技", Published: from.Add(2 * time.Hour)}, MatchedKeywords: []string{"AI"}},
+			},
+		}}, []FailedSource{{Name: "HN", Err: errors.New("boom")}}, nil
+	}
+
+	result, err := fetchWindowDetailedContext(context.Background(), cfg, from, to, false, true, fetchAll)
+	if err != nil {
+		t.Fatalf("fetchWindowDetailedContext() error = %v", err)
+	}
+	if len(result.Articles) != 1 || result.Articles[0].Title != "include" {
+		t.Fatalf("result.Articles = %#v, want included article only", result.Articles)
+	}
+	if len(result.FilteredArticles) != 1 || result.FilteredArticles[0].Title != "miss keyword" {
+		t.Fatalf("result.FilteredArticles = %#v, want in-window keyword miss only", result.FilteredArticles)
+	}
+	if len(result.Failed) != 1 || result.Failed[0].Name != "HN" {
+		t.Fatalf("result.Failed = %#v, want HN failure preserved", result.Failed)
+	}
+}
+
 func TestFetchWindowDedupsAcceptedCandidates(t *testing.T) {
 	from := time.Date(2026, 3, 18, 8, 0, 0, 0, time.UTC)
 	to := from.Add(6 * time.Hour)

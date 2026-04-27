@@ -117,6 +117,12 @@ type FailedSource struct {
 	Err  error
 }
 
+type FetchResult struct {
+	Articles         []model.Article
+	FilteredArticles []model.Article
+	Failed           []FailedSource
+}
+
 func fetchAllSourcesDetailed(ctx context.Context, cfg *config.Config, since time.Time) ([]sourceFetchResult, []FailedSource, error) {
 	return fetchAllSourcesDetailedWith(ctx, cfg, since, serialSourceFetchers(), sleepContext)
 }
@@ -132,13 +138,31 @@ func (c *Client) FetchAll(cfg *config.Config, markSeen bool) ([]model.Article, [
 }
 
 func FetchAllContext(ctx context.Context, cfg *config.Config, markSeen bool) ([]model.Article, []FailedSource, error) {
-	since := time.Now().Add(-12 * time.Hour)
-	return fetchWindowContext(ctx, cfg, since, time.Now(), markSeen, false, fetchAllSourcesDetailed)
+	result, err := FetchAllDetailedContext(ctx, cfg, markSeen)
+	return result.Articles, result.Failed, err
 }
 
 func (c *Client) FetchAllContext(ctx context.Context, cfg *config.Config, markSeen bool) ([]model.Article, []FailedSource, error) {
+	result, err := c.FetchAllDetailedContext(ctx, cfg, markSeen)
+	return result.Articles, result.Failed, err
+}
+
+func FetchAllDetailed(cfg *config.Config, markSeen bool) (FetchResult, error) {
+	return FetchAllDetailedContext(context.Background(), cfg, markSeen)
+}
+
+func (c *Client) FetchAllDetailed(cfg *config.Config, markSeen bool) (FetchResult, error) {
+	return c.FetchAllDetailedContext(context.Background(), cfg, markSeen)
+}
+
+func FetchAllDetailedContext(ctx context.Context, cfg *config.Config, markSeen bool) (FetchResult, error) {
 	since := time.Now().Add(-12 * time.Hour)
-	return c.FetchWindowContext(ctx, cfg, since, time.Now(), markSeen, false)
+	return fetchWindowDetailedContext(ctx, cfg, since, time.Now(), markSeen, false, fetchAllSourcesDetailed)
+}
+
+func (c *Client) FetchAllDetailedContext(ctx context.Context, cfg *config.Config, markSeen bool) (FetchResult, error) {
+	since := time.Now().Add(-12 * time.Hour)
+	return c.FetchWindowDetailedContext(ctx, cfg, since, time.Now(), markSeen, false)
 }
 
 func FetchWindow(cfg *config.Config, from, to time.Time, markSeen bool, ignoreSeen bool) ([]model.Article, []FailedSource, error) {
@@ -150,32 +174,57 @@ func (c *Client) FetchWindow(cfg *config.Config, from, to time.Time, markSeen bo
 }
 
 func FetchWindowContext(ctx context.Context, cfg *config.Config, from, to time.Time, markSeen bool, ignoreSeen bool) ([]model.Article, []FailedSource, error) {
-	return fetchWindowContext(ctx, cfg, from, to, markSeen, ignoreSeen, fetchAllSourcesDetailed)
+	result, err := FetchWindowDetailedContext(ctx, cfg, from, to, markSeen, ignoreSeen)
+	return result.Articles, result.Failed, err
 }
 
 func (c *Client) FetchWindowContext(ctx context.Context, cfg *config.Config, from, to time.Time, markSeen bool, ignoreSeen bool) ([]model.Article, []FailedSource, error) {
-	return fetchWindowContext(ctx, cfg, from, to, markSeen, ignoreSeen, c.fetchAllSourcesDetailed)
+	result, err := c.FetchWindowDetailedContext(ctx, cfg, from, to, markSeen, ignoreSeen)
+	return result.Articles, result.Failed, err
+}
+
+func FetchWindowDetailed(cfg *config.Config, from, to time.Time, markSeen bool, ignoreSeen bool) (FetchResult, error) {
+	return FetchWindowDetailedContext(context.Background(), cfg, from, to, markSeen, ignoreSeen)
+}
+
+func (c *Client) FetchWindowDetailed(cfg *config.Config, from, to time.Time, markSeen bool, ignoreSeen bool) (FetchResult, error) {
+	return c.FetchWindowDetailedContext(context.Background(), cfg, from, to, markSeen, ignoreSeen)
+}
+
+func FetchWindowDetailedContext(ctx context.Context, cfg *config.Config, from, to time.Time, markSeen bool, ignoreSeen bool) (FetchResult, error) {
+	return fetchWindowDetailedContext(ctx, cfg, from, to, markSeen, ignoreSeen, fetchAllSourcesDetailed)
+}
+
+func (c *Client) FetchWindowDetailedContext(ctx context.Context, cfg *config.Config, from, to time.Time, markSeen bool, ignoreSeen bool) (FetchResult, error) {
+	return fetchWindowDetailedContext(ctx, cfg, from, to, markSeen, ignoreSeen, c.fetchAllSourcesDetailed)
 }
 
 func fetchWindowContext(ctx context.Context, cfg *config.Config, from, to time.Time, markSeen bool, ignoreSeen bool, fetchAll fetchAllSourcesDetailedFunc) ([]model.Article, []FailedSource, error) {
+	result, err := fetchWindowDetailedContext(ctx, cfg, from, to, markSeen, ignoreSeen, fetchAll)
+	return result.Articles, result.Failed, err
+}
+
+func fetchWindowDetailedContext(ctx context.Context, cfg *config.Config, from, to time.Time, markSeen bool, ignoreSeen bool, fetchAll fetchAllSourcesDetailedFunc) (FetchResult, error) {
 	if err := ctx.Err(); err != nil {
-		return nil, nil, err
+		return FetchResult{}, err
 	}
 	results, failed, err := fetchAll(ctx, cfg, from)
 	if err != nil {
-		return nil, nil, err
+		return FetchResult{}, err
 	}
 	if err := ctx.Err(); err != nil {
-		return nil, nil, err
+		return FetchResult{}, err
 	}
 
 	accepted := make([]model.Article, 0)
+	filtered := make([]model.Article, 0)
 	for _, result := range results {
 		for _, candidate := range result.Candidates {
-			if len(candidate.MatchedKeywords) == 0 {
+			if !articleWithinWindow(candidate.Article, from, to) {
 				continue
 			}
-			if !articleWithinWindow(candidate.Article, from, to) {
+			if len(candidate.MatchedKeywords) == 0 {
+				filtered = append(filtered, candidate.Article)
 				continue
 			}
 			accepted = append(accepted, candidate.Article)
@@ -185,16 +234,19 @@ func fetchWindowContext(ctx context.Context, cfg *config.Config, from, to time.T
 	sort.Slice(accepted, func(i, j int) bool {
 		return accepted[i].Published.After(accepted[j].Published)
 	})
+	sort.Slice(filtered, func(i, j int) bool {
+		return filtered[i].Published.After(filtered[j].Published)
+	})
 
 	if err := ctx.Err(); err != nil {
-		return nil, nil, err
+		return FetchResult{}, err
 	}
 
 	outcome, err := applyDedupContext(ctx, accepted, markSeen, ignoreSeen, NewSeenStore(cfg.Output.Dir))
 	if err != nil {
-		return nil, failed, err
+		return FetchResult{FilteredArticles: filtered, Failed: failed}, err
 	}
-	return outcome.Articles, failed, nil
+	return FetchResult{Articles: outcome.Articles, FilteredArticles: filtered, Failed: failed}, nil
 }
 
 func MarkArticlesSeen(outputDir string, articles []model.Article) error {
