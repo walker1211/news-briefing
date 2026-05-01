@@ -806,19 +806,15 @@ func TestDefaultRunnerConcurrentMutationDoesNotRace(t *testing.T) {
 	articles := sampleArticles()
 	var wg sync.WaitGroup
 	for i := 0; i < 20; i++ {
-		wg.Add(3)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			SetCommand("ccs", []string{"codex"})
-		}()
-		go func() {
-			defer wg.Done()
+		})
+		wg.Go(func() {
 			SetProxy("http://127.0.0.1:7897", "")
-		}()
-		go func() {
-			defer wg.Done()
+		})
+		wg.Go(func() {
 			_, _ = Summarize(articles, []string{"AI/科技", "国际政治"}, time.Local)
-		}()
+		})
 	}
 	wg.Wait()
 }

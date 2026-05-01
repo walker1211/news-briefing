@@ -68,9 +68,7 @@ func (c *Client) FetchHackerNewsContext(ctx context.Context, source config.Sourc
 	sem := make(chan struct{}, 10)
 
 	for _, id := range ids {
-		wg.Add(1)
-		go func(id int) {
-			defer wg.Done()
+		wg.Go(func() {
 			select {
 			case sem <- struct{}{}:
 				defer func() { <-sem }()
@@ -98,7 +96,7 @@ func (c *Client) FetchHackerNewsContext(ctx context.Context, source config.Sourc
 				MatchedKeywords: matchedKeywords(item.Title, keywords),
 			})
 			mu.Unlock()
-		}(id)
+		})
 	}
 
 	wg.Wait()
