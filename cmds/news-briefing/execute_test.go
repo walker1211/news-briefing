@@ -381,10 +381,13 @@ func TestExecuteRegenUsesParsedWindowAndFlags(t *testing.T) {
 	from := time.Date(2026, 3, 18, 8, 0, 0, 0, loc)
 	to := time.Date(2026, 3, 18, 14, 0, 0, 0, loc)
 
+	cfg := executeTestConfigWithEmail(t, model.OutputModeTranslatedOnly)
+	cfg.ScheduleLocation = loc
+
 	called := false
 	emailCalled := false
 	app := &app{
-		cfg: executeTestConfigWithEmail(t, model.OutputModeTranslatedOnly),
+		cfg: cfg,
 		fetch: fetchDeps{
 			fetchWindowContext: func(ctx context.Context, cfg *config.Config, gotFrom, gotTo time.Time, markSeen bool, ignoreSeen bool) ([]model.Article, []fetcher.FailedSource, error) {
 				called = gotFrom.Equal(from) && gotTo.Equal(to) && !markSeen && ignoreSeen

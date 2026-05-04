@@ -886,7 +886,6 @@ func TestLoadRejectsInvalidWatchSiteConfig(t *testing.T) {
 
 func TestProjectConfigIncludesAnthropicSupportWatch(t *testing.T) {
 	configPaths := map[string]string{
-		"project": filepath.Join("..", "..", "configs", "config.yaml"),
 		"example": filepath.Join("..", "..", "configs", "config.example.yaml"),
 	}
 
@@ -918,7 +917,6 @@ func TestProjectConfigIncludesAnthropicSupportWatch(t *testing.T) {
 
 func TestProjectConfigIncludesAnthropicOfficialAnnouncementWatchSites(t *testing.T) {
 	configPaths := map[string]string{
-		"project": filepath.Join("..", "..", "configs", "config.yaml"),
 		"example": filepath.Join("..", "..", "configs", "config.example.yaml"),
 	}
 	want := []WatchSite{
@@ -1010,7 +1008,6 @@ func TestProjectConfigIncludesDiscoveryEnhancementAISources(t *testing.T) {
 
 func TestProjectConfigIncludesDiscoveryEnhancementAIKeywords(t *testing.T) {
 	configPaths := map[string]string{
-		"project": filepath.Join("..", "..", "configs", "config.yaml"),
 		"example": filepath.Join("..", "..", "configs", "config.example.yaml"),
 	}
 	want := []string{"AllenAI", "Ai2", "GLM", "Qwen", "千问", "HappyHorse"}
