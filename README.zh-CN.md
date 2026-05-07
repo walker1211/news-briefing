@@ -8,11 +8,11 @@
 
 GitHub Releases 当前只提供 macOS 和 Linux 压缩包。
 
-1. 到 GitHub Releases 下载对应平台压缩包。
+1. 到 GitHub Releases 下载对应平台压缩包，例如 `news-briefing_<tag>_<os>_<arch>.tar.gz`。
 2. 解压到一个工作目录。
 3. 将 `configs/config.example.yaml` 复制为 `configs/config.yaml`。
 4. 填写 `configs/config.yaml`，配置新闻源和 AI CLI。
-5. 在该工作目录中运行 `./news-briefing help`。
+5. 在该工作目录中运行 `./news-briefing --help`。
 6. 只有在需要发送邮件时才补充 `.env`。
 
 说明：当前程序会从当前工作目录读取 `configs/config.yaml` 和 `.env`。即使把二进制加入 `PATH`，也仍然需要在包含这些文件的工作目录中运行。
@@ -24,7 +24,7 @@ GitHub Releases 当前只提供 macOS 和 Linux 压缩包。
 ```bash
 cp configs/config.example.yaml configs/config.yaml
 ./build.sh
-./news-briefing help
+./news-briefing --help
 ```
 
 在运行 `run` 等非 help 命令前，请先填写 `configs/config.yaml`。如需发送邮件，再补充 `.env`。
@@ -189,7 +189,7 @@ output:
 常用命令：
 
 ```bash
-./news-briefing help
+./news-briefing --help
 ./news-briefing run
 ./news-briefing run --raw
 ./news-briefing run --no-email

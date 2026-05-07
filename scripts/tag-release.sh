@@ -16,8 +16,8 @@ script_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 repo_root=$(cd "$script_dir/.." && pwd)
 cd "$repo_root"
 
-if ! git diff --quiet || ! git diff --cached --quiet; then
-  printf 'working tree has uncommitted changes; commit or stash them before tagging\n' >&2
+if [[ -n "$(git status --porcelain)" ]]; then
+  printf 'working tree has modified, staged, or untracked files; commit or stash them before tagging\n' >&2
   exit 1
 fi
 

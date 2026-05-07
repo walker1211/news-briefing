@@ -2,7 +2,25 @@
 
 A configurable news briefing tool that fetches news from multiple sources, filters by keywords and time windows, and generates Chinese briefings through your local AI CLI.
 
-[中文文档](./README.zh-CN.md) | [English Documentation](./README.en.md)
+[中文](./README.zh-CN.md) | [English](./README.en.md)
+
+## Installation
+
+Prefer downloading a prebuilt archive from GitHub Releases, for example `news-briefing_<tag>_<os>_<arch>.tar.gz`.
+
+```bash
+tar -xzf news-briefing_<tag>_<os>_<arch>.tar.gz
+cp configs/config.example.yaml configs/config.yaml
+./news-briefing --help
+```
+
+To build from source instead:
+
+```bash
+cp configs/config.example.yaml configs/config.yaml
+./build.sh
+./news-briefing --help
+```
 
 ## Features
 

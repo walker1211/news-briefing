@@ -8,11 +8,11 @@
 
 GitHub Releases currently provide macOS and Linux archives only.
 
-1. Download the archive for your platform from GitHub Releases.
+1. Download the archive for your platform from GitHub Releases, for example `news-briefing_<tag>_<os>_<arch>.tar.gz`.
 2. Extract it into a working directory.
 3. Copy `configs/config.example.yaml` to `configs/config.yaml`.
 4. Fill in `configs/config.yaml` for your sources and AI CLI.
-5. Run `./news-briefing help` from that working directory.
+5. Run `./news-briefing --help` from that working directory.
 6. Add `.env` only if you plan to use email sending.
 
 Note: the binary currently reads `configs/config.yaml` and `.env` from the current working directory. Adding the binary to `PATH` does not remove that requirement.
@@ -24,7 +24,7 @@ Requires Go 1.25 or newer.
 ```bash
 cp configs/config.example.yaml configs/config.yaml
 ./build.sh
-./news-briefing help
+./news-briefing --help
 ```
 
 Before running non-help commands such as `run`, fill in `configs/config.yaml` for your sources and AI CLI. Add `.env` when email sending is enabled.
@@ -187,7 +187,7 @@ Build first:
 Common commands:
 
 ```bash
-./news-briefing help
+./news-briefing --help
 ./news-briefing run
 ./news-briefing run --raw
 ./news-briefing run --no-email
