@@ -98,8 +98,6 @@ PLACEHOLDER_VALUES = {
     "dummy-secret",
     "github.token",
 }
-PLACEHOLDER_PREFIXES = ("your-", "example-", "test-", "dummy-", "placeholder-")
-
 @dataclass(frozen=True)
 class Finding:
     scope: str
@@ -145,8 +143,6 @@ def allowed_secret_value(value: str) -> bool:
     if not normalized:
         return True
     if lowered in PLACEHOLDER_VALUES:
-        return True
-    if any(lowered.startswith(prefix) for prefix in PLACEHOLDER_PREFIXES):
         return True
     if "${{ github.token }}" in normalized or lowered == "github.token":
         return True

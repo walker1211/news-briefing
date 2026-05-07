@@ -1,11 +1,11 @@
 ## Summary
 
-* 
+*
 
 ## Test plan
 
 * [ ] `bash ./scripts/ci-local.sh`
-* [ ] Other manual checks, if applicable: 
+* [ ] Other manual checks, if applicable:
 
 ## Checklist
 
