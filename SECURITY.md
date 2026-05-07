@@ -10,7 +10,7 @@ If private vulnerability reporting is unavailable, open a minimal public GitHub 
 
 * The affected area at a high level.
 * A statement that you can share details privately with a maintainer.
-* No secrets, private prompts, private images, database files, `.env` values, `configs/config.yaml`, or generated data.
+* No secrets, private feed or source details, API credentials, `.env` values, `configs/config.yaml`, logs, or generated briefing data.
 * No step-by-step exploit instructions or weaponized proof-of-concept details.
 
 ## Supported scope
@@ -19,16 +19,15 @@ Security fixes are generally handled for the current `main` branch and the lates
 
 ## Project security boundaries
 
-`codex-imgen` is a local-first Go CLI and optional local async job service. It wraps Codex CLI image generation and stores local configuration, local job state, logs, and generated artifacts according to your configuration.
+`news-briefing` is a local-first Go CLI/tool that fetches configured news sources, filters articles by keywords and time windows, and generates briefing output through a locally configured AI CLI. It stores local configuration, generated Markdown output, seen-state data, and logs according to the repository configuration and runtime options.
 
 Important boundaries and assumptions:
 
-* The service is intended to listen on `127.0.0.1` by default for local-only access. Only bind to `0.0.0.0` or another network-facing address if you intentionally want to expose it and understand the risks.
-* Put sensitive values in `.env`, not in YAML or command examples.
+* Put sensitive values such as email auth codes in `.env`, not in YAML or command examples.
 * Keep structured local configuration in `configs/config.yaml`; commit only `configs/config.example.yaml`.
-* Do not commit `.env`, `configs/config.yaml`, local SQLite databases, `.data/`, generated images, logs, or other private runtime data.
-* Treat prompts, reference images, generated images, job records, and logs as potentially private.
-* Review any issue, pull request, log excerpt, screenshot, or shell output for secrets before publishing it.
+* Do not commit `.env`, `configs/config.yaml`, generated output, seen-state data, logs, private feed/source lists, or other private runtime data.
+* Treat source URLs, keywords, AI CLI configuration, generated briefing content, state files, email settings, and logs as potentially private.
+* Review any issue, pull request, log excerpt, screenshot, shell output, or sample config for secrets and private data before publishing it.
 
 ## Secret handling
 

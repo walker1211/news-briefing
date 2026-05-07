@@ -1,5 +1,5 @@
 name: Bug report
-description: Report a reproducible problem in codex-imgen
+description: Report a reproducible problem in news-briefing
 title: "bug: "
 labels:
   - bug
@@ -7,12 +7,12 @@ body:
   - type: markdown
     attributes:
       value: |
-        Thanks for reporting a bug. Before submitting, remove secrets, private prompts, private image data, `.env` values, `configs/config.yaml`, database contents, and other sensitive information.
+        Thanks for reporting a bug. Before submitting, remove secrets, private feed or source details, API credentials, `.env` values, `configs/config.yaml`, logs, generated briefing data, and other sensitive information.
 
   - type: input
     id: version
     attributes:
-      label: codex-imgen version
+      label: news-briefing version
       description: Release version, commit SHA, or output from the binary if available.
       placeholder: "v0.1.0, commit abc1234, or local main"
     validations:
@@ -35,20 +35,11 @@ body:
     validations:
       required: false
 
-  - type: input
-    id: codex-cli-version
-    attributes:
-      label: Codex CLI version
-      description: Include the Codex CLI version or installation channel if relevant.
-      placeholder: "codex --version output, or unknown"
-    validations:
-      required: false
-
   - type: textarea
     id: command
     attributes:
       label: Command or workflow
-      description: Paste the command, API call, or service workflow that triggers the problem. Redact secrets and private paths if needed.
+      description: Paste the command, configuration shape, or workflow that triggers the problem. Redact secrets, feed URLs, API credentials, local config values, and private paths if needed.
       render: bash
     validations:
       required: true
@@ -85,7 +76,7 @@ body:
     id: logs
     attributes:
       label: Logs or error output
-      description: Paste only relevant log snippets. Redact tokens, auth codes, private prompts, private image names, local config values, and private paths.
+      description: Paste only relevant log snippets. Redact tokens, auth codes, feed URLs, source details, local config values, generated briefing data, and private paths.
       render: text
     validations:
       required: false

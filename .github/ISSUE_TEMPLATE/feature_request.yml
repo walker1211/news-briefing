@@ -1,5 +1,5 @@
 name: Feature request
-description: Suggest an improvement or new capability for codex-imgen
+description: Suggest an improvement or new capability for news-briefing
 title: "feat: "
 labels:
   - enhancement
@@ -7,14 +7,14 @@ body:
   - type: markdown
     attributes:
       value: |
-        Thanks for suggesting an improvement. Please avoid including secrets, private prompts, private image data, `.env` values, `configs/config.yaml`, or generated private data.
+        Thanks for suggesting an improvement. Please avoid including secrets, private feed or source details, API credentials, `.env` values, `configs/config.yaml`, logs, generated briefing data, or other sensitive information.
 
   - type: textarea
     id: scenario
     attributes:
       label: Use case
       description: What are you trying to accomplish? Describe the workflow or problem in practical terms.
-      placeholder: "When using codex-imgen to ..., I need ..."
+      placeholder: "When using news-briefing to ..., I need ..."
     validations:
       required: true
 
@@ -22,7 +22,7 @@ body:
     id: expected-capability
     attributes:
       label: Desired capability
-      description: What should codex-imgen be able to do?
+      description: What should news-briefing be able to do?
     validations:
       required: true
 
@@ -38,7 +38,7 @@ body:
     id: constraints
     attributes:
       label: Constraints and compatibility
-      description: Mention relevant constraints such as local-only operation, Codex CLI behavior, config compatibility, security, performance, or platform requirements.
+      description: Mention relevant constraints such as local-first operation, source compatibility, output format, email delivery, scheduling, configuration compatibility, security, performance, or platform requirements.
     validations:
       required: false
 
