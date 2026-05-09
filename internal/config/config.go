@@ -17,6 +17,7 @@ import (
 type Config struct {
 	Sources          []Source       `yaml:"sources"`
 	Keywords         []string       `yaml:"keywords"`
+	Fetch            FetchConfig    `yaml:"fetch"`
 	Watch            WatchConfig    `yaml:"watch"`
 	Email            Email          `yaml:"email"`
 	Schedule         Schedule       `yaml:"schedule"`
@@ -36,6 +37,10 @@ const (
 
 	WatchTypeAnthropicSupport = "anthropic_support"
 	WatchTypeAnnouncementPage = "announcement_page"
+
+	DefaultFetchTimeout       = 30 * time.Second
+	DefaultFetchRetryTimes    = 3
+	DefaultFetchRetryWaitTime = 200 * time.Millisecond
 )
 
 type Source struct {
@@ -46,6 +51,15 @@ type Source struct {
 	Keywords []string `yaml:"keywords"`
 	PageKind string   `yaml:"page_kind"`
 	TimeHint string   `yaml:"time_hint"`
+}
+
+type FetchConfig struct {
+	TimeoutRaw       string        `yaml:"timeout"`
+	RetryTimesRaw    *int          `yaml:"retry_times"`
+	RetryWaitTimeRaw string        `yaml:"retry_wait_time"`
+	Timeout          time.Duration `yaml:"-"`
+	RetryTimes       int           `yaml:"-"`
+	RetryWaitTime    time.Duration `yaml:"-"`
 }
 
 type WatchConfig struct {
@@ -123,6 +137,43 @@ var supportedSourceTypes = map[string]struct{}{
 var supportedWatchTypes = map[string]struct{}{
 	WatchTypeAnthropicSupport: {},
 	WatchTypeAnnouncementPage: {},
+}
+
+func applyFetchDefaults(fetch *FetchConfig) error {
+	if strings.TrimSpace(fetch.TimeoutRaw) == "" {
+		fetch.TimeoutRaw = DefaultFetchTimeout.String()
+	}
+	if fetch.RetryTimesRaw == nil {
+		defaultRetries := DefaultFetchRetryTimes
+		fetch.RetryTimesRaw = &defaultRetries
+	}
+	if strings.TrimSpace(fetch.RetryWaitTimeRaw) == "" {
+		fetch.RetryWaitTimeRaw = DefaultFetchRetryWaitTime.String()
+	}
+
+	timeout, err := time.ParseDuration(strings.TrimSpace(fetch.TimeoutRaw))
+	if err != nil {
+		return fmt.Errorf("parse fetch.timeout: %w", err)
+	}
+	if timeout <= 0 {
+		return fmt.Errorf("validate fetch.timeout: must be greater than 0")
+	}
+
+	wait, err := time.ParseDuration(strings.TrimSpace(fetch.RetryWaitTimeRaw))
+	if err != nil {
+		return fmt.Errorf("parse fetch.retry_wait_time: %w", err)
+	}
+	if wait < 0 {
+		return fmt.Errorf("validate fetch.retry_wait_time: must be zero or greater")
+	}
+	if *fetch.RetryTimesRaw < 1 {
+		return fmt.Errorf("validate fetch.retry_times: must be at least 1")
+	}
+
+	fetch.Timeout = timeout
+	fetch.RetryTimes = *fetch.RetryTimesRaw
+	fetch.RetryWaitTime = wait
+	return nil
 }
 
 func applyEmailDefaults(email *Email) error {
@@ -362,6 +413,9 @@ func Load(configPath string) (*Config, error) {
 		return nil, err
 	}
 	cfg.ScheduleLocation = loc
+	if err := applyFetchDefaults(&cfg.Fetch); err != nil {
+		return nil, err
+	}
 	if err := applyEmailDefaults(&cfg.Email); err != nil {
 		return nil, err
 	}

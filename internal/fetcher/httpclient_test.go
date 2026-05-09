@@ -51,6 +51,13 @@ func TestUATransportSetsUserAgent(t *testing.T) {
 	_ = resp.Body.Close()
 }
 
+func TestNewHTTPClientUsesConfiguredTimeout(t *testing.T) {
+	client := NewHTTPClient(config.Proxy{}, 45*time.Second)
+	if client.Timeout != 45*time.Second {
+		t.Fatalf("NewHTTPClient().Timeout = %v, want %v", client.Timeout, 45*time.Second)
+	}
+}
+
 func TestNewHTTPClientPrefersHTTPProxyOverSocks5(t *testing.T) {
 	client := NewHTTPClient(config.Proxy{HTTP: "http://127.0.0.1:8080", Socks5: "socks5://127.0.0.1:1080"})
 	ua, ok := client.Transport.(*uaTransport)

@@ -36,6 +36,11 @@ func (r *Runner) fetchWatchHTML(ctx context.Context, url string) (string, error)
 	return fetchWatchHTMLWith(ctx, r.httpClient, url)
 }
 
+type watchFetchRetrySettings struct {
+	times int
+	wait  time.Duration
+}
+
 func fetchWatchHTMLWith(ctx context.Context, client *http.Client, url string) (string, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
@@ -54,6 +59,56 @@ func fetchWatchHTMLWith(ctx context.Context, client *http.Client, url string) (s
 		return "", err
 	}
 	return string(body), nil
+}
+
+func watchFetchRetrySettingsFromConfig(cfg *config.Config) watchFetchRetrySettings {
+	if cfg == nil || cfg.Fetch.RetryTimes < 1 {
+		return watchFetchRetrySettings{times: config.DefaultFetchRetryTimes, wait: config.DefaultFetchRetryWaitTime}
+	}
+	settings := watchFetchRetrySettings{times: cfg.Fetch.RetryTimes, wait: cfg.Fetch.RetryWaitTime}
+	if settings.wait < 0 {
+		settings.wait = config.DefaultFetchRetryWaitTime
+	}
+	return settings
+}
+
+func retryingFetchHTML(fetchHTML fetchHTMLFunc, settings watchFetchRetrySettings) fetchHTMLFunc {
+	return func(ctx context.Context, url string) (string, error) {
+		var lastErr error
+		for attempt := 1; attempt <= settings.times; attempt++ {
+			if err := ctx.Err(); err != nil {
+				return "", err
+			}
+			html, err := fetchHTML(ctx, url)
+			if err == nil {
+				return html, nil
+			}
+			if ctxErr := ctx.Err(); ctxErr != nil {
+				return "", ctxErr
+			}
+			lastErr = err
+			if attempt < settings.times {
+				if err := sleepWatchRetry(ctx, settings.wait); err != nil {
+					return "", err
+				}
+			}
+		}
+		return "", lastErr
+	}
+}
+
+func sleepWatchRetry(ctx context.Context, d time.Duration) error {
+	if d == 0 {
+		return ctx.Err()
+	}
+	timer := time.NewTimer(d)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
 }
 
 func Run(cfg *config.Config, now time.Time) ([]model.Article, *model.WatchReport, error) {
@@ -80,6 +135,7 @@ func runContext(ctx context.Context, cfg *config.Config, now time.Time, fetchHTM
 	if cfg == nil || len(cfg.Watch.Sites) == 0 {
 		return nil, report, nil
 	}
+	fetchHTML = retryingFetchHTML(fetchHTML, watchFetchRetrySettingsFromConfig(cfg))
 
 	indexStore := NewIndexStore(cfg.Output.Dir)
 	articleStore := NewArticleStore(cfg.Output.Dir)
@@ -103,7 +159,7 @@ func runContext(ctx context.Context, cfg *config.Config, now time.Time, fetchHTM
 			if ctxErr := ctx.Err(); ctxErr != nil {
 				return nil, nil, ctxErr
 			}
-			if site.Type == config.WatchTypeAnnouncementPage {
+			if site.Type == config.WatchTypeAnnouncementPage || site.Type == config.WatchTypeAnthropicSupport {
 				report.Events = append(report.Events, model.WatchEvent{
 					EventType:         "site_error",
 					Source:            site.Name,

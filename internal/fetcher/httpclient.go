@@ -16,8 +16,12 @@ var (
 	sharedClient   *http.Client
 )
 
-func NewHTTPClient(proxy config.Proxy) *http.Client {
+func NewHTTPClient(proxy config.Proxy, timeout ...time.Duration) *http.Client {
 	transport := &http.Transport{}
+	effectiveTimeout := config.DefaultFetchTimeout
+	if len(timeout) > 0 && timeout[0] > 0 {
+		effectiveTimeout = timeout[0]
+	}
 
 	if proxy.HTTP != "" {
 		if u, err := url.Parse(proxy.HTTP); err == nil {
@@ -31,7 +35,7 @@ func NewHTTPClient(proxy config.Proxy) *http.Client {
 
 	return &http.Client{
 		Transport: &uaTransport{inner: transport},
-		Timeout:   30 * time.Second,
+		Timeout:   effectiveTimeout,
 	}
 }
 

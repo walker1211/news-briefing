@@ -46,6 +46,21 @@ Rules:
 
 ### 2. Template config and local config
 
+Example fetch config:
+
+```yaml
+fetch:
+  timeout: 30s
+  retry_times: 3
+  retry_wait_time: 200ms
+```
+
+Notes:
+
+- `timeout`: HTTP fetch timeout
+- `retry_times`: total fetch attempts for news sources and Watch pages
+- `retry_wait_time`: wait duration between failed fetch attempts
+
 Example email delivery config:
 
 ```yaml
@@ -63,9 +78,11 @@ email:
 Notes:
 
 - `timeout`: SMTP connect/send timeout
-- `retry_times`: total send attempts
-- `retry_wait_time`: wait duration between retries
+- `retry_times`: total email send attempts
+- `retry_wait_time`: wait duration between email send retries
 - `use_proxy`: whether email sending should use the configured SOCKS5 proxy
+
+`email.*` only affects email delivery; source fetching and Watch pages use the `fetch.*` settings above.
 
 Repository config layout:
 

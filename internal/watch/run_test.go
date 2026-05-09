@@ -80,6 +80,88 @@ func TestRunContextReturnsContextErrorWhenCancelled(t *testing.T) {
 	}
 }
 
+func TestRunContextRetriesWatchFetchUsingFetchConfig(t *testing.T) {
+	responses := map[string]string{
+		"https://support.claude.com/zh-CN":                                  mustReadFixture(t, "anthropic/home.html"),
+		"https://support.claude.com/zh-CN/collections/4078535-security":     mustReadFixture(t, "anthropic/category_security.html"),
+		"https://support.claude.com/zh-CN/articles/14328960-claude-上的-身份验证": mustReadFixture(t, "anthropic/article_identity_verification.html"),
+	}
+	attempts := map[string]int{}
+	fetchHTML := func(ctx context.Context, url string) (string, error) {
+		attempts[url]++
+		if url == "https://support.claude.com/zh-CN" && attempts[url] < 3 {
+			return "", errors.New("EOF")
+		}
+		return responses[url], nil
+	}
+
+	cfg := &config.Config{
+		Output: config.OutputCfg{Dir: t.TempDir()},
+		Fetch:  config.FetchConfig{RetryTimes: 3, RetryWaitTime: 0},
+		Watch: config.WatchConfig{Sites: []config.WatchSite{{
+			Name:              "Anthropic Claude Support",
+			Type:              config.WatchTypeAnthropicSupport,
+			HomeURL:           "https://support.claude.com/zh-CN",
+			BriefingCategory:  "AI/科技",
+			CategoryAllowlist: []string{"安全保障"},
+			HighValueKeywords: []string{"身份验证", "电话验证"},
+		}}},
+	}
+
+	_, _, err := runContext(context.Background(), cfg, time.Date(2026, 4, 15, 16, 0, 0, 0, time.UTC), fetchHTML)
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if attempts["https://support.claude.com/zh-CN"] != 3 {
+		t.Fatalf("home attempts = %d, want 3", attempts["https://support.claude.com/zh-CN"])
+	}
+}
+
+func TestRunContextTurnsAnthropicSupportFetchFailureIntoSiteError(t *testing.T) {
+	attempts := 0
+	fetchHTML := func(ctx context.Context, url string) (string, error) {
+		attempts++
+		return "", errors.New("EOF")
+	}
+
+	cfg := &config.Config{
+		Output: config.OutputCfg{Dir: t.TempDir()},
+		Fetch:  config.FetchConfig{RetryTimes: 3, RetryWaitTime: 0},
+		Watch: config.WatchConfig{Sites: []config.WatchSite{{
+			Name:             "Anthropic Claude Support",
+			Type:             config.WatchTypeAnthropicSupport,
+			HomeURL:          "https://support.claude.com/zh-CN",
+			BriefingCategory: "AI/科技",
+		}}},
+	}
+
+	articles, report, err := runContext(context.Background(), cfg, time.Date(2026, 4, 15, 16, 0, 0, 0, time.UTC), fetchHTML)
+	if err != nil {
+		t.Fatalf("Run() error = %v, want watch to continue when anthropic support fails", err)
+	}
+	if attempts != 3 {
+		t.Fatalf("attempts = %d, want 3", attempts)
+	}
+	if len(report.Events) != 1 {
+		t.Fatalf("len(report.Events) = %d, want 1; events=%#v", len(report.Events), report.Events)
+	}
+	if report.Events[0].EventType != "site_error" {
+		t.Fatalf("report.Events[0].EventType = %q", report.Events[0].EventType)
+	}
+	if report.Events[0].Source != "Anthropic Claude Support" {
+		t.Fatalf("report.Events[0].Source = %q", report.Events[0].Source)
+	}
+	if report.Events[0].Reason != "抓取失败：EOF" {
+		t.Fatalf("report.Events[0].Reason = %q", report.Events[0].Reason)
+	}
+	if report.Events[0].IncludeInBriefing {
+		t.Fatalf("report.Events[0].IncludeInBriefing = true, want false")
+	}
+	if len(articles) != 0 {
+		t.Fatalf("articles = %#v, want no watch briefing articles", articles)
+	}
+}
+
 func TestRunContextPropagatesCancellationFromAnnouncementSite(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	fetchHTML := func(ctx context.Context, url string) (string, error) {

@@ -367,6 +367,152 @@ proxy: {}
 	}
 }
 
+func TestLoadAppliesDefaultFetchConfig(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	content := `sources: []
+keywords: []
+email:
+  smtp_host: smtp.example.com
+  smtp_port: 465
+  from: from@example.com
+  to: to@example.com
+schedule: []
+output: {}
+proxy: {}
+`
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+
+	if cfg.Fetch.Timeout != 30*time.Second {
+		t.Fatalf("Fetch.Timeout = %v, want %v", cfg.Fetch.Timeout, 30*time.Second)
+	}
+	if cfg.Fetch.RetryTimes != 3 {
+		t.Fatalf("Fetch.RetryTimes = %d, want %d", cfg.Fetch.RetryTimes, 3)
+	}
+	if cfg.Fetch.RetryWaitTime != 200*time.Millisecond {
+		t.Fatalf("Fetch.RetryWaitTime = %v, want %v", cfg.Fetch.RetryWaitTime, 200*time.Millisecond)
+	}
+}
+
+func TestLoadParsesConfiguredFetchConfig(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	content := `sources: []
+keywords: []
+fetch:
+  timeout: 45s
+  retry_times: 5
+  retry_wait_time: 750ms
+email:
+  smtp_host: smtp.example.com
+  smtp_port: 465
+  from: from@example.com
+  to: to@example.com
+schedule: []
+output: {}
+proxy: {}
+`
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+
+	if cfg.Fetch.Timeout != 45*time.Second {
+		t.Fatalf("Fetch.Timeout = %v, want %v", cfg.Fetch.Timeout, 45*time.Second)
+	}
+	if cfg.Fetch.RetryTimes != 5 {
+		t.Fatalf("Fetch.RetryTimes = %d, want %d", cfg.Fetch.RetryTimes, 5)
+	}
+	if cfg.Fetch.RetryWaitTime != 750*time.Millisecond {
+		t.Fatalf("Fetch.RetryWaitTime = %v, want %v", cfg.Fetch.RetryWaitTime, 750*time.Millisecond)
+	}
+}
+
+func TestLoadRejectsInvalidFetchConfig(t *testing.T) {
+	tests := []struct {
+		name    string
+		config  string
+		wantErr string
+	}{
+		{
+			name: "bad timeout",
+			config: `sources: []
+keywords: []
+fetch:
+  timeout: nope
+email:
+  smtp_host: smtp.example.com
+  smtp_port: 465
+  from: from@example.com
+  to: to@example.com
+schedule: []
+output: {}
+proxy: {}
+`,
+			wantErr: "fetch.timeout",
+		},
+		{
+			name: "retry times below one",
+			config: `sources: []
+keywords: []
+fetch:
+  retry_times: 0
+email:
+  smtp_host: smtp.example.com
+  smtp_port: 465
+  from: from@example.com
+  to: to@example.com
+schedule: []
+output: {}
+proxy: {}
+`,
+			wantErr: "fetch.retry_times",
+		},
+		{
+			name: "negative retry wait",
+			config: `sources: []
+keywords: []
+fetch:
+  retry_wait_time: -1ms
+email:
+  smtp_host: smtp.example.com
+  smtp_port: 465
+  from: from@example.com
+  to: to@example.com
+schedule: []
+output: {}
+proxy: {}
+`,
+			wantErr: "fetch.retry_wait_time",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dir := t.TempDir()
+			path := filepath.Join(dir, "config.yaml")
+			if err := os.WriteFile(path, []byte(tt.config), 0o644); err != nil {
+				t.Fatalf("write config: %v", err)
+			}
+			_, err := Load(path)
+			if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
+				t.Fatalf("Load() error = %v, want %q", err, tt.wantErr)
+			}
+		})
+	}
+}
+
 func TestLoadAppliesDefaultEmailDeliveryConfig(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.yaml")

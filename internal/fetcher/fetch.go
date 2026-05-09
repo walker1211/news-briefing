@@ -14,10 +14,12 @@ import (
 	"github.com/walker1211/news-briefing/internal/model"
 )
 
-const (
-	maxRetries = 3
-	retryDelay = 200 * time.Millisecond
-)
+const maxRetries = config.DefaultFetchRetryTimes
+
+type fetchRetrySettings struct {
+	times int
+	wait  time.Duration
+}
 
 type sleepFunc func(context.Context, time.Duration) error
 
@@ -30,6 +32,21 @@ func sleepContext(ctx context.Context, d time.Duration) error {
 	case <-timer.C:
 		return nil
 	}
+}
+
+func defaultFetchRetrySettings() fetchRetrySettings {
+	return fetchRetrySettings{times: config.DefaultFetchRetryTimes, wait: config.DefaultFetchRetryWaitTime}
+}
+
+func fetchRetrySettingsFromConfig(cfg *config.Config) fetchRetrySettings {
+	if cfg == nil || cfg.Fetch.RetryTimes < 1 {
+		return defaultFetchRetrySettings()
+	}
+	settings := fetchRetrySettings{times: cfg.Fetch.RetryTimes, wait: cfg.Fetch.RetryWaitTime}
+	if settings.wait < 0 {
+		settings.wait = config.DefaultFetchRetryWaitTime
+	}
+	return settings
 }
 
 type fetchedCandidate struct {
@@ -326,6 +343,7 @@ func fetchAllSourcesDetailedWith(ctx context.Context, cfg *config.Config, since 
 		}
 	}
 
+	retrySettings := fetchRetrySettingsFromConfig(cfg)
 	for _, src := range otherSources {
 		wg.Go(func() {
 			if err := ctx.Err(); err != nil {
@@ -334,7 +352,7 @@ func fetchAllSourcesDetailedWith(ctx context.Context, cfg *config.Config, since 
 				mu.Unlock()
 				return
 			}
-			result, err := fetchWithRetryUsing(ctx, src, cfg.Keywords, since, fetchers, sleep)
+			result, err := fetchWithRetryUsing(ctx, src, cfg.Keywords, since, fetchers, sleep, retrySettings)
 			mu.Lock()
 			if err != nil {
 				failed = append(failed, FailedSource{Name: src.Name, Err: err})
@@ -391,11 +409,15 @@ func fetchWithRetry(ctx context.Context, src config.Source, keywords []string, s
 	return fetchWithRetryUsing(ctx, src, keywords, since, defaultSourceFetchers(), sleepContext)
 }
 
-func fetchWithRetryUsing(ctx context.Context, src config.Source, keywords []string, since time.Time, fetchers sourceFetchers, sleep sleepFunc) (sourceFetchResult, error) {
+func fetchWithRetryUsing(ctx context.Context, src config.Source, keywords []string, since time.Time, fetchers sourceFetchers, sleep sleepFunc, retryOptions ...fetchRetrySettings) (sourceFetchResult, error) {
+	settings := defaultFetchRetrySettings()
+	if len(retryOptions) > 0 && retryOptions[0].times > 0 {
+		settings = retryOptions[0]
+	}
 	var result sourceFetchResult
 	var lastErr error
 
-	for attempt := 1; attempt <= maxRetries; attempt++ {
+	for attempt := 1; attempt <= settings.times; attempt++ {
 		if err := ctx.Err(); err != nil {
 			return sourceFetchResult{}, err
 		}
@@ -425,8 +447,8 @@ func fetchWithRetryUsing(ctx context.Context, src config.Source, keywords []stri
 		if isRateLimited(err) {
 			break
 		}
-		if attempt < maxRetries {
-			if err := sleep(ctx, retryDelay); err != nil {
+		if attempt < settings.times {
+			if err := sleep(ctx, settings.wait); err != nil {
 				return sourceFetchResult{}, err
 			}
 		}

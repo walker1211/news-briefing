@@ -500,6 +500,61 @@ func TestRunScheduledBriefingPrintsWatchSiteErrors(t *testing.T) {
 	}
 }
 
+func TestRunScheduledBriefingIncludesWatchSiteErrorsInBody(t *testing.T) {
+	loc := time.FixedZone("CST", 8*3600)
+	window := scheduler.Window{
+		Period: "1600",
+		From:   time.Date(2026, 4, 15, 7, 0, 0, 0, loc),
+		To:     time.Date(2026, 4, 15, 16, 0, 0, 0, loc),
+	}
+	var written string
+
+	app := &app{
+		cfg: &config.Config{ScheduleLocation: loc, Output: config.OutputCfg{Dir: t.TempDir(), Mode: model.OutputModeOriginalOnly}},
+		fetch: fetchDeps{
+			fetchWindowContext: func(ctx context.Context, cfg *config.Config, from, to time.Time, markSeen bool, ignoreSeen bool) ([]model.Article, []fetcher.FailedSource, error) {
+				return []model.Article{{Title: "news", Category: "AI/科技", Published: to.Add(-time.Hour)}}, nil, nil
+			},
+		},
+		watch: watchDeps{
+			fetchWatchContext: func(ctx context.Context, cfg *config.Config, gotNow time.Time) ([]model.Article, *model.WatchReport, error) {
+				return nil, &model.WatchReport{
+					GeneratedAt: gotNow,
+					Events: []model.WatchEvent{{
+						EventType:  "site_error",
+						Source:     "Claude Platform Release Notes",
+						Category:   "Claude Platform Release Notes",
+						DetectedAt: gotNow,
+						Reason:     "抓取失败：EOF",
+					}},
+				}, nil
+			},
+		},
+		output: outputDeps{
+			composeBody: func(path string, mode model.OutputMode, content model.OutputContent) (string, error) {
+				return "ORIGINAL ONLY", nil
+			},
+			printText:     func(string) {},
+			printCLI:      func(*model.Briefing) {},
+			printFailed:   func([]fetcher.FailedSource) {},
+			printArticles: func([]model.Article) {},
+			writeMarkdown: func(briefing *model.Briefing, outputDir string) (string, error) {
+				written = briefing.RawContent
+				return "", nil
+			},
+			writeWatchMarkdown: func(*model.WatchReport, string, string, string) (string, error) { return "", nil },
+		},
+	}
+
+	if err := app.runScheduledBriefing(window, false); err != nil {
+		t.Fatalf("runScheduledBriefing() error = %v", err)
+	}
+	want := "## Watch 站点异常\n\n- Watch 站点异常：Claude Platform Release Notes — 抓取失败：EOF"
+	if !strings.Contains(written, want) {
+		t.Fatalf("written body = %q, want to contain %q", written, want)
+	}
+}
+
 func TestRunRegenSkipsWatch(t *testing.T) {
 	watchCalled := false
 	app := &app{

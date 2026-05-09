@@ -418,6 +418,38 @@ func TestFetchRedditSourcesKeepsTwoSecondGapAndOrder(t *testing.T) {
 	}
 }
 
+func TestFetchAllSourcesDetailedUsesConfiguredRetry(t *testing.T) {
+	cfg := &config.Config{
+		Fetch:   config.FetchConfig{RetryTimes: 2, RetryWaitTime: 750 * time.Millisecond},
+		Sources: []config.Source{{Name: "RSS", Type: config.SourceTypeRSS}},
+	}
+	fetchers := stubSourceFetchers()
+	attempts := 0
+	fetchers.rss = func(ctx context.Context, src config.Source, keywords []string, since time.Time) (sourceFetchResult, error) {
+		attempts++
+		return sourceFetchResult{}, errors.New("temporary")
+	}
+	var sleeps []time.Duration
+	sleep := func(ctx context.Context, d time.Duration) error {
+		sleeps = append(sleeps, d)
+		return nil
+	}
+
+	_, failed, err := fetchAllSourcesDetailedWith(context.Background(), cfg, time.Now().Add(-time.Hour), fetchers, sleep)
+	if err != nil {
+		t.Fatalf("fetchAllSourcesDetailedWith() error = %v", err)
+	}
+	if attempts != 2 {
+		t.Fatalf("attempts = %d, want 2", attempts)
+	}
+	if len(sleeps) != 1 || sleeps[0] != 750*time.Millisecond {
+		t.Fatalf("sleeps = %v, want [750ms]", sleeps)
+	}
+	if len(failed) != 1 || failed[0].Name != "RSS" || failed[0].Err == nil {
+		t.Fatalf("failed = %#v, want RSS failure", failed)
+	}
+}
+
 func TestFetchWithRetryReturnsContextErrorWhenCancelled(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()

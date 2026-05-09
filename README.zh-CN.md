@@ -46,6 +46,21 @@ EMAIL_SMTP_AUTH_CODE=邮箱授权码
 
 ### 2. 模板配置与真实配置
 
+抓取相关配置示例：
+
+```yaml
+fetch:
+  timeout: 30s
+  retry_times: 3
+  retry_wait_time: 200ms
+```
+
+说明：
+
+- `timeout`：HTTP 抓取超时
+- `retry_times`：新闻源和 Watch 页面的总抓取尝试次数
+- `retry_wait_time`：抓取失败后的重试间隔
+
 邮件发送相关配置示例：
 
 ```yaml
@@ -63,9 +78,11 @@ email:
 说明：
 
 - `timeout`：SMTP 连接和发送超时
-- `retry_times`：总尝试次数
-- `retry_wait_time`：重试间隔
+- `retry_times`：邮件发送总尝试次数
+- `retry_wait_time`：邮件发送重试间隔
 - `use_proxy`：是否让邮件发送走已配置的 SOCKS5 代理
+
+`email.*` 只作用于邮件发送；新闻源和 Watch 抓取使用上面的 `fetch.*` 配置。
 
 仓库内配置布局：
 

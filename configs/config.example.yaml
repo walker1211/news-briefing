@@ -151,6 +151,11 @@ keywords:
   - Russia
   - Ukraine
 
+fetch:
+  timeout: 30s
+  retry_times: 3
+  retry_wait_time: 200ms
+
 watch:
   sites:
     - name: Anthropic Claude Support

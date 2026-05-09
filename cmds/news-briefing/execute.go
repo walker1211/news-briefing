@@ -77,7 +77,7 @@ type emailDeps struct {
 }
 
 func newApp(cfg *config.Config) *app {
-	httpClient := fetcher.NewHTTPClient(cfg.Proxy)
+	httpClient := fetcher.NewHTTPClient(cfg.Proxy, cfg.Fetch.Timeout)
 	fetchClient := fetcher.NewClient(httpClient)
 	watchRunner := watch.NewRunner(httpClient)
 	aiRunner := summarizer.NewRunner(cfg.AI.Command, cfg.AI.Args, cfg.AI.ExtraFlags, cfg.AI.ShouldAppendSystemPrompt(), cfg.Proxy.HTTP, cfg.Proxy.Socks5)
@@ -348,10 +348,11 @@ type watchFetchResult struct {
 }
 
 type briefingFetchResult struct {
-	articles         []model.Article
-	filteredArticles []model.Article
-	seenArticles     []model.Article
-	failed           []fetcher.FailedSource
+	articles              []model.Article
+	filteredArticles      []model.Article
+	seenArticles          []model.Article
+	failed                []fetcher.FailedSource
+	watchSiteErrorNotices []string
 }
 
 func (app *app) startWatchFetch(ctx context.Context, watchTime time.Time) func() watchFetchResult {
@@ -366,21 +367,22 @@ func (app *app) startWatchFetch(ctx context.Context, watchTime time.Time) func()
 	return func() watchFetchResult { return <-resultCh }
 }
 
-func (app *app) mergeWatchFetchResult(ctx context.Context, articles []model.Article, result watchFetchResult, sidecarDate string, period string) ([]model.Article, error) {
+func (app *app) mergeWatchFetchResult(ctx context.Context, articles []model.Article, result watchFetchResult, sidecarDate string, period string) ([]model.Article, []string, error) {
 	if result.err != nil {
-		return nil, result.err
+		return nil, nil, result.err
 	}
 	articles = append(articles, result.articles...)
-	app.printWatchSiteErrors(result.report)
+	notices := watchSiteErrorNotices(result.report)
+	app.printWatchSiteErrorNotices(notices)
 	if app.output.writeWatchMarkdown != nil && result.report != nil {
 		if err := runIfActive(ctx, func() error {
 			_, err := app.output.writeWatchMarkdown(result.report, app.cfg.Output.Dir, sidecarDate, period)
 			return err
 		}); err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 	}
-	return articles, nil
+	return articles, notices, nil
 }
 
 func (app *app) fetchBriefingArticlesWithWatch(ctx context.Context, watchTime time.Time, sidecarDate string, period string, fetchMain func(context.Context) (fetcher.FetchResult, error)) (briefingFetchResult, error) {
@@ -393,11 +395,12 @@ func (app *app) fetchBriefingArticlesWithWatch(ctx context.Context, watchTime ti
 		return briefingFetchResult{}, err
 	}
 	seenArticles := append([]model.Article(nil), result.Articles...)
-	result.Articles, err = app.mergeWatchFetchResult(ctx, result.Articles, waitWatch(), sidecarDate, period)
+	watchSiteErrorNotices := []string(nil)
+	result.Articles, watchSiteErrorNotices, err = app.mergeWatchFetchResult(ctx, result.Articles, waitWatch(), sidecarDate, period)
 	if err != nil {
 		return briefingFetchResult{}, err
 	}
-	return briefingFetchResult{articles: result.Articles, filteredArticles: result.FilteredArticles, seenArticles: seenArticles, failed: result.Failed}, nil
+	return briefingFetchResult{articles: result.Articles, filteredArticles: result.FilteredArticles, seenArticles: seenArticles, failed: result.Failed, watchSiteErrorNotices: watchSiteErrorNotices}, nil
 }
 
 func (app *app) summarizeArticles(ctx context.Context, articles []model.Article, categoryOrder []string, loc *time.Location) (string, error) {
@@ -496,7 +499,7 @@ func (app *app) runBriefingContext(ctx context.Context, commandPath string, peri
 	if err != nil {
 		return err
 	}
-	return app.renderBriefingContext(ctx, commandPath, date, period, result.articles, result.filteredArticles, result.seenArticles, result.failed, showRaw, sendEmail)
+	return app.renderBriefingContext(ctx, commandPath, date, period, result.articles, result.filteredArticles, result.seenArticles, result.failed, showRaw, sendEmail, result.watchSiteErrorNotices...)
 }
 
 func (app *app) runScheduledBriefing(window scheduler.Window, sendEmail bool) error {
@@ -513,7 +516,7 @@ func (app *app) runScheduledBriefingContext(ctx context.Context, window schedule
 	if err != nil {
 		return err
 	}
-	return app.renderBriefingContext(ctx, "serve", date, window.Period, result.articles, result.filteredArticles, result.seenArticles, result.failed, false, sendEmail)
+	return app.renderBriefingContext(ctx, "serve", date, window.Period, result.articles, result.filteredArticles, result.seenArticles, result.failed, false, sendEmail, result.watchSiteErrorNotices...)
 }
 
 func (app *app) runRegen(cmd regenCommand) error {
@@ -569,7 +572,7 @@ func (app *app) appendFilteredArticlesAppendix(ctx context.Context, body string,
 	return body + "\n\n## 未命中关键词的候选新闻\n\n" + appendix, nil
 }
 
-func (app *app) renderBriefingContext(ctx context.Context, commandPath string, date string, period string, articles []model.Article, filteredArticles []model.Article, seenArticles []model.Article, failed []fetcher.FailedSource, showRaw bool, sendEmail bool) error {
+func (app *app) renderBriefingContext(ctx context.Context, commandPath string, date string, period string, articles []model.Article, filteredArticles []model.Article, seenArticles []model.Article, failed []fetcher.FailedSource, showRaw bool, sendEmail bool, watchSiteErrorNotices ...string) error {
 	logutil.Printf("Found %d articles after filtering.", len(articles))
 	app.output.printFailed(failed)
 	app.ensureBriefingOutputDeps()
@@ -603,6 +606,7 @@ func (app *app) renderBriefingContext(ctx context.Context, commandPath string, d
 	if err != nil {
 		return err
 	}
+	body = appendWatchSiteErrorNotices(body, watchSiteErrorNotices)
 
 	briefing := &model.Briefing{
 		Date:       date,
@@ -990,14 +994,44 @@ func (app *app) currentTime() time.Time {
 	return time.Now()
 }
 
-func (app *app) printWatchSiteErrors(report *model.WatchReport) {
-	if report == nil || app.output.printText == nil {
-		return
+func watchSiteErrorNotices(report *model.WatchReport) []string {
+	if report == nil {
+		return nil
 	}
+	notices := make([]string, 0)
 	for _, event := range report.Events {
 		if event.EventType != "site_error" {
 			continue
 		}
-		app.output.printText(fmt.Sprintf("Watch 站点异常：%s — %s", event.Source, event.Reason))
+		notices = append(notices, fmt.Sprintf("Watch 站点异常：%s — %s", event.Source, event.Reason))
+	}
+	return notices
+}
+
+func appendWatchSiteErrorNotices(body string, notices []string) string {
+	if len(notices) == 0 {
+		return body
+	}
+	body = strings.TrimSpace(body)
+	var b strings.Builder
+	if body != "" {
+		b.WriteString(body)
+		b.WriteString("\n\n")
+	}
+	b.WriteString("## Watch 站点异常\n\n")
+	for _, notice := range notices {
+		b.WriteString("- ")
+		b.WriteString(notice)
+		b.WriteString("\n")
+	}
+	return strings.TrimSpace(b.String())
+}
+
+func (app *app) printWatchSiteErrorNotices(notices []string) {
+	if app.output.printText == nil {
+		return
+	}
+	for _, notice := range notices {
+		app.output.printText(notice)
 	}
 }
