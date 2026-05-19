@@ -88,6 +88,17 @@ sources:
     type: rss
     category: 国际政治
 
+x_accounts:
+  enabled: false
+  accounts_path: <x-visible-data-dir>/accounts.ndjson
+  searches_path: <x-visible-data-dir>/searches.ndjson
+  lookback: 24h
+  max_posts_per_account: 10
+  concurrency: 8
+  category: AI/科技
+  accounts:
+    - handle: example_ai_company # Replace with the X account handle to track.
+
 keywords:
   - AI
   - Anthropic

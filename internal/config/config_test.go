@@ -94,6 +94,66 @@ ai:
 	}
 }
 
+func TestLoadParsesXAccountsConfig(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	content := `sources: []
+keywords: []
+email:
+  smtp_host: smtp.example.com
+  smtp_port: 465
+  from: from@example.com
+  to: to@example.com
+schedule: []
+output: {}
+proxy: {}
+x_accounts:
+  enabled: true
+  accounts_path: /tmp/rsshub-stack/accounts.ndjson
+  searches_path: /tmp/rsshub-stack/searches.ndjson
+  lookback: 24h
+  max_posts_per_account: 10
+  concurrency: 8
+  category: AI/科技
+  accounts:
+    - handle: OpenAIDevs
+    - handle: thsottiaux
+`
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+
+	if !cfg.XAccounts.Enabled {
+		t.Fatalf("XAccounts.Enabled = false, want true")
+	}
+	if cfg.XAccounts.AccountsPath != "/tmp/rsshub-stack/accounts.ndjson" {
+		t.Fatalf("XAccounts.AccountsPath = %q, want /tmp/rsshub-stack/accounts.ndjson", cfg.XAccounts.AccountsPath)
+	}
+	if cfg.XAccounts.SearchesPath != "/tmp/rsshub-stack/searches.ndjson" {
+		t.Fatalf("XAccounts.SearchesPath = %q, want /tmp/rsshub-stack/searches.ndjson", cfg.XAccounts.SearchesPath)
+	}
+	if cfg.XAccounts.Lookback != 24*time.Hour {
+		t.Fatalf("XAccounts.Lookback = %v, want 24h", cfg.XAccounts.Lookback)
+	}
+	if cfg.XAccounts.MaxPostsPerAccount != 10 {
+		t.Fatalf("XAccounts.MaxPostsPerAccount = %d, want 10", cfg.XAccounts.MaxPostsPerAccount)
+	}
+	if cfg.XAccounts.Concurrency != 8 {
+		t.Fatalf("XAccounts.Concurrency = %d, want 8", cfg.XAccounts.Concurrency)
+	}
+	if cfg.XAccounts.Category != "AI/科技" {
+		t.Fatalf("XAccounts.Category = %q, want AI/科技", cfg.XAccounts.Category)
+	}
+	if got := []string{cfg.XAccounts.Accounts[0].Handle, cfg.XAccounts.Accounts[1].Handle}; !reflect.DeepEqual(got, []string{"OpenAIDevs", "thsottiaux"}) {
+		t.Fatalf("XAccounts handles = %v", got)
+	}
+}
+
 func TestLoadAppliesDefaultOutputMode(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.yaml")

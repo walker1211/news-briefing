@@ -1,0 +1,127 @@
+package fetcher
+
+import (
+	"context"
+	"os"
+	"path/filepath"
+	"testing"
+	"time"
+
+	"github.com/walker1211/news-briefing/internal/config"
+)
+
+func TestFetchWindowDetailedIncludesXVisibleNDJSON(t *testing.T) {
+	dir := t.TempDir()
+	accountsPath := filepath.Join(dir, "accounts.ndjson")
+	content := `{"kind":"x-visible-article","schemaVersion":1,"targetRaw":"/twitter/user/thsottiaux","targetType":"account","targetUrl":"https://x.com/thsottiaux","sourceUrl":"https://x.com/thsottiaux","finalUrl":"https://x.com/thsottiaux","extractedAt":"2026-05-19T07:08:15.239Z","text":"Tibo @thsottiaux · 5月19日 Codex team fixed GPT-5.5 degradation and will reset usage limits","datetime":"2026-05-19T07:00:00.000Z","statusUrl":"https://x.com/thsottiaux/status/1","statusLinks":["https://x.com/thsottiaux/status/1"],"linkCount":1,"imageCount":0,"videoCount":0}
+`
+	if err := os.WriteFile(accountsPath, []byte(content), 0o644); err != nil {
+		t.Fatalf("write accounts ndjson: %v", err)
+	}
+	cfg := &config.Config{
+		Keywords: []string{"Codex"},
+		Output:   config.OutputCfg{Dir: dir},
+		XAccounts: config.XAccountsConfig{
+			Enabled:      true,
+			AccountsPath: accountsPath,
+			Category:     "AI/科技",
+			Accounts:     []config.XAccountConfig{{Handle: "thsottiaux"}},
+		},
+	}
+	from := time.Date(2026, 5, 19, 0, 0, 0, 0, time.UTC)
+	to := time.Date(2026, 5, 20, 0, 0, 0, 0, time.UTC)
+	fetchAll := func(ctx context.Context, cfg *config.Config, since time.Time) ([]sourceFetchResult, []FailedSource, error) {
+		return nil, nil, nil
+	}
+
+	result, err := fetchWindowDetailedContext(context.Background(), cfg, from, to, false, true, fetchAll)
+	if err != nil {
+		t.Fatalf("fetchWindowDetailedContext() error = %v", err)
+	}
+	if len(result.Articles) != 1 {
+		t.Fatalf("len(Articles) = %d, want 1", len(result.Articles))
+	}
+	if result.Articles[0].Link != "https://x.com/thsottiaux/status/1" {
+		t.Fatalf("Article.Link = %q", result.Articles[0].Link)
+	}
+}
+
+func TestFetchWindowDetailedUsesXVisibleLookback(t *testing.T) {
+	dir := t.TempDir()
+	accountsPath := filepath.Join(dir, "accounts.ndjson")
+	content := `{"kind":"x-visible-article","schemaVersion":1,"targetRaw":"/twitter/user/OpenAI","targetType":"account","targetUrl":"https://x.com/OpenAI","sourceUrl":"https://x.com/OpenAI","finalUrl":"https://x.com/OpenAI","extractedAt":"2026-05-19T12:08:15.239Z","text":"OpenAI @OpenAI · 5月18日 Codex mobile app update","datetime":"2026-05-18T13:00:00.000Z","statusUrl":"https://x.com/OpenAI/status/24h","statusLinks":["https://x.com/OpenAI/status/24h"],"linkCount":1,"imageCount":0,"videoCount":0}
+`
+	if err := os.WriteFile(accountsPath, []byte(content), 0o644); err != nil {
+		t.Fatalf("write accounts ndjson: %v", err)
+	}
+	cfg := &config.Config{
+		Keywords: []string{"Codex"},
+		Output:   config.OutputCfg{Dir: dir},
+		XAccounts: config.XAccountsConfig{
+			Enabled:      true,
+			AccountsPath: accountsPath,
+			Lookback:     24 * time.Hour,
+			Category:     "AI/科技",
+			Accounts:     []config.XAccountConfig{{Handle: "OpenAI"}},
+		},
+	}
+	from := time.Date(2026, 5, 19, 6, 0, 0, 0, time.UTC)
+	to := time.Date(2026, 5, 19, 12, 0, 0, 0, time.UTC)
+	fetchAll := func(ctx context.Context, cfg *config.Config, since time.Time) ([]sourceFetchResult, []FailedSource, error) {
+		return nil, nil, nil
+	}
+
+	result, err := fetchWindowDetailedContext(context.Background(), cfg, from, to, false, true, fetchAll)
+	if err != nil {
+		t.Fatalf("fetchWindowDetailedContext() error = %v", err)
+	}
+	if len(result.Articles) != 1 {
+		t.Fatalf("len(Articles) = %d, want 1", len(result.Articles))
+	}
+}
+
+func TestFetchXVisibleNDJSONFiltersWindowWhitelistAndDeduplicates(t *testing.T) {
+	dir := t.TempDir()
+	accountsPath := filepath.Join(dir, "accounts.ndjson")
+	content := `{"kind":"x-visible-article","schemaVersion":1,"targetRaw":"/twitter/user/OpenAI","targetType":"account","targetUrl":"https://x.com/OpenAI","sourceUrl":"https://x.com/OpenAI","finalUrl":"https://x.com/OpenAI","extractedAt":"2026-05-19T07:08:15.239Z","text":"OpenAI @OpenAI · 5月19日 Codex in ChatGPT mobile app","datetime":"2026-05-19T07:00:00.000Z","statusUrl":"https://x.com/OpenAI/status/1","statusLinks":["https://x.com/OpenAI/status/1"],"linkCount":1,"imageCount":1,"videoCount":1}
+{"kind":"x-visible-article","schemaVersion":1,"targetRaw":"/twitter/user/OpenAI","targetType":"account","targetUrl":"https://x.com/OpenAI","sourceUrl":"https://x.com/OpenAI","finalUrl":"https://x.com/OpenAI","extractedAt":"2026-05-19T07:08:15.239Z","text":"已置顶 OpenAI @OpenAI · 5月19日 Codex in ChatGPT mobile app","datetime":"2026-05-19T07:00:00.000Z","statusUrl":"https://x.com/OpenAI/status/1","statusLinks":["https://x.com/OpenAI/status/1"],"linkCount":1,"imageCount":1,"videoCount":1}
+{"kind":"x-visible-article","schemaVersion":1,"targetRaw":"/twitter/user/notlisted","targetType":"account","targetUrl":"https://x.com/notlisted","sourceUrl":"https://x.com/notlisted","finalUrl":"https://x.com/notlisted","extractedAt":"2026-05-19T07:08:15.239Z","text":"notlisted @notlisted · 5月19日 Codex rumor","datetime":"2026-05-19T07:10:00.000Z","statusUrl":"https://x.com/notlisted/status/2","statusLinks":["https://x.com/notlisted/status/2"],"linkCount":1,"imageCount":0,"videoCount":0}
+{"kind":"x-visible-article","schemaVersion":1,"targetRaw":"/twitter/user/OpenAI","targetType":"account","targetUrl":"https://x.com/OpenAI","sourceUrl":"https://x.com/OpenAI","finalUrl":"https://x.com/OpenAI","extractedAt":"2026-05-19T07:08:15.239Z","text":"OpenAI @OpenAI · 5月17日 old Codex news","datetime":"2026-05-17T07:00:00.000Z","statusUrl":"https://x.com/OpenAI/status/3","statusLinks":["https://x.com/OpenAI/status/3"],"linkCount":1,"imageCount":0,"videoCount":0}
+`
+	if err := os.WriteFile(accountsPath, []byte(content), 0o644); err != nil {
+		t.Fatalf("write accounts ndjson: %v", err)
+	}
+
+	cfg := config.XAccountsConfig{
+		Enabled:      true,
+		AccountsPath: accountsPath,
+		Category:     "AI/科技",
+		Accounts:     []config.XAccountConfig{{Handle: "OpenAI"}},
+	}
+	from := time.Date(2026, 5, 19, 0, 0, 0, 0, time.UTC)
+	to := time.Date(2026, 5, 20, 0, 0, 0, 0, time.UTC)
+
+	results, failed, err := fetchXVisibleNDJSON(context.Background(), cfg, []string{"Codex"}, from, to)
+	if err != nil {
+		t.Fatalf("fetchXVisibleNDJSON() error = %v", err)
+	}
+	if len(failed) != 0 {
+		t.Fatalf("failed = %#v, want none", failed)
+	}
+	if len(results) != 1 || len(results[0].Candidates) != 1 {
+		t.Fatalf("results = %#v, want one X candidate", results)
+	}
+	candidate := results[0].Candidates[0]
+	if candidate.Article.Link != "https://x.com/OpenAI/status/1" {
+		t.Fatalf("Article.Link = %q", candidate.Article.Link)
+	}
+	if candidate.Article.Source != "X/@OpenAI" {
+		t.Fatalf("Article.Source = %q", candidate.Article.Source)
+	}
+	if candidate.Article.Category != "AI/科技" {
+		t.Fatalf("Article.Category = %q", candidate.Article.Category)
+	}
+	if len(candidate.MatchedKeywords) != 1 || candidate.MatchedKeywords[0] != "Codex" {
+		t.Fatalf("MatchedKeywords = %#v, want Codex", candidate.MatchedKeywords)
+	}
+}

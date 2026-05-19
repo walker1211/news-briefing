@@ -229,6 +229,16 @@ func fetchWindowDetailedContext(ctx context.Context, cfg *config.Config, from, t
 	if err != nil {
 		return FetchResult{}, err
 	}
+	xFrom := from
+	if cfg.XAccounts.Lookback > 0 {
+		xFrom = to.Add(-cfg.XAccounts.Lookback)
+	}
+	xResults, xFailed, err := fetchXVisibleNDJSON(ctx, cfg.XAccounts, cfg.Keywords, xFrom, to)
+	if err != nil {
+		return FetchResult{}, err
+	}
+	results = append(results, xResults...)
+	failed = append(failed, xFailed...)
 	if err := ctx.Err(); err != nil {
 		return FetchResult{}, err
 	}
@@ -236,8 +246,12 @@ func fetchWindowDetailedContext(ctx context.Context, cfg *config.Config, from, t
 	accepted := make([]model.Article, 0)
 	filtered := make([]model.Article, 0)
 	for _, result := range results {
+		windowFrom := from
+		if result.Source.Name == xVisibleSourceName {
+			windowFrom = xFrom
+		}
 		for _, candidate := range result.Candidates {
-			if !articleWithinWindow(candidate.Article, from, to) {
+			if !articleWithinWindow(candidate.Article, windowFrom, to) {
 				continue
 			}
 			if len(candidate.MatchedKeywords) == 0 {
