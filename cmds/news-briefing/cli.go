@@ -22,6 +22,7 @@ type regenCommand struct {
 }
 
 type fetchCommand struct{ zh bool }
+type alertsCommand struct{}
 type serveCommand struct{}
 type deepCommand struct {
 	topic      string
@@ -36,6 +37,7 @@ type helpCommand struct{}
 func (runCommand) isCommand()      {}
 func (regenCommand) isCommand()    {}
 func (fetchCommand) isCommand()    {}
+func (alertsCommand) isCommand()   {}
 func (serveCommand) isCommand()    {}
 func (deepCommand) isCommand()     {}
 func (resendMDCommand) isCommand() {}
@@ -81,6 +83,8 @@ func parseArgs(args []string) (command, error) {
 		return regenCommand{fromRaw: fromRaw, toRaw: toRaw, period: period, ignoreSeen: hasFlagIn(args[1:], "--ignore-seen"), sendEmail: hasFlagIn(args[1:], "--send-email"), raw: hasFlagIn(args[1:], "--raw")}, nil
 	case "fetch":
 		return fetchCommand{zh: hasFlagIn(args[1:], "--zh")}, nil
+	case "alerts":
+		return alertsCommand{}, nil
 	case "serve":
 		return serveCommand{}, nil
 	case "deep":
@@ -166,7 +170,7 @@ func normalizeCommandName(name string) string {
 
 func isKnownCommandName(name string) bool {
 	switch name {
-	case "run", "regen", "fetch", "serve", "deep", "resend-md", "help":
+	case "run", "regen", "fetch", "alerts", "serve", "deep", "resend-md", "help":
 		return true
 	default:
 		return false
@@ -206,7 +210,7 @@ func commandValidationRules(cmd string) (map[string]struct{}, map[string]struct{
 		return map[string]struct{}{"--raw": {}, "--no-email": {}}, nil, false
 	case "fetch":
 		return map[string]struct{}{"--zh": {}}, nil, false
-	case "serve", "help":
+	case "alerts", "serve", "help":
 		return nil, nil, false
 	case "deep":
 		return map[string]struct{}{"--ignore-seen": {}, "--send-email": {}}, map[string]struct{}{"--from": {}, "--to": {}}, true

@@ -31,6 +31,7 @@ func TestNewAppWiresInstanceDependencies(t *testing.T) {
 		"fetch.fetchWindow":                app.fetch.fetchWindow,
 		"fetch.fetchWindowContext":         app.fetch.fetchWindowContext,
 		"fetch.fetchWindowDetailedContext": app.fetch.fetchWindowDetailedContext,
+		"fetch.fetchXAlertsContext":        app.fetch.fetchXAlertsContext,
 		"fetch.markSeen":                   app.fetch.markSeen,
 		"watch.fetchWatch":                 app.watch.fetchWatch,
 		"watch.fetchWatchContext":          app.watch.fetchWatchContext,
@@ -172,6 +173,99 @@ func TestExecuteContextFetchPassesContext(t *testing.T) {
 	}
 	if !called {
 		t.Fatal("fetchAllContext() did not receive execute context")
+	}
+}
+
+func TestExecuteContextAlertsFetchesXAlertsForCurrentTime(t *testing.T) {
+	ctx := context.WithValue(context.Background(), contextTestKey{}, "alerts")
+	now := time.Date(2026, 5, 19, 12, 0, 0, 0, time.UTC)
+	called := false
+	printed := false
+	failedPrinted := false
+	app := &app{
+		cfg: executeTestConfig(t, model.OutputModeTranslatedOnly),
+		now: func() time.Time {
+			return now
+		},
+		fetch: fetchDeps{
+			fetchXAlertsContext: func(got context.Context, cfg *config.Config, gotNow time.Time) (fetcher.FetchResult, error) {
+				called = got.Value(contextTestKey{}) == "alerts" && gotNow.Equal(now)
+				return fetcher.FetchResult{Articles: sampleExecuteArticles()}, nil
+			},
+		},
+		ai: aiDeps{
+			summarizeContext: func(context.Context, []model.Article, []string, *time.Location) (string, error) {
+				t.Fatal("alerts should not summarize")
+				return "", nil
+			},
+			translateContext: func(context.Context, []model.Article, []string, *time.Location) (string, error) {
+				t.Fatal("alerts should not translate")
+				return "", nil
+			},
+		},
+		output: outputDeps{
+			printArticles: func(articles []model.Article) {
+				printed = len(articles) == 1 && articles[0].Title == "OpenAI ships feature"
+			},
+			printFailed: func([]fetcher.FailedSource) {
+				failedPrinted = true
+			},
+			printText: func(string) {},
+			composeBody: func(string, model.OutputMode, model.OutputContent) (string, error) {
+				t.Fatal("alerts should not compose output")
+				return "", nil
+			},
+			writeMarkdown: func(*model.Briefing, string) (string, error) {
+				t.Fatal("alerts should not write markdown")
+				return "", nil
+			},
+		},
+		email: emailDeps{
+			sendEmail: func(*model.Briefing, *config.Config, []fetcher.FailedSource) error {
+				t.Fatal("alerts should not send email")
+				return nil
+			},
+		},
+	}
+
+	if err := executeContext(ctx, app, alertsCommand{}); err != nil {
+		t.Fatalf("executeContext() error = %v", err)
+	}
+	if !called {
+		t.Fatal("fetchXAlertsContext() did not receive context/current time")
+	}
+	if !printed {
+		t.Fatal("printArticles() was not called with alert articles")
+	}
+	if !failedPrinted {
+		t.Fatal("printFailed() was not called")
+	}
+}
+
+func TestExecuteAlertsPrintsEmptyMessage(t *testing.T) {
+	var message string
+	app := &app{
+		cfg: executeTestConfig(t, model.OutputModeOriginalOnly),
+		now: func() time.Time {
+			return time.Date(2026, 5, 19, 12, 0, 0, 0, time.UTC)
+		},
+		fetch: fetchDeps{
+			fetchXAlertsContext: func(context.Context, *config.Config, time.Time) (fetcher.FetchResult, error) {
+				return fetcher.FetchResult{}, nil
+			},
+		},
+		output: outputDeps{
+			printArticles: func([]model.Article) {},
+			printFailed:   func([]fetcher.FailedSource) {},
+			printText:     func(s string) { message = s },
+		},
+	}
+
+	if err := execute(app, alertsCommand{}); err != nil {
+		t.Fatalf("execute() error = %v", err)
+	}
+	if !strings.Contains(message, "No X alerts") {
+		t.Fatalf("empty message = %q, want No X alerts", message)
 	}
 }
 

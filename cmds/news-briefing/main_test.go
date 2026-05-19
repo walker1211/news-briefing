@@ -78,6 +78,19 @@ func TestValidatePeriodRejectsInvalidValues(t *testing.T) {
 	}
 }
 
+func TestUsageMentionsAlerts(t *testing.T) {
+	usage := usageText()
+	if !strings.Contains(usage, "news-briefing alerts") {
+		t.Fatalf("usageText() missing alerts command")
+	}
+	if !strings.Contains(usage, "不发邮件") {
+		t.Fatalf("usageText() missing alerts no-email note")
+	}
+	if !strings.Contains(usage, "不调用 AI") {
+		t.Fatalf("usageText() missing alerts no-AI note")
+	}
+}
+
 func TestUsageMentionsRegenDefaults(t *testing.T) {
 	usage := usageText()
 	if !strings.Contains(usage, "默认不发邮件") {

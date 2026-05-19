@@ -42,6 +42,7 @@ type fetchDeps struct {
 	fetchWindow                func(*config.Config, time.Time, time.Time, bool, bool) ([]model.Article, []fetcher.FailedSource, error)
 	fetchWindowContext         func(context.Context, *config.Config, time.Time, time.Time, bool, bool) ([]model.Article, []fetcher.FailedSource, error)
 	fetchWindowDetailedContext func(context.Context, *config.Config, time.Time, time.Time, bool, bool) (fetcher.FetchResult, error)
+	fetchXAlertsContext        func(context.Context, *config.Config, time.Time) (fetcher.FetchResult, error)
 	markSeen                   func([]model.Article) error
 }
 
@@ -102,6 +103,7 @@ func newApp(cfg *config.Config) *app {
 			fetchWindow:                fetchClient.FetchWindow,
 			fetchWindowContext:         fetchClient.FetchWindowContext,
 			fetchWindowDetailedContext: fetchClient.FetchWindowDetailedContext,
+			fetchXAlertsContext:        fetcher.FetchXAlertsContext,
 			markSeen: func(articles []model.Article) error {
 				return fetcher.MarkArticlesSeen(cfg.Output.Dir, articles)
 			},
@@ -212,6 +214,8 @@ func executeContext(ctx context.Context, app *app, cmd command) error {
 		return app.runRegenContext(ctx, c)
 	case fetchCommand:
 		return app.runFetchContext(ctx, c)
+	case alertsCommand:
+		return app.runAlertsContext(ctx)
 	case serveCommand:
 		logutil.Println("Starting news aggregator in scheduled mode...")
 		if err := app.startScheduler(ctx, app.cfg, func(window scheduler.Window) {
@@ -331,6 +335,13 @@ func (app *app) fetchWindowArticlesDetailed(ctx context.Context, from, to time.T
 	return fetcher.FetchResult{Articles: articles, Failed: failed}, err
 }
 
+func (app *app) fetchXAlerts(ctx context.Context, now time.Time) (fetcher.FetchResult, error) {
+	if app.fetch.fetchXAlertsContext != nil {
+		return app.fetch.fetchXAlertsContext(ctx, app.cfg, now)
+	}
+	return fetcher.FetchXAlertsContext(ctx, app.cfg, now)
+}
+
 func (app *app) fetchWatchArticles(ctx context.Context, now time.Time) ([]model.Article, *model.WatchReport, error) {
 	if app.watch.fetchWatchContext != nil {
 		return app.watch.fetchWatchContext(ctx, app.cfg, now)
@@ -442,6 +453,22 @@ func runIfActive(ctx context.Context, run func() error) error {
 
 func (app *app) runFetch(cmd fetchCommand) error {
 	return app.runFetchContext(context.Background(), cmd)
+}
+
+func (app *app) runAlertsContext(ctx context.Context) error {
+	now := app.currentTime()
+	logutil.Println("Fetching X alerts for last 24h...")
+	result, err := app.fetchXAlerts(ctx, now)
+	if err != nil {
+		return err
+	}
+	app.ensureTextOutputDeps()
+	app.output.printArticles(result.Articles)
+	app.output.printFailed(result.Failed)
+	if len(result.Articles) == 0 {
+		app.output.printText("No X alerts found in the last 24h.")
+	}
+	return nil
 }
 
 func (app *app) runFetchContext(ctx context.Context, cmd fetchCommand) error {

@@ -50,6 +50,16 @@ func TestParseArgsFetch(t *testing.T) {
 	}
 }
 
+func TestParseArgsAlerts(t *testing.T) {
+	cmd, err := parseArgs([]string{"alerts"})
+	if err != nil {
+		t.Fatalf("parseArgs() error = %v", err)
+	}
+	if _, ok := cmd.(alertsCommand); !ok {
+		t.Fatalf("command type = %T", cmd)
+	}
+}
+
 func TestParseArgsServe(t *testing.T) {
 	cmd, err := parseArgs([]string{"serve"})
 	if err != nil {
@@ -123,6 +133,22 @@ func TestParseArgsFetchRejects(t *testing.T) {
 		_, err := parseArgs([]string{"fetch", "--bad"})
 		if err == nil || !strings.Contains(err.Error(), "unknown flag for fetch: --bad") {
 			t.Fatalf("parseArgs() error = %v, want unknown flag for fetch: --bad", err)
+		}
+	})
+}
+
+func TestParseArgsAlertsRejects(t *testing.T) {
+	t.Run("unexpected args", func(t *testing.T) {
+		_, err := parseArgs([]string{"alerts", "foo"})
+		if err == nil || !strings.Contains(err.Error(), "unexpected arguments for alerts") {
+			t.Fatalf("parseArgs() error = %v, want unexpected arguments for alerts", err)
+		}
+	})
+
+	t.Run("unknown flag", func(t *testing.T) {
+		_, err := parseArgs([]string{"alerts", "--bad"})
+		if err == nil || !strings.Contains(err.Error(), "unknown flag for alerts: --bad") {
+			t.Fatalf("parseArgs() error = %v, want unknown flag for alerts: --bad", err)
 		}
 	})
 }
