@@ -305,10 +305,13 @@ Current example template:
 ```yaml
 schedule:
   - "0 8 * * *"
-  - "0 14 * * *"
+  - "0 18 * * *"
+schedule_delay: 10m
 ```
 
-Note: the scheduled fetch window is derived by taking the current trigger time and walking back to the previous planned time point in the current `schedule`. Missed historical trigger points are not automatically backfilled after a restart. Because of that, changing `schedule` can leave a gap if you introduce a new time point that has already passed today but was never actually executed by the service.
+The scheduled fetch window is derived by taking the current trigger time and walking back to the previous planned time point in the current `schedule`. `schedule_delay: 10m` only delays actual execution to around 08:10 / 18:10; the window boundaries remain anchored at 08:00 / 18:00 so upstream local fetching can finish writing data first.
+
+Note: missed historical trigger points are not automatically backfilled after a restart. Because of that, changing `schedule` can leave a gap if you introduce a new time point that has already passed today but was never actually executed by the service.
 
 Recommendation: after changing cron / `schedule`, if you suspect a gap, use the built-in `regen --from --to` command to backfill that window manually, for example:
 

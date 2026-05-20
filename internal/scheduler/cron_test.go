@@ -82,6 +82,45 @@ func TestStartContextReturnsContextErrorWhenCancelled(t *testing.T) {
 	}
 }
 
+func TestRunWindowAfterDelayWaitsBeforeRun(t *testing.T) {
+	window := Window{Expr: "0 18 * * *", Period: "1800"}
+	var waited time.Duration
+	var ran bool
+
+	runWindowAfterDelay(context.Background(), window, 5*time.Minute, func(ctx context.Context, d time.Duration) error {
+		waited = d
+		return nil
+	}, func(got Window) {
+		ran = true
+		if got.Period != window.Period {
+			t.Fatalf("window.Period = %q, want %q", got.Period, window.Period)
+		}
+	})
+
+	if waited != 5*time.Minute {
+		t.Fatalf("waited = %v, want 5m", waited)
+	}
+	if !ran {
+		t.Fatal("runFunc was not called")
+	}
+}
+
+func TestRunWindowAfterDelaySkipsRunWhenCancelled(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	var ran bool
+
+	runWindowAfterDelay(ctx, Window{Expr: "0 18 * * *"}, 5*time.Minute, func(ctx context.Context, d time.Duration) error {
+		return ctx.Err()
+	}, func(Window) {
+		ran = true
+	})
+
+	if ran {
+		t.Fatal("runFunc was called after cancelled delay")
+	}
+}
+
 func TestBuildWindowFormatsPeriodInScheduleTimezone(t *testing.T) {
 	loc, err := time.LoadLocation("America/Los_Angeles")
 	if err != nil {

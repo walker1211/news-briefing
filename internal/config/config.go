@@ -22,6 +22,8 @@ type Config struct {
 	XAccounts        XAccountsConfig `yaml:"x_accounts"`
 	Email            Email           `yaml:"email"`
 	Schedule         Schedule        `yaml:"schedule"`
+	ScheduleDelayRaw string          `yaml:"schedule_delay"`
+	ScheduleDelay    time.Duration   `yaml:"-"`
 	ScheduleTimezone string          `yaml:"schedule_timezone"`
 	ScheduleLocation *time.Location  `yaml:"-"`
 	Output           OutputCfg       `yaml:"output"`
@@ -148,6 +150,23 @@ func resolveScheduleLocation(name string) (*time.Location, error) {
 		return nil, fmt.Errorf("load schedule_timezone %q: %w", trimmed, err)
 	}
 	return loc, nil
+}
+
+func applyScheduleDelay(cfg *Config) error {
+	raw := strings.TrimSpace(cfg.ScheduleDelayRaw)
+	if raw == "" {
+		cfg.ScheduleDelay = 0
+		return nil
+	}
+	delay, err := time.ParseDuration(raw)
+	if err != nil {
+		return fmt.Errorf("parse schedule_delay: %w", err)
+	}
+	if delay < 0 {
+		return fmt.Errorf("validate schedule_delay: must be zero or greater")
+	}
+	cfg.ScheduleDelay = delay
+	return nil
 }
 
 var supportedSourceTypes = map[string]struct{}{
@@ -510,6 +529,9 @@ func Load(configPath string) (*Config, error) {
 		return nil, err
 	}
 	cfg.ScheduleLocation = loc
+	if err := applyScheduleDelay(&cfg); err != nil {
+		return nil, err
+	}
 	if err := applyFetchDefaults(&cfg.Fetch); err != nil {
 		return nil, err
 	}

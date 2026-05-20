@@ -415,6 +415,62 @@ proxy: {}
 	}
 }
 
+func TestLoadParsesScheduleDelay(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	content := `sources: []
+keywords: []
+email:
+  smtp_host: smtp.example.com
+  smtp_port: 465
+  from: from@example.com
+  to: to@example.com
+schedule: []
+schedule_delay: 5m
+output: {}
+proxy: {}
+`
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if cfg.ScheduleDelay != 5*time.Minute {
+		t.Fatalf("ScheduleDelay = %v, want 5m", cfg.ScheduleDelay)
+	}
+}
+
+func TestLoadRejectsNegativeScheduleDelay(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	content := `sources: []
+keywords: []
+email:
+  smtp_host: smtp.example.com
+  smtp_port: 465
+  from: from@example.com
+  to: to@example.com
+schedule: []
+schedule_delay: -5m
+output: {}
+proxy: {}
+`
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	_, err := Load(path)
+	if err == nil {
+		t.Fatal("Load() error = nil, want schedule_delay error")
+	}
+	if !strings.Contains(err.Error(), "schedule_delay") {
+		t.Fatalf("Load() error = %q, want mention schedule_delay", err)
+	}
+}
+
 func TestLoadRejectsInvalidScheduleTimezone(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.yaml")

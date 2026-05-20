@@ -230,6 +230,55 @@ func TestFetchWindowDetailedWithXLookbackUsesConfiguredLookback(t *testing.T) {
 	}
 }
 
+func TestFetchXVisibleNDJSONReportsRefreshTargetDiagnostics(t *testing.T) {
+	dir := t.TempDir()
+	accountsPath := filepath.Join(dir, "accounts.ndjson")
+	statusPath := filepath.Join(dir, "status.json")
+	content := `{"kind":"x-visible-article","schemaVersion":1,"targetRaw":"/twitter/user/OpenAI","targetType":"account","targetUrl":"https://x.com/OpenAI","sourceUrl":"https://x.com/OpenAI","finalUrl":"https://x.com/OpenAI","text":"OpenAI Codex update","datetime":"2026-05-19T07:00:00.000Z","statusUrl":"https://x.com/OpenAI/status/diagnostics","statusLinks":["https://x.com/OpenAI/status/diagnostics"],"linkCount":1,"imageCount":0,"videoCount":0}
+`
+	if err := os.WriteFile(accountsPath, []byte(content), 0o644); err != nil {
+		t.Fatalf("write accounts ndjson: %v", err)
+	}
+	status := `{"kind":"x-visible-refresh-status","schemaVersion":1,"job":"x-visible-ai","period":"2026-05-20T00:00:00.000Z","status":"succeeded","startedAt":"2026-05-20T00:00:00.000Z","finishedAt":"2026-05-20T00:01:00.000Z","window":{"from":"2026-05-19T00:00:00.000Z","to":"2026-05-20T00:00:00.000Z"},"targetSummary":{"targetCount":3,"okCount":1,"errorCount":1,"timeoutCount":1,"loginSignalCount":1,"challengeSignalCount":0,"retryCount":2},"targets":[{"targetRaw":"/twitter/user/OpenAI","targetType":"account","loadStopReason":"article-ready","attempts":1,"articleCount":1},{"targetRaw":"/twitter/user/AnthropicAI","targetType":"account","loadStopReason":"login-signal","loginSignals":["Sign in"],"attempts":2,"articleCount":0},{"targetRaw":"Claude Code","targetType":"search","loadStopReason":"timeout","attempts":3,"error":"timeout waiting for article","articleCount":0}]}
+`
+	if err := os.WriteFile(statusPath, []byte(status), 0o644); err != nil {
+		t.Fatalf("write status: %v", err)
+	}
+	cfg := config.XAccountsConfig{
+		Enabled:           true,
+		AccountsPath:      accountsPath,
+		RefreshStatusPath: statusPath,
+		Category:          "AI/科技",
+		Accounts:          []config.XAccountConfig{{Handle: "OpenAI"}},
+	}
+	from := time.Date(2026, 5, 19, 0, 0, 0, 0, time.UTC)
+	to := time.Date(2026, 5, 20, 0, 0, 0, 0, time.UTC)
+
+	results, failed, err := fetchXVisibleNDJSON(context.Background(), cfg, []string{"Codex"}, from, to)
+	if err != nil {
+		t.Fatalf("fetchXVisibleNDJSON() error = %v", err)
+	}
+	if len(results) != 1 || len(results[0].Candidates) != 1 {
+		t.Fatalf("results = %#v, want one X candidate", results)
+	}
+	if len(failed) != 3 {
+		t.Fatalf("failed = %#v, want summary and two target warnings", failed)
+	}
+	assertFailedSourceContains(t, failed, "X refresh targets", "errors=1")
+	assertFailedSourceContains(t, failed, "X target/AnthropicAI", "loadStopReason=login-signal")
+	assertFailedSourceContains(t, failed, "X target/Claude Code", "timeout waiting for article")
+}
+
+func assertFailedSourceContains(t *testing.T, failed []FailedSource, name string, text string) {
+	t.Helper()
+	for _, item := range failed {
+		if item.Name == name && strings.Contains(item.Err.Error(), text) {
+			return
+		}
+	}
+	t.Fatalf("failed = %#v, want %s containing %q", failed, name, text)
+}
+
 func TestFetchXVisibleNDJSONReportsIncompleteCoverageWarning(t *testing.T) {
 	dir := t.TempDir()
 	accountsPath := filepath.Join(dir, "accounts.ndjson")

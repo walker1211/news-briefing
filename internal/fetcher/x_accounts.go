@@ -39,21 +39,46 @@ type xVisibleArticle struct {
 }
 
 type xVisibleRefreshStatus struct {
-	Kind          string                `json:"kind"`
-	SchemaVersion int                   `json:"schemaVersion"`
-	Job           string                `json:"job"`
-	Period        string                `json:"period"`
-	Window        xVisibleRefreshWindow `json:"window"`
-	Status        string                `json:"status"`
-	StartedAt     string                `json:"startedAt"`
-	FinishedAt    string                `json:"finishedAt"`
-	Error         string                `json:"error"`
-	Outputs       map[string]string     `json:"outputs"`
+	Kind          string                         `json:"kind"`
+	SchemaVersion int                            `json:"schemaVersion"`
+	Job           string                         `json:"job"`
+	Period        string                         `json:"period"`
+	Window        xVisibleRefreshWindow          `json:"window"`
+	Status        string                         `json:"status"`
+	StartedAt     string                         `json:"startedAt"`
+	FinishedAt    string                         `json:"finishedAt"`
+	Error         string                         `json:"error"`
+	Outputs       map[string]string              `json:"outputs"`
+	TargetSummary *xVisibleRefreshTargetSummary  `json:"targetSummary"`
+	Targets       []xVisibleRefreshTargetDetails `json:"targets"`
 }
 
 type xVisibleRefreshWindow struct {
 	From string `json:"from"`
 	To   string `json:"to"`
+}
+
+type xVisibleRefreshTargetSummary struct {
+	TargetCount          int `json:"targetCount"`
+	OKCount              int `json:"okCount"`
+	ErrorCount           int `json:"errorCount"`
+	TimeoutCount         int `json:"timeoutCount"`
+	LoginSignalCount     int `json:"loginSignalCount"`
+	ChallengeSignalCount int `json:"challengeSignalCount"`
+	RetryCount           int `json:"retryCount"`
+}
+
+type xVisibleRefreshTargetDetails struct {
+	TargetRaw        string          `json:"targetRaw"`
+	TargetType       string          `json:"targetType"`
+	TargetURL        string          `json:"targetUrl"`
+	LoadStopReason   string          `json:"loadStopReason"`
+	ScrollStopReason string          `json:"scrollStopReason"`
+	LoginSignals     json.RawMessage `json:"loginSignals"`
+	ChallengeSignals json.RawMessage `json:"challengeSignals"`
+	Attempts         int             `json:"attempts"`
+	Error            string          `json:"error"`
+	ArticleCount     int             `json:"articleCount"`
 }
 
 func fetchXVisibleNDJSON(ctx context.Context, cfg config.XAccountsConfig, keywords []string, from time.Time, to time.Time) ([]sourceFetchResult, []FailedSource, error) {
@@ -67,6 +92,13 @@ func fetchXVisibleNDJSON(ctx context.Context, cfg config.XAccountsConfig, keywor
 	}
 	if refreshFailure != nil {
 		failed = append(failed, *refreshFailure)
+	} else {
+		statusWarnings, err := xVisibleRefreshStatusWarnings(cfg.RefreshStatusPath, from, to)
+		if err != nil {
+			failed = append(failed, FailedSource{Name: "X refresh status", Err: err})
+		} else {
+			failed = append(failed, statusWarnings...)
+		}
 	}
 	allowedAccounts := xAccountHandleSet(cfg.Accounts)
 	seen := map[string]struct{}{}
@@ -217,6 +249,147 @@ func readXVisibleRefreshStatus(path string) (xVisibleRefreshStatus, error) {
 		return xVisibleRefreshStatus{}, err
 	}
 	return status, nil
+}
+
+func xVisibleRefreshStatusWarnings(path string, from, to time.Time) ([]FailedSource, error) {
+	path = strings.TrimSpace(path)
+	if path == "" {
+		return nil, nil
+	}
+	status, err := readXVisibleRefreshStatus(path)
+	if os.IsNotExist(err) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	if strings.ToLower(strings.TrimSpace(status.Status)) != "succeeded" {
+		return nil, nil
+	}
+	if !xVisibleRefreshWindowOverlaps(status.Window, from, to) {
+		return nil, nil
+	}
+
+	var failed []FailedSource
+	if warning := xVisibleRefreshSummaryWarning(status.TargetSummary); warning != nil {
+		failed = append(failed, *warning)
+	}
+	for _, target := range status.Targets {
+		if warning := xVisibleRefreshTargetWarning(target); warning != nil {
+			failed = append(failed, *warning)
+		}
+	}
+	return failed, nil
+}
+
+func xVisibleRefreshSummaryWarning(summary *xVisibleRefreshTargetSummary) *FailedSource {
+	if summary == nil {
+		return nil
+	}
+	if summary.ErrorCount == 0 && summary.TimeoutCount == 0 && summary.LoginSignalCount == 0 && summary.ChallengeSignalCount == 0 {
+		return nil
+	}
+	return &FailedSource{
+		Name: "X refresh targets",
+		Err: fmt.Errorf(
+			"target diagnostics: targets=%d ok=%d errors=%d timeouts=%d loginSignals=%d challengeSignals=%d retries=%d",
+			summary.TargetCount,
+			summary.OKCount,
+			summary.ErrorCount,
+			summary.TimeoutCount,
+			summary.LoginSignalCount,
+			summary.ChallengeSignalCount,
+			summary.RetryCount,
+		),
+	}
+}
+
+func xVisibleRefreshTargetWarning(target xVisibleRefreshTargetDetails) *FailedSource {
+	loadStopReason := strings.TrimSpace(target.LoadStopReason)
+	messageParts := []string(nil)
+	if xVisibleProblemLoadStopReason(loadStopReason) {
+		messageParts = append(messageParts, "loadStopReason="+loadStopReason)
+	}
+	if xVisibleRawSignalPresent(target.LoginSignals) {
+		messageParts = append(messageParts, "loginSignals=true")
+	}
+	if xVisibleRawSignalPresent(target.ChallengeSignals) {
+		messageParts = append(messageParts, "challengeSignals=true")
+	}
+	if target.Attempts > 0 {
+		messageParts = append(messageParts, fmt.Sprintf("attempts=%d", target.Attempts))
+	}
+	if target.ArticleCount > 0 {
+		messageParts = append(messageParts, fmt.Sprintf("articles=%d", target.ArticleCount))
+	}
+	if message := strings.TrimSpace(target.Error); message != "" {
+		messageParts = append(messageParts, "error="+message)
+	}
+	if len(messageParts) == 0 || !xVisibleTargetHasProblem(target) {
+		return nil
+	}
+	return &FailedSource{
+		Name: "X target/" + xVisibleRefreshTargetLabel(target),
+		Err:  fmt.Errorf("target diagnostics: %s", strings.Join(messageParts, ", ")),
+	}
+}
+
+func xVisibleTargetHasProblem(target xVisibleRefreshTargetDetails) bool {
+	return xVisibleProblemLoadStopReason(strings.TrimSpace(target.LoadStopReason)) ||
+		xVisibleRawSignalPresent(target.LoginSignals) ||
+		xVisibleRawSignalPresent(target.ChallengeSignals) ||
+		strings.TrimSpace(target.Error) != ""
+}
+
+func xVisibleProblemLoadStopReason(reason string) bool {
+	switch strings.ToLower(strings.TrimSpace(reason)) {
+	case "timeout", "login-signal", "challenge-signal", "error":
+		return true
+	default:
+		return false
+	}
+}
+
+func xVisibleRawSignalPresent(raw json.RawMessage) bool {
+	if len(raw) == 0 {
+		return false
+	}
+	var value any
+	if err := json.Unmarshal(raw, &value); err != nil {
+		return true
+	}
+	switch typed := value.(type) {
+	case nil:
+		return false
+	case bool:
+		return typed
+	case string:
+		return strings.TrimSpace(typed) != ""
+	case float64:
+		return typed != 0
+	case []any:
+		return len(typed) > 0
+	case map[string]any:
+		return len(typed) > 0
+	default:
+		return true
+	}
+}
+
+func xVisibleRefreshTargetLabel(target xVisibleRefreshTargetDetails) string {
+	raw := strings.TrimSpace(target.TargetRaw)
+	if target.TargetType == "account" {
+		if handle, ok := strings.CutPrefix(raw, "/twitter/user/"); ok && strings.TrimSpace(handle) != "" {
+			return strings.TrimSpace(handle)
+		}
+	}
+	if raw != "" {
+		return raw
+	}
+	if targetURL := strings.TrimSpace(target.TargetURL); targetURL != "" {
+		return targetURL
+	}
+	return "unknown"
 }
 
 func xVisibleRefreshWindowOverlaps(window xVisibleRefreshWindow, from, to time.Time) bool {

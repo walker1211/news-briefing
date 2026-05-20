@@ -234,8 +234,10 @@ email:
   use_proxy: false
 
 schedule:
-  - "0 6 * * *"
+  - "0 8 * * *"
   - "0 18 * * *"
+# Optional. Delays actual execution while keeping the schedule window boundaries above.
+schedule_delay: 10m
 
 # Optional. Defaults to the machine's local timezone when omitted.
 # schedule_timezone: Asia/Shanghai
