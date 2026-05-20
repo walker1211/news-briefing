@@ -162,6 +162,36 @@ func TestBuildWindowDerivesLatestPointForHighFrequencySchedule(t *testing.T) {
 	assertWindow(t, got, "*/15 * * * *", "1800", wantFrom, to)
 }
 
+func TestBuildWindowConvertsSevenEighteenShanghaiWindowsToUTCInstants(t *testing.T) {
+	loc, err := time.LoadLocation("Asia/Shanghai")
+	if err != nil {
+		t.Fatalf("LoadLocation() error = %v", err)
+	}
+	schedules := []string{"0 7 * * *", "0 18 * * *"}
+
+	evening, err := buildWindow(time.Date(2026, 5, 20, 18, 0, 0, 0, loc), "0 18 * * *", schedules, loc)
+	if err != nil {
+		t.Fatalf("buildWindow(evening) error = %v", err)
+	}
+	if got := evening.From.UTC().Format(time.RFC3339); got != "2026-05-19T23:00:00Z" {
+		t.Fatalf("evening.From.UTC() = %s, want 2026-05-19T23:00:00Z", got)
+	}
+	if got := evening.To.UTC().Format(time.RFC3339); got != "2026-05-20T10:00:00Z" {
+		t.Fatalf("evening.To.UTC() = %s, want 2026-05-20T10:00:00Z", got)
+	}
+
+	morning, err := buildWindow(time.Date(2026, 5, 20, 7, 0, 0, 0, loc), "0 7 * * *", schedules, loc)
+	if err != nil {
+		t.Fatalf("buildWindow(morning) error = %v", err)
+	}
+	if got := morning.From.UTC().Format(time.RFC3339); got != "2026-05-19T10:00:00Z" {
+		t.Fatalf("morning.From.UTC() = %s, want 2026-05-19T10:00:00Z", got)
+	}
+	if got := morning.To.UTC().Format(time.RFC3339); got != "2026-05-19T23:00:00Z" {
+		t.Fatalf("morning.To.UTC() = %s, want 2026-05-19T23:00:00Z", got)
+	}
+}
+
 func assertWindow(t *testing.T, got Window, wantExpr, wantPeriod string, wantFrom, wantTo time.Time) {
 	t.Helper()
 	if got.Expr != wantExpr {

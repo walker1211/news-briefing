@@ -17,22 +17,25 @@ import (
 const xVisibleSourceName = "X Visible"
 
 type xVisibleArticle struct {
-	Kind          string   `json:"kind"`
-	SchemaVersion int      `json:"schemaVersion"`
-	TargetRaw     string   `json:"targetRaw"`
-	TargetType    string   `json:"targetType"`
-	TargetURL     string   `json:"targetUrl"`
-	SourceURL     string   `json:"sourceUrl"`
-	FinalURL      string   `json:"finalUrl"`
-	Title         string   `json:"title"`
-	ExtractedAt   string   `json:"extractedAt"`
-	Text          string   `json:"text"`
-	Datetime      string   `json:"datetime"`
-	StatusURL     string   `json:"statusUrl"`
-	StatusLinks   []string `json:"statusLinks"`
-	LinkCount     int      `json:"linkCount"`
-	ImageCount    int      `json:"imageCount"`
-	VideoCount    int      `json:"videoCount"`
+	Kind             string   `json:"kind"`
+	SchemaVersion    int      `json:"schemaVersion"`
+	TargetRaw        string   `json:"targetRaw"`
+	TargetType       string   `json:"targetType"`
+	TargetURL        string   `json:"targetUrl"`
+	SourceURL        string   `json:"sourceUrl"`
+	FinalURL         string   `json:"finalUrl"`
+	Title            string   `json:"title"`
+	ExtractedAt      string   `json:"extractedAt"`
+	WindowFrom       string   `json:"windowFrom"`
+	WindowTo         string   `json:"windowTo"`
+	ScrollStopReason string   `json:"scrollStopReason"`
+	Text             string   `json:"text"`
+	Datetime         string   `json:"datetime"`
+	StatusURL        string   `json:"statusUrl"`
+	StatusLinks      []string `json:"statusLinks"`
+	LinkCount        int      `json:"linkCount"`
+	ImageCount       int      `json:"imageCount"`
+	VideoCount       int      `json:"videoCount"`
 }
 
 type xVisibleRefreshStatus struct {
@@ -67,6 +70,7 @@ func fetchXVisibleNDJSON(ctx context.Context, cfg config.XAccountsConfig, keywor
 	}
 	allowedAccounts := xAccountHandleSet(cfg.Accounts)
 	seen := map[string]struct{}{}
+	coverageWarnings := map[string]struct{}{}
 	var candidates []fetchedCandidate
 	for _, input := range []struct {
 		name string
@@ -87,6 +91,13 @@ func fetchXVisibleNDJSON(ctx context.Context, cfg config.XAccountsConfig, keywor
 			continue
 		}
 		for _, item := range items {
+			if warning := xVisibleCoverageWarning(item, from, to); warning != nil {
+				key := warning.Name + "\n" + warning.Err.Error()
+				if _, exists := coverageWarnings[key]; !exists {
+					coverageWarnings[key] = struct{}{}
+					failed = append(failed, *warning)
+				}
+			}
 			candidate, ok := xVisibleArticleCandidate(item, cfg.Category, keywords, from, to, allowedAccounts)
 			if !ok {
 				continue
@@ -221,6 +232,37 @@ func xVisibleRefreshWindowOverlaps(window xVisibleRefreshWindow, from, to time.T
 		return true
 	}
 	return windowFrom.Before(to) && windowTo.After(from)
+}
+
+func xVisibleCoverageWarning(item xVisibleArticle, from, to time.Time) *FailedSource {
+	if item.Kind != "x-visible-article" || item.SchemaVersion != 1 {
+		return nil
+	}
+	reason := strings.TrimSpace(item.ScrollStopReason)
+	if reason == "" || reason == "covered-window-start" {
+		return nil
+	}
+	if strings.TrimSpace(item.WindowFrom) != "" || strings.TrimSpace(item.WindowTo) != "" {
+		if !xVisibleRefreshWindowOverlaps(xVisibleRefreshWindow{From: item.WindowFrom, To: item.WindowTo}, from, to) {
+			return nil
+		}
+	}
+	target := strings.TrimSpace(item.TargetRaw)
+	if item.TargetType == "account" {
+		if handle := xVisibleHandle(item); handle != "" {
+			target = handle
+		}
+	}
+	if target == "" {
+		target = strings.TrimSpace(item.TargetURL)
+	}
+	if target == "" {
+		target = "unknown"
+	}
+	return &FailedSource{
+		Name: "X coverage/" + target,
+		Err:  fmt.Errorf("target may not fully cover requested window: %s", reason),
+	}
 }
 
 func xVisibleArticleCandidate(item xVisibleArticle, category string, keywords []string, from time.Time, to time.Time, allowedAccounts map[string]struct{}) (fetchedCandidate, bool) {

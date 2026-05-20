@@ -60,6 +60,39 @@ func TestParseArgsAlerts(t *testing.T) {
 	}
 }
 
+func TestParseArgsXRoutes(t *testing.T) {
+	cmd, err := parseArgs([]string{"x", "routes"})
+	if err != nil {
+		t.Fatalf("parseArgs() error = %v", err)
+	}
+	if _, ok := cmd.(xRoutesCommand); !ok {
+		t.Fatalf("command type = %T", cmd)
+	}
+}
+
+func TestParseArgsXRoutesRejects(t *testing.T) {
+	t.Run("missing subcommand", func(t *testing.T) {
+		_, err := parseArgs([]string{"x"})
+		if err == nil || !strings.Contains(err.Error(), "x subcommand") {
+			t.Fatalf("parseArgs() error = %v, want missing x subcommand", err)
+		}
+	})
+
+	t.Run("unsupported subcommand", func(t *testing.T) {
+		_, err := parseArgs([]string{"x", "foo"})
+		if err == nil || !strings.Contains(err.Error(), "unsupported x subcommand") {
+			t.Fatalf("parseArgs() error = %v, want unsupported x subcommand", err)
+		}
+	})
+
+	t.Run("unexpected route args", func(t *testing.T) {
+		_, err := parseArgs([]string{"x", "routes", "--bad"})
+		if err == nil || !strings.Contains(err.Error(), "unexpected arguments for x routes") {
+			t.Fatalf("parseArgs() error = %v, want unexpected arguments for x routes", err)
+		}
+	})
+}
+
 func TestParseArgsServe(t *testing.T) {
 	cmd, err := parseArgs([]string{"serve"})
 	if err != nil {

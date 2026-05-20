@@ -100,13 +100,14 @@ Commands:
   news-briefing regen [flags]     按指定时间窗重生成简报
   news-briefing fetch [--zh]      仅抓取新闻，显示原始文章列表（--zh 翻译成中文）
   news-briefing alerts            打印过去 24 小时 X 强事件候选（不发邮件，不调用 AI）
+  news-briefing x routes          导出 rsshub-stack 可用的 X 账号 route 列表
   news-briefing serve             守护模式，按 configs/config.yaml 中 schedule 配置自动执行
   news-briefing deep <topic>      深挖某话题，生成话题深挖包
   news-briefing resend-md --file <path>  按已有 Markdown 重发邮件
   news-briefing help              显示此帮助
 
 Note:
-  可执行文件名为 news-briefing；子命令包括 run / regen / fetch / alerts / serve / deep / resend-md / help
+  可执行文件名为 news-briefing；子命令包括 run / regen / fetch / alerts / x routes / serve / deep / resend-md / help
 
 Flags (for run):
   --raw                  同时显示原始文章列表
@@ -143,6 +144,8 @@ Examples:
   news-briefing regen --from "2026-03-18 08:00" --to "2026-03-18 14:00" --period 1400 --ignore-seen --send-email
   news-briefing fetch
   news-briefing alerts
+  news-briefing x routes
+  news-briefing x routes > ../rsshub-stack/routes/x-accounts.txt
   news-briefing deep "OpenAI"
   news-briefing deep "Claude" --send-email
   news-briefing deep "Claude" --ignore-seen

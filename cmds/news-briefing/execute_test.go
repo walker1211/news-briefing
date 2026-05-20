@@ -269,6 +269,59 @@ func TestExecuteAlertsPrintsEmptyMessage(t *testing.T) {
 	}
 }
 
+func TestExecuteContextXRoutesPrintsConfiguredAccounts(t *testing.T) {
+	ctx := context.WithValue(context.Background(), contextTestKey{}, "x-routes")
+	var printed string
+	app := &app{
+		cfg: &config.Config{
+			XAccounts: config.XAccountsConfig{
+				Enabled: false,
+				Accounts: []config.XAccountConfig{
+					{Handle: " @OpenAI "},
+					{Handle: ""},
+					{Handle: "AnthropicAI"},
+				},
+			},
+		},
+		fetch: fetchDeps{
+			fetchAllContext: func(context.Context, *config.Config, bool) ([]model.Article, []fetcher.FailedSource, error) {
+				t.Fatal("x routes should not fetch articles")
+				return nil, nil, nil
+			},
+			fetchXAlertsContext: func(context.Context, *config.Config, time.Time) (fetcher.FetchResult, error) {
+				t.Fatal("x routes should not fetch alerts")
+				return fetcher.FetchResult{}, nil
+			},
+		},
+		ai: aiDeps{
+			summarizeContext: func(context.Context, []model.Article, []string, *time.Location) (string, error) {
+				t.Fatal("x routes should not summarize")
+				return "", nil
+			},
+		},
+		output: outputDeps{
+			printText: func(s string) { printed = s },
+			writeMarkdown: func(*model.Briefing, string) (string, error) {
+				t.Fatal("x routes should not write markdown")
+				return "", nil
+			},
+		},
+		email: emailDeps{
+			sendEmail: func(*model.Briefing, *config.Config, []fetcher.FailedSource) error {
+				t.Fatal("x routes should not send email")
+				return nil
+			},
+		},
+	}
+
+	if err := executeContext(ctx, app, xRoutesCommand{}); err != nil {
+		t.Fatalf("executeContext() error = %v", err)
+	}
+	if printed != "/twitter/user/OpenAI\n/twitter/user/AnthropicAI" {
+		t.Fatalf("printed routes = %q", printed)
+	}
+}
+
 func TestExecuteContextServePassesContextToSchedulerAndRun(t *testing.T) {
 	t.Setenv("EMAIL_SMTP_AUTH_CODE", "test")
 	ctx := context.WithValue(context.Background(), contextTestKey{}, "serve")

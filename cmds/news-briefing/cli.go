@@ -23,6 +23,7 @@ type regenCommand struct {
 
 type fetchCommand struct{ zh bool }
 type alertsCommand struct{}
+type xRoutesCommand struct{}
 type serveCommand struct{}
 type deepCommand struct {
 	topic      string
@@ -38,6 +39,7 @@ func (runCommand) isCommand()      {}
 func (regenCommand) isCommand()    {}
 func (fetchCommand) isCommand()    {}
 func (alertsCommand) isCommand()   {}
+func (xRoutesCommand) isCommand()  {}
 func (serveCommand) isCommand()    {}
 func (deepCommand) isCommand()     {}
 func (resendMDCommand) isCommand() {}
@@ -52,6 +54,9 @@ func parseArgs(args []string) (command, error) {
 	normalizedCmdName := normalizeCommandName(cmdName)
 	if !isKnownCommandName(normalizedCmdName) {
 		return nil, fmt.Errorf("unknown command: %s", args[0])
+	}
+	if normalizedCmdName == "x" {
+		return parseXCommand(args[1:])
 	}
 	if err := preValidateCommandArgs(normalizedCmdName, args[1:]); err != nil {
 		return nil, err
@@ -109,6 +114,19 @@ func parseArgs(args []string) (command, error) {
 	default:
 		return nil, fmt.Errorf("unknown command: %s", args[0])
 	}
+}
+
+func parseXCommand(args []string) (command, error) {
+	if len(args) == 0 {
+		return nil, fmt.Errorf("missing x subcommand")
+	}
+	if args[0] != "routes" {
+		return nil, fmt.Errorf("unsupported x subcommand: %s", args[0])
+	}
+	if len(args) > 1 {
+		return nil, fmt.Errorf("unexpected arguments for x routes: %s", strings.Join(args[1:], " "))
+	}
+	return xRoutesCommand{}, nil
 }
 
 func hasFlagIn(args []string, flag string) bool {
@@ -170,7 +188,7 @@ func normalizeCommandName(name string) string {
 
 func isKnownCommandName(name string) bool {
 	switch name {
-	case "run", "regen", "fetch", "alerts", "serve", "deep", "resend-md", "help":
+	case "run", "regen", "fetch", "alerts", "x", "serve", "deep", "resend-md", "help":
 		return true
 	default:
 		return false

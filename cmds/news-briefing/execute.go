@@ -216,6 +216,8 @@ func executeContext(ctx context.Context, app *app, cmd command) error {
 		return app.runFetchContext(ctx, c)
 	case alertsCommand:
 		return app.runAlertsContext(ctx)
+	case xRoutesCommand:
+		return app.runXRoutesContext(ctx)
 	case serveCommand:
 		logutil.Println("Starting news aggregator in scheduled mode...")
 		if err := app.startScheduler(ctx, app.cfg, func(window scheduler.Window) {
@@ -453,6 +455,27 @@ func runIfActive(ctx context.Context, run func() error) error {
 
 func (app *app) runFetch(cmd fetchCommand) error {
 	return app.runFetchContext(context.Background(), cmd)
+}
+
+func (app *app) runXRoutesContext(ctx context.Context) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	app.ensureTextOutputDeps()
+	var builder strings.Builder
+	for _, account := range app.cfg.XAccounts.Accounts {
+		handle := strings.TrimPrefix(strings.TrimSpace(account.Handle), "@")
+		if handle == "" {
+			continue
+		}
+		if builder.Len() > 0 {
+			builder.WriteByte('\n')
+		}
+		builder.WriteString("/twitter/user/")
+		builder.WriteString(handle)
+	}
+	app.output.printText(builder.String())
+	return nil
 }
 
 func (app *app) runAlertsContext(ctx context.Context) error {
