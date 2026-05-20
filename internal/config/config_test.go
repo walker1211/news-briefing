@@ -154,6 +154,50 @@ x_accounts:
 	}
 }
 
+func TestLoadParsesXAccountsRefreshStatusConfig(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	content := `sources: []
+keywords: []
+email:
+  smtp_host: smtp.example.com
+  smtp_port: 465
+  from: from@example.com
+  to: to@example.com
+schedule: []
+output: {}
+proxy: {}
+x_accounts:
+  enabled: true
+  accounts_path: /tmp/rsshub-stack/accounts.ndjson
+  searches_path: /tmp/rsshub-stack/searches.ndjson
+  refresh_status_path: /tmp/rsshub-stack/status.json
+  refresh_wait_timeout: 2m
+  refresh_wait_interval: 500ms
+  category: AI/科技
+  accounts:
+    - handle: OpenAIDevs
+`
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+
+	if cfg.XAccounts.RefreshStatusPath != "/tmp/rsshub-stack/status.json" {
+		t.Fatalf("XAccounts.RefreshStatusPath = %q", cfg.XAccounts.RefreshStatusPath)
+	}
+	if cfg.XAccounts.RefreshWaitTimeout != 2*time.Minute {
+		t.Fatalf("XAccounts.RefreshWaitTimeout = %v, want 2m", cfg.XAccounts.RefreshWaitTimeout)
+	}
+	if cfg.XAccounts.RefreshWaitInterval != 500*time.Millisecond {
+		t.Fatalf("XAccounts.RefreshWaitInterval = %v, want 500ms", cfg.XAccounts.RefreshWaitInterval)
+	}
+}
+
 func TestLoadAppliesDefaultOutputMode(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.yaml")

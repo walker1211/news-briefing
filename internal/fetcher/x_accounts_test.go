@@ -46,6 +46,116 @@ func TestFetchWindowDetailedIncludesXVisibleNDJSON(t *testing.T) {
 	}
 }
 
+func TestFetchXVisibleNDJSONWaitsForRunningRefresh(t *testing.T) {
+	dir := t.TempDir()
+	accountsPath := filepath.Join(dir, "accounts.ndjson")
+	statusPath := filepath.Join(dir, "status.json")
+	if err := os.WriteFile(statusPath, []byte(`{"kind":"x-visible-refresh-status","schemaVersion":1,"job":"x-visible-ai","period":"2026-05-20T08:00:00+08:00","status":"running","startedAt":"2026-05-20T00:00:00.000Z","window":{"from":"2026-05-20T00:00:00Z","to":"2026-05-20T08:00:00Z"},"outputs":{"accounts":"`+accountsPath+`"}}`), 0o644); err != nil {
+		t.Fatalf("write status: %v", err)
+	}
+	go func() {
+		time.Sleep(10 * time.Millisecond)
+		content := `{"kind":"x-visible-article","schemaVersion":1,"targetRaw":"/twitter/user/OpenAI","targetType":"account","targetUrl":"https://x.com/OpenAI","sourceUrl":"https://x.com/OpenAI","finalUrl":"https://x.com/OpenAI","text":"OpenAI launched Codex refresh","datetime":"2026-05-20T07:59:00.000Z","statusUrl":"https://x.com/OpenAI/status/fresh","statusLinks":["https://x.com/OpenAI/status/fresh"],"linkCount":1,"imageCount":0,"videoCount":0}
+`
+		_ = os.WriteFile(accountsPath, []byte(content), 0o644)
+		_ = os.WriteFile(statusPath, []byte(`{"kind":"x-visible-refresh-status","schemaVersion":1,"job":"x-visible-ai","period":"2026-05-20T08:00:00+08:00","status":"succeeded","startedAt":"2026-05-20T00:00:00.000Z","finishedAt":"2026-05-20T00:00:10.000Z","window":{"from":"2026-05-20T00:00:00Z","to":"2026-05-20T08:00:00Z"},"outputs":{"accounts":"`+accountsPath+`"}}`), 0o644)
+	}()
+	cfg := config.XAccountsConfig{
+		Enabled:             true,
+		AccountsPath:        accountsPath,
+		RefreshStatusPath:   statusPath,
+		RefreshWaitTimeout:  500 * time.Millisecond,
+		RefreshWaitInterval: time.Millisecond,
+		Category:            "AI/科技",
+		Accounts:            []config.XAccountConfig{{Handle: "OpenAI"}},
+	}
+	from := time.Date(2026, 5, 20, 0, 0, 0, 0, time.UTC)
+	to := time.Date(2026, 5, 20, 8, 0, 0, 0, time.UTC)
+
+	results, failed, err := fetchXVisibleNDJSON(context.Background(), cfg, []string{"Codex"}, from, to)
+	if err != nil {
+		t.Fatalf("fetchXVisibleNDJSON() error = %v", err)
+	}
+	if len(failed) != 0 {
+		t.Fatalf("failed = %#v, want none", failed)
+	}
+	if len(results) != 1 || len(results[0].Candidates) != 1 {
+		t.Fatalf("results = %#v, want one fresh X candidate", results)
+	}
+	if results[0].Candidates[0].Article.Link != "https://x.com/OpenAI/status/fresh" {
+		t.Fatalf("Article.Link = %q", results[0].Candidates[0].Article.Link)
+	}
+}
+
+func TestFetchXVisibleNDJSONSkipsUnrelatedRunningRefresh(t *testing.T) {
+	dir := t.TempDir()
+	accountsPath := filepath.Join(dir, "accounts.ndjson")
+	statusPath := filepath.Join(dir, "status.json")
+	content := `{"kind":"x-visible-article","schemaVersion":1,"targetRaw":"/twitter/user/OpenAI","targetType":"account","targetUrl":"https://x.com/OpenAI","sourceUrl":"https://x.com/OpenAI","finalUrl":"https://x.com/OpenAI","text":"OpenAI launched Codex earlier","datetime":"2026-05-19T23:59:00.000Z","statusUrl":"https://x.com/OpenAI/status/earlier","statusLinks":["https://x.com/OpenAI/status/earlier"],"linkCount":1,"imageCount":0,"videoCount":0}
+`
+	if err := os.WriteFile(accountsPath, []byte(content), 0o644); err != nil {
+		t.Fatalf("write accounts ndjson: %v", err)
+	}
+	if err := os.WriteFile(statusPath, []byte(`{"kind":"x-visible-refresh-status","schemaVersion":1,"job":"x-visible-ai","period":"2026-05-20T10:00:00+08:00","status":"running","startedAt":"2026-05-20T01:00:00.000Z","window":{"from":"2026-05-20T09:00:00+08:00","to":"2026-05-20T10:00:00+08:00"},"outputs":{"accounts":"`+accountsPath+`"}}`), 0o644); err != nil {
+		t.Fatalf("write status: %v", err)
+	}
+	cfg := config.XAccountsConfig{
+		Enabled:             true,
+		AccountsPath:        accountsPath,
+		RefreshStatusPath:   statusPath,
+		RefreshWaitTimeout:  time.Hour,
+		RefreshWaitInterval: time.Hour,
+		Category:            "AI/科技",
+		Accounts:            []config.XAccountConfig{{Handle: "OpenAI"}},
+	}
+	from := time.Date(2026, 5, 19, 8, 0, 0, 0, time.FixedZone("UTC+8", 8*60*60))
+	to := time.Date(2026, 5, 20, 8, 0, 0, 0, time.FixedZone("UTC+8", 8*60*60))
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+
+	results, failed, err := fetchXVisibleNDJSON(ctx, cfg, []string{"Codex"}, from, to)
+	if err != nil {
+		t.Fatalf("fetchXVisibleNDJSON() error = %v", err)
+	}
+	if len(failed) != 0 {
+		t.Fatalf("failed = %#v, want none", failed)
+	}
+	if len(results) != 1 || len(results[0].Candidates) != 1 {
+		t.Fatalf("results = %#v, want one existing X candidate", results)
+	}
+}
+
+func TestFetchXVisibleNDJSONSkipsUnrelatedFailedRefresh(t *testing.T) {
+	dir := t.TempDir()
+	accountsPath := filepath.Join(dir, "accounts.ndjson")
+	statusPath := filepath.Join(dir, "status.json")
+	content := `{"kind":"x-visible-article","schemaVersion":1,"targetRaw":"/twitter/user/OpenAI","targetType":"account","targetUrl":"https://x.com/OpenAI","sourceUrl":"https://x.com/OpenAI","finalUrl":"https://x.com/OpenAI","text":"OpenAI launched Codex earlier","datetime":"2026-05-19T23:59:00.000Z","statusUrl":"https://x.com/OpenAI/status/failed-unrelated","statusLinks":["https://x.com/OpenAI/status/failed-unrelated"],"linkCount":1,"imageCount":0,"videoCount":0}
+`
+	if err := os.WriteFile(accountsPath, []byte(content), 0o644); err != nil {
+		t.Fatalf("write accounts ndjson: %v", err)
+	}
+	if err := os.WriteFile(statusPath, []byte(`{"kind":"x-visible-refresh-status","schemaVersion":1,"job":"x-visible-ai","period":"2026-05-20T10:00:00+08:00","status":"failed","startedAt":"2026-05-20T01:00:00.000Z","finishedAt":"2026-05-20T01:01:00.000Z","window":{"from":"2026-05-20T09:00:00+08:00","to":"2026-05-20T10:00:00+08:00"},"error":"browser not ready","outputs":{"accounts":"`+accountsPath+`"}}`), 0o644); err != nil {
+		t.Fatalf("write status: %v", err)
+	}
+	cfg := config.XAccountsConfig{
+		Enabled:           true,
+		AccountsPath:      accountsPath,
+		RefreshStatusPath: statusPath,
+		Category:          "AI/科技",
+		Accounts:          []config.XAccountConfig{{Handle: "OpenAI"}},
+	}
+	from := time.Date(2026, 5, 19, 8, 0, 0, 0, time.FixedZone("UTC+8", 8*60*60))
+	to := time.Date(2026, 5, 20, 8, 0, 0, 0, time.FixedZone("UTC+8", 8*60*60))
+
+	_, failed, err := fetchXVisibleNDJSON(context.Background(), cfg, []string{"Codex"}, from, to)
+	if err != nil {
+		t.Fatalf("fetchXVisibleNDJSON() error = %v", err)
+	}
+	if len(failed) != 0 {
+		t.Fatalf("failed = %#v, want none", failed)
+	}
+}
+
 func TestFetchWindowDetailedUsesXVisibleLookback(t *testing.T) {
 	dir := t.TempDir()
 	accountsPath := filepath.Join(dir, "accounts.ndjson")

@@ -92,7 +92,10 @@ x_accounts:
   enabled: false
   accounts_path: <x-visible-data-dir>/accounts.ndjson
   searches_path: <x-visible-data-dir>/searches.ndjson
+  refresh_status_path: <x-visible-data-dir>/status.json
   lookback: 24h
+  refresh_wait_timeout: 10m
+  refresh_wait_interval: 5s
   max_posts_per_account: 10
   concurrency: 8
   category: AI/科技

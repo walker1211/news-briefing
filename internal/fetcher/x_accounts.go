@@ -35,14 +35,39 @@ type xVisibleArticle struct {
 	VideoCount    int      `json:"videoCount"`
 }
 
+type xVisibleRefreshStatus struct {
+	Kind          string                `json:"kind"`
+	SchemaVersion int                   `json:"schemaVersion"`
+	Job           string                `json:"job"`
+	Period        string                `json:"period"`
+	Window        xVisibleRefreshWindow `json:"window"`
+	Status        string                `json:"status"`
+	StartedAt     string                `json:"startedAt"`
+	FinishedAt    string                `json:"finishedAt"`
+	Error         string                `json:"error"`
+	Outputs       map[string]string     `json:"outputs"`
+}
+
+type xVisibleRefreshWindow struct {
+	From string `json:"from"`
+	To   string `json:"to"`
+}
+
 func fetchXVisibleNDJSON(ctx context.Context, cfg config.XAccountsConfig, keywords []string, from time.Time, to time.Time) ([]sourceFetchResult, []FailedSource, error) {
 	if !cfg.Enabled {
 		return nil, nil, nil
 	}
+	var failed []FailedSource
+	refreshFailure, err := waitForXVisibleRefresh(ctx, cfg, from, to)
+	if err != nil {
+		return nil, nil, err
+	}
+	if refreshFailure != nil {
+		failed = append(failed, *refreshFailure)
+	}
 	allowedAccounts := xAccountHandleSet(cfg.Accounts)
 	seen := map[string]struct{}{}
 	var candidates []fetchedCandidate
-	var failed []FailedSource
 	for _, input := range []struct {
 		name string
 		path string
@@ -104,6 +129,98 @@ func readXVisibleNDJSONFile(path string) ([]xVisibleArticle, error) {
 		return nil, err
 	}
 	return items, nil
+}
+
+func waitForXVisibleRefresh(ctx context.Context, cfg config.XAccountsConfig, from, to time.Time) (*FailedSource, error) {
+	path := strings.TrimSpace(cfg.RefreshStatusPath)
+	if path == "" {
+		return nil, nil
+	}
+	timeout := cfg.RefreshWaitTimeout
+	if timeout <= 0 {
+		timeout = config.DefaultXRefreshWaitTimeout
+	}
+	interval := cfg.RefreshWaitInterval
+	if interval <= 0 {
+		interval = config.DefaultXRefreshWaitInterval
+	}
+	deadline := time.Now().Add(timeout)
+
+	for {
+		status, err := readXVisibleRefreshStatus(path)
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		if err != nil {
+			return &FailedSource{Name: "X refresh status", Err: err}, nil
+		}
+
+		switch strings.ToLower(strings.TrimSpace(status.Status)) {
+		case "running":
+			if !xVisibleRefreshWindowOverlaps(status.Window, from, to) {
+				return nil, nil
+			}
+			if !time.Now().Before(deadline) {
+				return &FailedSource{Name: "X refresh status", Err: fmt.Errorf("refresh still running after %s", timeout)}, nil
+			}
+			wait := interval
+			if remaining := time.Until(deadline); remaining < wait {
+				wait = remaining
+			}
+			timer := time.NewTimer(wait)
+			select {
+			case <-ctx.Done():
+				if !timer.Stop() {
+					select {
+					case <-timer.C:
+					default:
+					}
+				}
+				return nil, ctx.Err()
+			case <-timer.C:
+			}
+		case "failed":
+			if !xVisibleRefreshWindowOverlaps(status.Window, from, to) {
+				return nil, nil
+			}
+			message := strings.TrimSpace(status.Error)
+			if message == "" {
+				message = "refresh failed"
+			} else {
+				message = "refresh failed: " + message
+			}
+			return &FailedSource{Name: "X refresh status", Err: fmt.Errorf("%s", message)}, nil
+		default:
+			return nil, nil
+		}
+	}
+}
+
+func readXVisibleRefreshStatus(path string) (xVisibleRefreshStatus, error) {
+	data, err := os.ReadFile(expandHomePath(path))
+	if err != nil {
+		return xVisibleRefreshStatus{}, err
+	}
+	var status xVisibleRefreshStatus
+	if err := json.Unmarshal(data, &status); err != nil {
+		return xVisibleRefreshStatus{}, err
+	}
+	return status, nil
+}
+
+func xVisibleRefreshWindowOverlaps(window xVisibleRefreshWindow, from, to time.Time) bool {
+	windowFrom, err := time.Parse(time.RFC3339, strings.TrimSpace(window.From))
+	if err != nil {
+		return true
+	}
+	windowTo, err := time.Parse(time.RFC3339, strings.TrimSpace(window.To))
+	if err != nil {
+		return true
+	}
+	if !windowTo.After(windowFrom) {
+		return true
+	}
+	return windowFrom.Before(to) && windowTo.After(from)
 }
 
 func xVisibleArticleCandidate(item xVisibleArticle, category string, keywords []string, from time.Time, to time.Time, allowedAccounts map[string]struct{}) (fetchedCandidate, bool) {

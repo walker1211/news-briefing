@@ -39,9 +39,11 @@ const (
 	WatchTypeAnthropicSupport = "anthropic_support"
 	WatchTypeAnnouncementPage = "announcement_page"
 
-	DefaultFetchTimeout       = 30 * time.Second
-	DefaultFetchRetryTimes    = 3
-	DefaultFetchRetryWaitTime = 200 * time.Millisecond
+	DefaultFetchTimeout         = 30 * time.Second
+	DefaultFetchRetryTimes      = 3
+	DefaultFetchRetryWaitTime   = 200 * time.Millisecond
+	DefaultXRefreshWaitTimeout  = 10 * time.Minute
+	DefaultXRefreshWaitInterval = 5 * time.Second
 )
 
 type Source struct {
@@ -77,15 +79,20 @@ type WatchSite struct {
 }
 
 type XAccountsConfig struct {
-	Enabled            bool             `yaml:"enabled"`
-	AccountsPath       string           `yaml:"accounts_path"`
-	SearchesPath       string           `yaml:"searches_path"`
-	LookbackRaw        string           `yaml:"lookback"`
-	MaxPostsPerAccount int              `yaml:"max_posts_per_account"`
-	Concurrency        int              `yaml:"concurrency"`
-	Category           string           `yaml:"category"`
-	Accounts           []XAccountConfig `yaml:"accounts"`
-	Lookback           time.Duration    `yaml:"-"`
+	Enabled                bool             `yaml:"enabled"`
+	AccountsPath           string           `yaml:"accounts_path"`
+	SearchesPath           string           `yaml:"searches_path"`
+	RefreshStatusPath      string           `yaml:"refresh_status_path"`
+	LookbackRaw            string           `yaml:"lookback"`
+	RefreshWaitTimeoutRaw  string           `yaml:"refresh_wait_timeout"`
+	RefreshWaitIntervalRaw string           `yaml:"refresh_wait_interval"`
+	MaxPostsPerAccount     int              `yaml:"max_posts_per_account"`
+	Concurrency            int              `yaml:"concurrency"`
+	Category               string           `yaml:"category"`
+	Accounts               []XAccountConfig `yaml:"accounts"`
+	Lookback               time.Duration    `yaml:"-"`
+	RefreshWaitTimeout     time.Duration    `yaml:"-"`
+	RefreshWaitInterval    time.Duration    `yaml:"-"`
 }
 
 type XAccountConfig struct {
@@ -205,6 +212,28 @@ func applyXAccountsDefaults(cfg *XAccountsConfig) error {
 		return fmt.Errorf("validate x_accounts.lookback: must be greater than 0")
 	}
 	cfg.Lookback = lookback
+	if strings.TrimSpace(cfg.RefreshWaitTimeoutRaw) == "" {
+		cfg.RefreshWaitTimeoutRaw = DefaultXRefreshWaitTimeout.String()
+	}
+	refreshWaitTimeout, err := time.ParseDuration(strings.TrimSpace(cfg.RefreshWaitTimeoutRaw))
+	if err != nil {
+		return fmt.Errorf("parse x_accounts.refresh_wait_timeout: %w", err)
+	}
+	if refreshWaitTimeout <= 0 {
+		return fmt.Errorf("validate x_accounts.refresh_wait_timeout: must be greater than 0")
+	}
+	cfg.RefreshWaitTimeout = refreshWaitTimeout
+	if strings.TrimSpace(cfg.RefreshWaitIntervalRaw) == "" {
+		cfg.RefreshWaitIntervalRaw = DefaultXRefreshWaitInterval.String()
+	}
+	refreshWaitInterval, err := time.ParseDuration(strings.TrimSpace(cfg.RefreshWaitIntervalRaw))
+	if err != nil {
+		return fmt.Errorf("parse x_accounts.refresh_wait_interval: %w", err)
+	}
+	if refreshWaitInterval <= 0 {
+		return fmt.Errorf("validate x_accounts.refresh_wait_interval: must be greater than 0")
+	}
+	cfg.RefreshWaitInterval = refreshWaitInterval
 	if cfg.MaxPostsPerAccount == 0 {
 		cfg.MaxPostsPerAccount = 10
 	}
