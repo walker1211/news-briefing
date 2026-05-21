@@ -1273,7 +1273,6 @@ func TestProjectConfigIncludesDiscoveryEnhancementAISources(t *testing.T) {
 	}
 	want := []Source{
 		{Name: "AllenAI Blog", URL: "https://allenai.org/rss.xml", Type: SourceTypeRSS, Category: "AI/科技"},
-		{Name: "Cognition Blog", URL: "https://cognition.ai/rss.xml", Type: SourceTypeRSS, Category: "AI/科技"},
 		{Name: "Bing / Microsoft Search Blog", URL: "https://blogs.bing.com/Home/feed", Type: SourceTypeRSS, Category: "AI/科技"},
 	}
 
@@ -1309,6 +1308,19 @@ func TestProjectConfigIncludesDiscoveryEnhancementAISources(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestProjectConfigDoesNotIncludeRemovedCognitionRSS(t *testing.T) {
+	cfg, err := Load(filepath.Join("..", "..", "configs", "config.example.yaml"))
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+
+	for _, source := range cfg.Sources {
+		if source.Name == "Cognition Blog" || strings.Contains(source.URL, "cognition.ai/rss.xml") {
+			t.Fatalf("config.example.yaml includes removed Cognition RSS source: %+v", source)
+		}
 	}
 }
 

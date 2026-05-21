@@ -43,10 +43,6 @@ sources:
     url: https://allenai.org/rss.xml
     type: rss
     category: AI/科技
-  - name: Cognition Blog
-    url: https://cognition.ai/rss.xml
-    type: rss
-    category: AI/科技
   - name: Bing / Microsoft Search Blog
     url: https://blogs.bing.com/Home/feed
     type: rss

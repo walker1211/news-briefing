@@ -271,7 +271,7 @@ func xVisibleRefreshStatusWarnings(path string, from, to time.Time) ([]FailedSou
 	}
 
 	var failed []FailedSource
-	if warning := xVisibleRefreshSummaryWarning(status.TargetSummary); warning != nil {
+	if warning := xVisibleRefreshSummaryWarning(status.TargetSummary, status.Targets); warning != nil {
 		failed = append(failed, *warning)
 	}
 	for _, target := range status.Targets {
@@ -282,11 +282,20 @@ func xVisibleRefreshStatusWarnings(path string, from, to time.Time) ([]FailedSou
 	return failed, nil
 }
 
-func xVisibleRefreshSummaryWarning(summary *xVisibleRefreshTargetSummary) *FailedSource {
+func xVisibleRefreshSummaryWarning(summary *xVisibleRefreshTargetSummary, targets []xVisibleRefreshTargetDetails) *FailedSource {
 	if summary == nil {
 		return nil
 	}
-	if summary.ErrorCount == 0 && summary.TimeoutCount == 0 && summary.LoginSignalCount == 0 && summary.ChallengeSignalCount == 0 {
+	challengeSignalCount := summary.ChallengeSignalCount
+	if len(targets) > 0 {
+		challengeSignalCount = 0
+		for _, target := range targets {
+			if xVisibleTargetChallengeProblem(target) {
+				challengeSignalCount++
+			}
+		}
+	}
+	if summary.ErrorCount == 0 && summary.TimeoutCount == 0 && summary.LoginSignalCount == 0 && challengeSignalCount == 0 {
 		return nil
 	}
 	return &FailedSource{
@@ -298,7 +307,7 @@ func xVisibleRefreshSummaryWarning(summary *xVisibleRefreshTargetSummary) *Faile
 			summary.ErrorCount,
 			summary.TimeoutCount,
 			summary.LoginSignalCount,
-			summary.ChallengeSignalCount,
+			challengeSignalCount,
 			summary.RetryCount,
 		),
 	}
@@ -313,7 +322,7 @@ func xVisibleRefreshTargetWarning(target xVisibleRefreshTargetDetails) *FailedSo
 	if xVisibleRawSignalPresent(target.LoginSignals) {
 		messageParts = append(messageParts, "loginSignals=true")
 	}
-	if xVisibleRawSignalPresent(target.ChallengeSignals) {
+	if xVisibleTargetChallengeProblem(target) {
 		messageParts = append(messageParts, "challengeSignals=true")
 	}
 	if target.Attempts > 0 {
@@ -337,8 +346,19 @@ func xVisibleRefreshTargetWarning(target xVisibleRefreshTargetDetails) *FailedSo
 func xVisibleTargetHasProblem(target xVisibleRefreshTargetDetails) bool {
 	return xVisibleProblemLoadStopReason(strings.TrimSpace(target.LoadStopReason)) ||
 		xVisibleRawSignalPresent(target.LoginSignals) ||
-		xVisibleRawSignalPresent(target.ChallengeSignals) ||
+		xVisibleTargetChallengeProblem(target) ||
 		strings.TrimSpace(target.Error) != ""
+}
+
+func xVisibleTargetChallengeProblem(target xVisibleRefreshTargetDetails) bool {
+	loadStopReason := strings.TrimSpace(target.LoadStopReason)
+	if strings.EqualFold(loadStopReason, "challenge-signal") {
+		return true
+	}
+	if !xVisibleRawSignalPresent(target.ChallengeSignals) {
+		return false
+	}
+	return !strings.EqualFold(loadStopReason, "article-ready") || target.ArticleCount == 0
 }
 
 func xVisibleProblemLoadStopReason(reason string) bool {
@@ -413,6 +433,9 @@ func xVisibleCoverageWarning(item xVisibleArticle, from, to time.Time) *FailedSo
 	}
 	reason := strings.TrimSpace(item.ScrollStopReason)
 	if reason == "" || reason == "covered-window-start" {
+		return nil
+	}
+	if item.TargetType == "search" && reason == "max-scrolls" {
 		return nil
 	}
 	if strings.TrimSpace(item.WindowFrom) != "" || strings.TrimSpace(item.WindowTo) != "" {

@@ -269,6 +269,70 @@ func TestFetchXVisibleNDJSONReportsRefreshTargetDiagnostics(t *testing.T) {
 	assertFailedSourceContains(t, failed, "X target/Claude Code", "timeout waiting for article")
 }
 
+func TestFetchXVisibleNDJSONIgnoresWeakChallengeSignalAfterArticlesReady(t *testing.T) {
+	dir := t.TempDir()
+	accountsPath := filepath.Join(dir, "accounts.ndjson")
+	statusPath := filepath.Join(dir, "status.json")
+	content := `{"kind":"x-visible-article","schemaVersion":1,"targetRaw":"/twitter/user/merettm","targetType":"account","targetUrl":"https://x.com/merettm","sourceUrl":"https://x.com/merettm","finalUrl":"https://x.com/merettm","text":"Jakub Pachocki reposted OpenAI Codex update","datetime":"2026-05-20T19:06:41.000Z","statusUrl":"https://x.com/OpenAI/status/2057176201782075690","statusLinks":["https://x.com/OpenAI/status/2057176201782075690"],"linkCount":1,"imageCount":0,"videoCount":0}
+`
+	if err := os.WriteFile(accountsPath, []byte(content), 0o644); err != nil {
+		t.Fatalf("write accounts ndjson: %v", err)
+	}
+	status := `{"kind":"x-visible-refresh-status","schemaVersion":1,"job":"x-visible-ai","period":"2026-05-21T00:00:00.000Z","status":"succeeded","startedAt":"2026-05-21T00:00:00.000Z","finishedAt":"2026-05-21T00:01:00.000Z","window":{"from":"2026-05-20T10:00:00.000Z","to":"2026-05-21T00:00:00.000Z"},"targetSummary":{"targetCount":1,"okCount":1,"errorCount":0,"timeoutCount":0,"loginSignalCount":0,"challengeSignalCount":1,"retryCount":0},"targets":[{"targetRaw":"/twitter/user/merettm","targetType":"account","loadStopReason":"article-ready","challengeSignals":true,"attempts":1,"articleCount":1}]}
+`
+	if err := os.WriteFile(statusPath, []byte(status), 0o644); err != nil {
+		t.Fatalf("write status: %v", err)
+	}
+	cfg := config.XAccountsConfig{
+		Enabled:           true,
+		AccountsPath:      accountsPath,
+		RefreshStatusPath: statusPath,
+		Category:          "AI/科技",
+		Accounts:          []config.XAccountConfig{{Handle: "merettm"}},
+	}
+	from := time.Date(2026, 5, 20, 10, 0, 0, 0, time.UTC)
+	to := time.Date(2026, 5, 21, 0, 0, 0, 0, time.UTC)
+
+	results, failed, err := fetchXVisibleNDJSON(context.Background(), cfg, []string{"Codex"}, from, to)
+	if err != nil {
+		t.Fatalf("fetchXVisibleNDJSON() error = %v", err)
+	}
+	if len(results) != 1 || len(results[0].Candidates) != 1 {
+		t.Fatalf("results = %#v, want one X candidate", results)
+	}
+	if len(failed) != 0 {
+		t.Fatalf("failed = %#v, want weak challenge signal ignored", failed)
+	}
+}
+
+func TestFetchXVisibleNDJSONIgnoresSearchMaxScrollsCoverageWarning(t *testing.T) {
+	dir := t.TempDir()
+	searchesPath := filepath.Join(dir, "searches.ndjson")
+	content := `{"kind":"x-visible-article","schemaVersion":1,"targetRaw":"search:Codex","targetType":"search","targetUrl":"https://x.com/search?q=Codex&src=typed_query&f=live","sourceUrl":"https://x.com/search?q=Codex&src=typed_query&f=live","finalUrl":"https://x.com/search?q=Codex&src=typed_query&f=live","windowFrom":"2026-05-20T10:00:00.000Z","windowTo":"2026-05-21T00:00:00.000Z","scrollStopReason":"max-scrolls","text":"Codex launched and released a major update","datetime":"2026-05-20T23:59:40.000Z","statusUrl":"https://x.com/example/status/2057249933124886592","statusLinks":["https://x.com/example/status/2057249933124886592"],"linkCount":1,"imageCount":0,"videoCount":0}
+`
+	if err := os.WriteFile(searchesPath, []byte(content), 0o644); err != nil {
+		t.Fatalf("write searches ndjson: %v", err)
+	}
+	cfg := config.XAccountsConfig{
+		Enabled:      true,
+		SearchesPath: searchesPath,
+		Category:     "AI/科技",
+	}
+	from := time.Date(2026, 5, 20, 10, 0, 0, 0, time.UTC)
+	to := time.Date(2026, 5, 21, 0, 0, 0, 0, time.UTC)
+
+	results, failed, err := fetchXVisibleNDJSON(context.Background(), cfg, []string{"Codex"}, from, to)
+	if err != nil {
+		t.Fatalf("fetchXVisibleNDJSON() error = %v", err)
+	}
+	if len(results) != 1 || len(results[0].Candidates) != 1 {
+		t.Fatalf("results = %#v, want one X search candidate", results)
+	}
+	if len(failed) != 0 {
+		t.Fatalf("failed = %#v, want search max-scrolls coverage ignored", failed)
+	}
+}
+
 func assertFailedSourceContains(t *testing.T, failed []FailedSource, name string, text string) {
 	t.Helper()
 	for _, item := range failed {
