@@ -23,35 +23,36 @@ func TestNewAppWiresInstanceDependencies(t *testing.T) {
 	app := newApp(cfg)
 
 	funcs := map[string]any{
-		"scheduler.startCron":              app.scheduler.startCron,
-		"scheduler.startCronContext":       app.scheduler.startCronContext,
-		"fetch.fetchAll":                   app.fetch.fetchAll,
-		"fetch.fetchAllContext":            app.fetch.fetchAllContext,
-		"fetch.fetchAllDetailedContext":    app.fetch.fetchAllDetailedContext,
-		"fetch.fetchWindow":                app.fetch.fetchWindow,
-		"fetch.fetchWindowContext":         app.fetch.fetchWindowContext,
-		"fetch.fetchWindowDetailedContext": app.fetch.fetchWindowDetailedContext,
-		"fetch.fetchXAlertsContext":        app.fetch.fetchXAlertsContext,
-		"fetch.markSeen":                   app.fetch.markSeen,
-		"watch.fetchWatch":                 app.watch.fetchWatch,
-		"watch.fetchWatchContext":          app.watch.fetchWatchContext,
-		"ai.summarize":                     app.ai.summarize,
-		"ai.summarizeContext":              app.ai.summarizeContext,
-		"ai.translate":                     app.ai.translate,
-		"ai.translateContext":              app.ai.translateContext,
-		"ai.deepDive":                      app.ai.deepDive,
-		"ai.deepDiveContext":               app.ai.deepDiveContext,
-		"output.composeBody":               app.output.composeBody,
-		"output.printText":                 app.output.printText,
-		"output.printFailed":               app.output.printFailed,
-		"output.printArticles":             app.output.printArticles,
-		"output.printCLI":                  app.output.printCLI,
-		"output.writeMarkdown":             app.output.writeMarkdown,
-		"output.writeWatchMarkdown":        app.output.writeWatchMarkdown,
-		"output.writeDeepDive":             app.output.writeDeepDive,
-		"email.sendEmail":                  app.email.sendEmail,
-		"email.sendDeepEmail":              app.email.sendDeepEmail,
-		"email.resendMarkdownEmail":        app.email.resendMarkdownEmail,
+		"scheduler.startCron":                     app.scheduler.startCron,
+		"scheduler.startCronContext":              app.scheduler.startCronContext,
+		"fetch.fetchAll":                          app.fetch.fetchAll,
+		"fetch.fetchAllContext":                   app.fetch.fetchAllContext,
+		"fetch.fetchAllDetailedContext":           app.fetch.fetchAllDetailedContext,
+		"fetch.fetchWindow":                       app.fetch.fetchWindow,
+		"fetch.fetchWindowContext":                app.fetch.fetchWindowContext,
+		"fetch.fetchWindowDetailedContext":        app.fetch.fetchWindowDetailedContext,
+		"fetch.fetchWindowDetailedHistoryContext": app.fetch.fetchWindowDetailedHistoryContext,
+		"fetch.fetchXAlertsContext":               app.fetch.fetchXAlertsContext,
+		"fetch.markSeen":                          app.fetch.markSeen,
+		"watch.fetchWatch":                        app.watch.fetchWatch,
+		"watch.fetchWatchContext":                 app.watch.fetchWatchContext,
+		"ai.summarize":                            app.ai.summarize,
+		"ai.summarizeContext":                     app.ai.summarizeContext,
+		"ai.translate":                            app.ai.translate,
+		"ai.translateContext":                     app.ai.translateContext,
+		"ai.deepDive":                             app.ai.deepDive,
+		"ai.deepDiveContext":                      app.ai.deepDiveContext,
+		"output.composeBody":                      app.output.composeBody,
+		"output.printText":                        app.output.printText,
+		"output.printFailed":                      app.output.printFailed,
+		"output.printArticles":                    app.output.printArticles,
+		"output.printCLI":                         app.output.printCLI,
+		"output.writeMarkdown":                    app.output.writeMarkdown,
+		"output.writeWatchMarkdown":               app.output.writeWatchMarkdown,
+		"output.writeDeepDive":                    app.output.writeDeepDive,
+		"email.sendEmail":                         app.email.sendEmail,
+		"email.sendDeepEmail":                     app.email.sendDeepEmail,
+		"email.resendMarkdownEmail":               app.email.resendMarkdownEmail,
 	}
 	for name, fn := range funcs {
 		if reflect.ValueOf(fn).IsNil() {
@@ -564,6 +565,61 @@ func TestExecuteRegenUsesParsedWindowAndFlags(t *testing.T) {
 	}
 	if !emailCalled {
 		t.Fatalf("sendEmail was not called")
+	}
+}
+
+func TestExecuteRegenUsesXVisibleHistoryOptions(t *testing.T) {
+	loc, err := time.LoadLocation("Asia/Shanghai")
+	if err != nil {
+		t.Fatalf("LoadLocation() error = %v", err)
+	}
+	from := time.Date(2026, 5, 19, 8, 0, 0, 0, loc)
+	to := time.Date(2026, 5, 21, 8, 0, 0, 0, loc)
+
+	called := false
+	app := &app{
+		cfg: &config.Config{
+			ScheduleLocation: loc,
+			Output:           config.OutputCfg{Dir: t.TempDir(), Mode: model.OutputModeOriginalOnly},
+			XAccounts:        config.XAccountsConfig{HistoryDir: "/config/history"},
+		},
+		fetch: fetchDeps{
+			fetchWindowDetailedHistoryContext: func(ctx context.Context, cfg *config.Config, gotFrom, gotTo time.Time, markSeen bool, ignoreSeen bool, historyDir string) (fetcher.FetchResult, error) {
+				called = gotFrom.Equal(from) && gotTo.Equal(to) && !markSeen && ignoreSeen && historyDir == "/override/history"
+				return fetcher.FetchResult{Articles: sampleExecuteArticles()}, nil
+			},
+		},
+		output: silentBriefingOutputDeps(""),
+	}
+
+	cmd := regenCommand{
+		fromRaw:             "2026-05-19 08:00",
+		toRaw:               "2026-05-21 08:00",
+		ignoreSeen:          true,
+		xVisibleHistoryDays: 2,
+		xVisibleHistoryDir:  "/override/history",
+	}
+	if err := execute(app, cmd); err != nil {
+		t.Fatalf("execute() error = %v", err)
+	}
+	if !called {
+		t.Fatalf("history fetch was not called with parsed regen arguments")
+	}
+}
+
+func TestExecuteRegenHistoryRejectsMissingDir(t *testing.T) {
+	app := &app{cfg: &config.Config{}}
+	err := execute(app, regenCommand{fromRaw: "2026-05-19 08:00", toRaw: "2026-05-20 08:00", xVisibleHistoryDays: 1})
+	if err == nil || !strings.Contains(err.Error(), "x visible history dir") {
+		t.Fatalf("execute() error = %v, want missing x visible history dir", err)
+	}
+}
+
+func TestExecuteRegenHistoryRejectsWindowWiderThanDays(t *testing.T) {
+	app := &app{cfg: &config.Config{XAccounts: config.XAccountsConfig{HistoryDir: "/config/history"}}}
+	err := execute(app, regenCommand{fromRaw: "2026-05-19 08:00", toRaw: "2026-05-21 08:01", xVisibleHistoryDays: 2})
+	if err == nil || !strings.Contains(err.Error(), "--x-visible-history-days") {
+		t.Fatalf("execute() error = %v, want history days window validation", err)
 	}
 }
 

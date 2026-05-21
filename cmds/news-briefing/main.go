@@ -120,6 +120,8 @@ Flags (for regen):
   --ignore-seen               跳过已读状态文件（默认 <output.dir>/state/seen.json），仅做本批次内去重
   --send-email                发送邮件
   --raw                       同时显示原始文章列表
+  --x-visible-history-days N   可选，从 X visible 历史归档读取，最多扫描 N 天窗口
+  --x-visible-history-dir DIR  可选，覆盖 x_accounts.history_dir
   默认不发邮件，默认仍会写出 Markdown 文件
 
 Flags (for fetch):
@@ -142,6 +144,7 @@ Examples:
   news-briefing run --no-email
   news-briefing regen --from "2026-03-18 08:00" --to "2026-03-18 14:00"
   news-briefing regen --from "2026-03-18 08:00" --to "2026-03-18 14:00" --period 1400 --ignore-seen --send-email
+  news-briefing regen --from "2026-05-19 08:00" --to "2026-05-21 08:00" --ignore-seen --x-visible-history-days 2
   news-briefing fetch
   news-briefing alerts
   news-briefing x routes

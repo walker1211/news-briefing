@@ -1,6 +1,7 @@
 package fetcher
 
 import (
+	"compress/gzip"
 	"context"
 	"os"
 	"path/filepath"
@@ -422,4 +423,108 @@ func TestFetchXVisibleNDJSONFiltersWindowWhitelistAndDeduplicates(t *testing.T) 
 	if len(candidate.MatchedKeywords) != 1 || candidate.MatchedKeywords[0] != "Codex" {
 		t.Fatalf("MatchedKeywords = %#v, want Codex", candidate.MatchedKeywords)
 	}
+}
+
+func TestReadXVisibleNDJSONFileReadsGzip(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "accounts.ndjson.gz")
+	writeGzipFile(t, path, `{"kind":"x-visible-article","schemaVersion":1,"targetRaw":"/twitter/user/OpenAI","targetType":"account","targetUrl":"https://x.com/OpenAI","text":"OpenAI Codex update","datetime":"2026-05-19T07:00:00.000Z","statusUrl":"https://x.com/OpenAI/status/gzip"}
+`)
+
+	items, err := readXVisibleNDJSONFile(path)
+	if err != nil {
+		t.Fatalf("readXVisibleNDJSONFile() error = %v", err)
+	}
+	if len(items) != 1 || items[0].StatusURL != "https://x.com/OpenAI/status/gzip" {
+		t.Fatalf("items = %#v, want gzip-decoded X visible article", items)
+	}
+}
+
+func TestFetchXVisibleNDJSONWithOptionsReadsMatchingHistoryArchives(t *testing.T) {
+	dir := t.TempDir()
+	historyDir := filepath.Join(dir, "history")
+	writeXVisibleHistoryArchive(t, historyDir, "20260520T000000Z", "2026-05-19T00:00:00.000Z", "2026-05-20T00:00:00.000Z",
+		`{"kind":"x-visible-article","schemaVersion":1,"targetRaw":"/twitter/user/OpenAI","targetType":"account","targetUrl":"https://x.com/OpenAI","sourceUrl":"https://x.com/OpenAI","finalUrl":"https://x.com/OpenAI","text":"OpenAI Codex update","datetime":"2026-05-19T07:00:00.000Z","statusUrl":"https://x.com/OpenAI/status/shared","statusLinks":["https://x.com/OpenAI/status/shared"]}
+{"kind":"x-visible-article","schemaVersion":1,"targetRaw":"/twitter/user/notlisted","targetType":"account","targetUrl":"https://x.com/notlisted","sourceUrl":"https://x.com/notlisted","finalUrl":"https://x.com/notlisted","text":"notlisted Codex rumor","datetime":"2026-05-19T08:00:00.000Z","statusUrl":"https://x.com/notlisted/status/skip","statusLinks":["https://x.com/notlisted/status/skip"]}
+`, "")
+	writeXVisibleHistoryArchive(t, historyDir, "20260521T000000Z", "2026-05-20T00:00:00.000Z", "2026-05-21T00:00:00.000Z",
+		`{"kind":"x-visible-article","schemaVersion":1,"targetRaw":"/twitter/user/OpenAI","targetType":"account","targetUrl":"https://x.com/OpenAI","sourceUrl":"https://x.com/OpenAI","finalUrl":"https://x.com/OpenAI","text":"Duplicate OpenAI Codex update","datetime":"2026-05-20T01:00:00.000Z","statusUrl":"https://x.com/OpenAI/status/shared","statusLinks":["https://x.com/OpenAI/status/shared"]}
+{"kind":"x-visible-article","schemaVersion":1,"targetRaw":"/twitter/user/OpenAI","targetType":"account","targetUrl":"https://x.com/OpenAI","sourceUrl":"https://x.com/OpenAI","finalUrl":"https://x.com/OpenAI","text":"OpenAI Codex second update","datetime":"2026-05-20T02:00:00.000Z","statusUrl":"https://x.com/OpenAI/status/unique","statusLinks":["https://x.com/OpenAI/status/unique"]}
+`,
+		`{"kind":"x-visible-article","schemaVersion":1,"targetRaw":"search:Codex","targetType":"search","targetUrl":"https://x.com/search?q=Codex&src=typed_query&f=live","sourceUrl":"https://x.com/search?q=Codex&src=typed_query&f=live","finalUrl":"https://x.com/search?q=Codex&src=typed_query&f=live","text":"Search result about Codex","datetime":"2026-05-20T03:00:00.000Z","statusUrl":"https://x.com/example/status/search","statusLinks":["https://x.com/example/status/search"]}
+`)
+	writeXVisibleHistoryArchive(t, historyDir, "20260522T000000Z", "2026-05-21T00:00:00.000Z", "2026-05-22T00:00:00.000Z",
+		`{"kind":"x-visible-article","schemaVersion":1,"targetRaw":"/twitter/user/OpenAI","targetType":"account","targetUrl":"https://x.com/OpenAI","text":"outside Codex update","datetime":"2026-05-21T01:00:00.000Z","statusUrl":"https://x.com/OpenAI/status/outside"}
+`, "")
+	ignoredDir := filepath.Join(historyDir, "not-a-period")
+	if err := os.MkdirAll(ignoredDir, 0o755); err != nil {
+		t.Fatalf("mkdir ignored archive: %v", err)
+	}
+
+	cfg := config.XAccountsConfig{
+		Enabled:  true,
+		Category: "AI/科技",
+		Accounts: []config.XAccountConfig{{Handle: "OpenAI"}},
+	}
+	from := time.Date(2026, 5, 19, 0, 0, 0, 0, time.UTC)
+	to := time.Date(2026, 5, 21, 0, 0, 0, 0, time.UTC)
+
+	results, failed, err := fetchXVisibleNDJSONWithOptions(context.Background(), cfg, []string{"Codex"}, from, to, xVisibleReadOptions{useHistory: true, historyDir: historyDir})
+	if err != nil {
+		t.Fatalf("fetchXVisibleNDJSONWithOptions() error = %v", err)
+	}
+	if len(failed) != 0 {
+		t.Fatalf("failed = %#v, want none", failed)
+	}
+	if len(results) != 1 || len(results[0].Candidates) != 3 {
+		t.Fatalf("results = %#v, want three deduped history candidates", results)
+	}
+	links := []string{
+		results[0].Candidates[0].Article.Link,
+		results[0].Candidates[1].Article.Link,
+		results[0].Candidates[2].Article.Link,
+	}
+	want := []string{
+		"https://x.com/OpenAI/status/shared",
+		"https://x.com/OpenAI/status/unique",
+		"https://x.com/example/status/search",
+	}
+	for i := range want {
+		if links[i] != want[i] {
+			t.Fatalf("history links = %#v, want %#v", links, want)
+		}
+	}
+}
+
+func writeGzipFile(t *testing.T, path string, content string) {
+	t.Helper()
+	file, err := os.Create(path)
+	if err != nil {
+		t.Fatalf("create gzip file: %v", err)
+	}
+	gzipWriter := gzip.NewWriter(file)
+	if _, err := gzipWriter.Write([]byte(content)); err != nil {
+		t.Fatalf("write gzip content: %v", err)
+	}
+	if err := gzipWriter.Close(); err != nil {
+		t.Fatalf("close gzip writer: %v", err)
+	}
+	if err := file.Close(); err != nil {
+		t.Fatalf("close gzip file: %v", err)
+	}
+}
+
+func writeXVisibleHistoryArchive(t *testing.T, historyDir string, periodKey string, windowFrom string, windowTo string, accountsContent string, searchesContent string) {
+	t.Helper()
+	dir := filepath.Join(historyDir, periodKey)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatalf("mkdir archive: %v", err)
+	}
+	status := `{"kind":"x-visible-refresh-status","schemaVersion":1,"job":"x-visible-ai","period":"` + windowTo + `","status":"succeeded","window":{"from":"` + windowFrom + `","to":"` + windowTo + `"}}
+`
+	if err := os.WriteFile(filepath.Join(dir, "status.json"), []byte(status), 0o644); err != nil {
+		t.Fatalf("write archive status: %v", err)
+	}
+	writeGzipFile(t, filepath.Join(dir, "accounts.ndjson.gz"), accountsContent)
+	writeGzipFile(t, filepath.Join(dir, "searches.ndjson.gz"), searchesContent)
 }

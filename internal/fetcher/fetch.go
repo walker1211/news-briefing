@@ -218,6 +218,14 @@ func (c *Client) FetchWindowDetailedContext(ctx context.Context, cfg *config.Con
 	return fetchWindowDetailedContext(ctx, cfg, from, to, markSeen, ignoreSeen, c.fetchAllSourcesDetailed)
 }
 
+func FetchWindowDetailedWithXVisibleHistoryContext(ctx context.Context, cfg *config.Config, from, to time.Time, markSeen bool, ignoreSeen bool, historyDir string) (FetchResult, error) {
+	return fetchWindowDetailedContextWithOptions(ctx, cfg, from, to, markSeen, ignoreSeen, fetchAllSourcesDetailed, false, xVisibleReadOptions{useHistory: true, historyDir: historyDir})
+}
+
+func (c *Client) FetchWindowDetailedWithXVisibleHistoryContext(ctx context.Context, cfg *config.Config, from, to time.Time, markSeen bool, ignoreSeen bool, historyDir string) (FetchResult, error) {
+	return fetchWindowDetailedContextWithOptions(ctx, cfg, from, to, markSeen, ignoreSeen, c.fetchAllSourcesDetailed, false, xVisibleReadOptions{useHistory: true, historyDir: historyDir})
+}
+
 func fetchWindowContext(ctx context.Context, cfg *config.Config, from, to time.Time, markSeen bool, ignoreSeen bool, fetchAll fetchAllSourcesDetailedFunc) ([]model.Article, []FailedSource, error) {
 	result, err := fetchWindowDetailedContext(ctx, cfg, from, to, markSeen, ignoreSeen, fetchAll)
 	return result.Articles, result.Failed, err
@@ -231,7 +239,7 @@ func fetchWindowDetailedContextWithXLookback(ctx context.Context, cfg *config.Co
 	return fetchWindowDetailedContextWithOptions(ctx, cfg, from, to, markSeen, ignoreSeen, fetchAll, true)
 }
 
-func fetchWindowDetailedContextWithOptions(ctx context.Context, cfg *config.Config, from, to time.Time, markSeen bool, ignoreSeen bool, fetchAll fetchAllSourcesDetailedFunc, useXLookback bool) (FetchResult, error) {
+func fetchWindowDetailedContextWithOptions(ctx context.Context, cfg *config.Config, from, to time.Time, markSeen bool, ignoreSeen bool, fetchAll fetchAllSourcesDetailedFunc, useXLookback bool, xVisibleOptions ...xVisibleReadOptions) (FetchResult, error) {
 	if err := ctx.Err(); err != nil {
 		return FetchResult{}, err
 	}
@@ -243,7 +251,11 @@ func fetchWindowDetailedContextWithOptions(ctx context.Context, cfg *config.Conf
 	if useXLookback && cfg.XAccounts.Lookback > 0 {
 		xFrom = to.Add(-cfg.XAccounts.Lookback)
 	}
-	xResults, xFailed, err := fetchXVisibleNDJSON(ctx, cfg.XAccounts, cfg.Keywords, xFrom, to)
+	xReadOptions := xVisibleReadOptions{}
+	if len(xVisibleOptions) > 0 {
+		xReadOptions = xVisibleOptions[0]
+	}
+	xResults, xFailed, err := fetchXVisibleNDJSONWithOptions(ctx, cfg.XAccounts, cfg.Keywords, xFrom, to, xReadOptions)
 	if err != nil {
 		return FetchResult{}, err
 	}

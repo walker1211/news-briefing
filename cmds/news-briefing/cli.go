@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
 )
 
@@ -13,12 +14,14 @@ type runCommand struct {
 }
 
 type regenCommand struct {
-	fromRaw    string
-	toRaw      string
-	period     string
-	ignoreSeen bool
-	sendEmail  bool
-	raw        bool
+	fromRaw             string
+	toRaw               string
+	period              string
+	ignoreSeen          bool
+	sendEmail           bool
+	raw                 bool
+	xVisibleHistoryDays int
+	xVisibleHistoryDir  string
 }
 
 type fetchCommand struct{ zh bool }
@@ -85,7 +88,16 @@ func parseArgs(args []string) (command, error) {
 		if err := validatePeriod(period); err != nil {
 			return nil, err
 		}
-		return regenCommand{fromRaw: fromRaw, toRaw: toRaw, period: period, ignoreSeen: hasFlagIn(args[1:], "--ignore-seen"), sendEmail: hasFlagIn(args[1:], "--send-email"), raw: hasFlagIn(args[1:], "--raw")}, nil
+		historyDays := 0
+		if rawHistoryDays, ok := readStringFlag(args[1:], "--x-visible-history-days"); ok {
+			parsed, err := parsePositiveIntFlag(rawHistoryDays, "--x-visible-history-days")
+			if err != nil {
+				return nil, err
+			}
+			historyDays = parsed
+		}
+		historyDir, _ := readStringFlag(args[1:], "--x-visible-history-dir")
+		return regenCommand{fromRaw: fromRaw, toRaw: toRaw, period: period, ignoreSeen: hasFlagIn(args[1:], "--ignore-seen"), sendEmail: hasFlagIn(args[1:], "--send-email"), raw: hasFlagIn(args[1:], "--raw"), xVisibleHistoryDays: historyDays, xVisibleHistoryDir: historyDir}, nil
 	case "fetch":
 		return fetchCommand{zh: hasFlagIn(args[1:], "--zh")}, nil
 	case "alerts":
@@ -157,6 +169,14 @@ func nextTokenAfterFlag(args []string, flag string) (string, bool) {
 		}
 	}
 	return "", false
+}
+
+func parsePositiveIntFlag(value string, flag string) (int, error) {
+	parsed, err := strconv.Atoi(strings.TrimSpace(value))
+	if err != nil || parsed <= 0 {
+		return 0, fmt.Errorf("%s must be a positive integer", flag)
+	}
+	return parsed, nil
 }
 
 func collectDeepTopicArgs(args []string) string {
@@ -235,7 +255,7 @@ func commandValidationRules(cmd string) (map[string]struct{}, map[string]struct{
 	case "resend-md":
 		return nil, map[string]struct{}{"--file": {}}, false
 	case "regen":
-		return map[string]struct{}{"--ignore-seen": {}, "--send-email": {}, "--raw": {}}, map[string]struct{}{"--from": {}, "--to": {}, "--period": {}}, false
+		return map[string]struct{}{"--ignore-seen": {}, "--send-email": {}, "--raw": {}}, map[string]struct{}{"--from": {}, "--to": {}, "--period": {}, "--x-visible-history-days": {}, "--x-visible-history-dir": {}}, false
 	default:
 		return nil, nil, false
 	}

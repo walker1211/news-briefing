@@ -20,7 +20,7 @@ func TestParseArgsRun(t *testing.T) {
 }
 
 func TestParseArgsRegen(t *testing.T) {
-	cmd, err := parseArgs([]string{"regen", "--from", "2026-03-18 08:00", "--to", "2026-03-18 14:00", "--period", "1400", "--ignore-seen", "--send-email", "--raw"})
+	cmd, err := parseArgs([]string{"regen", "--from", "2026-03-18 08:00", "--to", "2026-03-18 14:00", "--period", "1400", "--ignore-seen", "--send-email", "--raw", "--x-visible-history-days", "2", "--x-visible-history-dir", "/tmp/x-visible/history"})
 	if err != nil {
 		t.Fatalf("parseArgs() error = %v", err)
 	}
@@ -33,6 +33,9 @@ func TestParseArgsRegen(t *testing.T) {
 	}
 	if regen.period != "1400" || !regen.ignoreSeen || !regen.sendEmail || !regen.raw {
 		t.Fatalf("regen command = %#v", regen)
+	}
+	if regen.xVisibleHistoryDays != 2 || regen.xVisibleHistoryDir != "/tmp/x-visible/history" {
+		t.Fatalf("regen history options = %#v", regen)
 	}
 }
 
@@ -121,6 +124,13 @@ func TestParseArgsRegenRequiresTo(t *testing.T) {
 	_, err := parseArgs([]string{"regen", "--from", "2026-03-18 08:00"})
 	if err == nil || !strings.Contains(err.Error(), "--to") {
 		t.Fatalf("parseArgs() error = %v, want missing --to", err)
+	}
+}
+
+func TestParseArgsRegenRejectsInvalidXVisibleHistoryDays(t *testing.T) {
+	_, err := parseArgs([]string{"regen", "--from", "2026-03-18 08:00", "--to", "2026-03-18 14:00", "--x-visible-history-days", "0"})
+	if err == nil || !strings.Contains(err.Error(), "--x-visible-history-days") {
+		t.Fatalf("parseArgs() error = %v, want invalid --x-visible-history-days", err)
 	}
 }
 

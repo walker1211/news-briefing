@@ -36,14 +36,15 @@ type schedulerDeps struct {
 }
 
 type fetchDeps struct {
-	fetchAll                   func(*config.Config, bool) ([]model.Article, []fetcher.FailedSource, error)
-	fetchAllContext            func(context.Context, *config.Config, bool) ([]model.Article, []fetcher.FailedSource, error)
-	fetchAllDetailedContext    func(context.Context, *config.Config, bool) (fetcher.FetchResult, error)
-	fetchWindow                func(*config.Config, time.Time, time.Time, bool, bool) ([]model.Article, []fetcher.FailedSource, error)
-	fetchWindowContext         func(context.Context, *config.Config, time.Time, time.Time, bool, bool) ([]model.Article, []fetcher.FailedSource, error)
-	fetchWindowDetailedContext func(context.Context, *config.Config, time.Time, time.Time, bool, bool) (fetcher.FetchResult, error)
-	fetchXAlertsContext        func(context.Context, *config.Config, time.Time) (fetcher.FetchResult, error)
-	markSeen                   func([]model.Article) error
+	fetchAll                          func(*config.Config, bool) ([]model.Article, []fetcher.FailedSource, error)
+	fetchAllContext                   func(context.Context, *config.Config, bool) ([]model.Article, []fetcher.FailedSource, error)
+	fetchAllDetailedContext           func(context.Context, *config.Config, bool) (fetcher.FetchResult, error)
+	fetchWindow                       func(*config.Config, time.Time, time.Time, bool, bool) ([]model.Article, []fetcher.FailedSource, error)
+	fetchWindowContext                func(context.Context, *config.Config, time.Time, time.Time, bool, bool) ([]model.Article, []fetcher.FailedSource, error)
+	fetchWindowDetailedContext        func(context.Context, *config.Config, time.Time, time.Time, bool, bool) (fetcher.FetchResult, error)
+	fetchWindowDetailedHistoryContext func(context.Context, *config.Config, time.Time, time.Time, bool, bool, string) (fetcher.FetchResult, error)
+	fetchXAlertsContext               func(context.Context, *config.Config, time.Time) (fetcher.FetchResult, error)
+	markSeen                          func([]model.Article) error
 }
 
 type watchDeps struct {
@@ -97,13 +98,14 @@ func newApp(cfg *config.Config) *app {
 			},
 		},
 		fetch: fetchDeps{
-			fetchAll:                   fetchClient.FetchAll,
-			fetchAllContext:            fetchClient.FetchAllContext,
-			fetchAllDetailedContext:    fetchClient.FetchAllDetailedContext,
-			fetchWindow:                fetchClient.FetchWindow,
-			fetchWindowContext:         fetchClient.FetchWindowContext,
-			fetchWindowDetailedContext: fetchClient.FetchWindowDetailedContext,
-			fetchXAlertsContext:        fetcher.FetchXAlertsContext,
+			fetchAll:                          fetchClient.FetchAll,
+			fetchAllContext:                   fetchClient.FetchAllContext,
+			fetchAllDetailedContext:           fetchClient.FetchAllDetailedContext,
+			fetchWindow:                       fetchClient.FetchWindow,
+			fetchWindowContext:                fetchClient.FetchWindowContext,
+			fetchWindowDetailedContext:        fetchClient.FetchWindowDetailedContext,
+			fetchWindowDetailedHistoryContext: fetchClient.FetchWindowDetailedWithXVisibleHistoryContext,
+			fetchXAlertsContext:               fetcher.FetchXAlertsContext,
 			markSeen: func(articles []model.Article) error {
 				return fetcher.MarkArticlesSeen(cfg.Output.Dir, articles)
 			},
@@ -335,6 +337,13 @@ func (app *app) fetchWindowArticlesDetailed(ctx context.Context, from, to time.T
 	}
 	articles, failed, err := app.fetchWindowArticles(ctx, from, to, markSeen, ignoreSeen)
 	return fetcher.FetchResult{Articles: articles, Failed: failed}, err
+}
+
+func (app *app) fetchWindowArticlesDetailedWithXVisibleHistory(ctx context.Context, from, to time.Time, markSeen bool, ignoreSeen bool, historyDir string) (fetcher.FetchResult, error) {
+	if app.fetch.fetchWindowDetailedHistoryContext != nil {
+		return app.fetch.fetchWindowDetailedHistoryContext(ctx, app.cfg, from, to, markSeen, ignoreSeen, historyDir)
+	}
+	return fetcher.FetchWindowDetailedWithXVisibleHistoryContext(ctx, app.cfg, from, to, markSeen, ignoreSeen, historyDir)
 }
 
 func (app *app) fetchXAlerts(ctx context.Context, now time.Time) (fetcher.FetchResult, error) {
@@ -591,8 +600,28 @@ func (app *app) runRegenContext(ctx context.Context, cmd regenCommand) error {
 		period = defaultPeriodFrom(to)
 	}
 
+	historyDir := ""
+	if cmd.xVisibleHistoryDays > 0 {
+		historyDir = strings.TrimSpace(cmd.xVisibleHistoryDir)
+		if historyDir == "" && app.cfg != nil {
+			historyDir = strings.TrimSpace(app.cfg.XAccounts.HistoryDir)
+		}
+		if historyDir == "" {
+			return fmt.Errorf("x visible history dir is required when --x-visible-history-days is set")
+		}
+		maxWindow := time.Duration(cmd.xVisibleHistoryDays) * 24 * time.Hour
+		if to.Sub(from) > maxWindow {
+			return fmt.Errorf("requested window exceeds --x-visible-history-days=%d", cmd.xVisibleHistoryDays)
+		}
+	}
+
 	logutil.Printf("Fetching news for window %s ~ %s...", from.Format("2006-01-02 15:04"), to.Format("2006-01-02 15:04"))
-	result, err := app.fetchWindowArticlesDetailed(ctx, from, to, false, cmd.ignoreSeen)
+	var result fetcher.FetchResult
+	if cmd.xVisibleHistoryDays > 0 {
+		result, err = app.fetchWindowArticlesDetailedWithXVisibleHistory(ctx, from, to, false, cmd.ignoreSeen, historyDir)
+	} else {
+		result, err = app.fetchWindowArticlesDetailed(ctx, from, to, false, cmd.ignoreSeen)
+	}
 	if err != nil {
 		return err
 	}

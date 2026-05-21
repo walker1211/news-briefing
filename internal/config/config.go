@@ -84,6 +84,7 @@ type XAccountsConfig struct {
 	Enabled                bool             `yaml:"enabled"`
 	AccountsPath           string           `yaml:"accounts_path"`
 	SearchesPath           string           `yaml:"searches_path"`
+	HistoryDir             string           `yaml:"history_dir"`
 	RefreshStatusPath      string           `yaml:"refresh_status_path"`
 	LookbackRaw            string           `yaml:"lookback"`
 	RefreshWaitTimeoutRaw  string           `yaml:"refresh_wait_timeout"`

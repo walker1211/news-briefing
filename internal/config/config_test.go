@@ -111,6 +111,7 @@ x_accounts:
   enabled: true
   accounts_path: /tmp/rsshub-stack/accounts.ndjson
   searches_path: /tmp/rsshub-stack/searches.ndjson
+  history_dir: /tmp/rsshub-stack/history
   lookback: 24h
   max_posts_per_account: 10
   concurrency: 8
@@ -136,6 +137,9 @@ x_accounts:
 	}
 	if cfg.XAccounts.SearchesPath != "/tmp/rsshub-stack/searches.ndjson" {
 		t.Fatalf("XAccounts.SearchesPath = %q, want /tmp/rsshub-stack/searches.ndjson", cfg.XAccounts.SearchesPath)
+	}
+	if cfg.XAccounts.HistoryDir != "/tmp/rsshub-stack/history" {
+		t.Fatalf("XAccounts.HistoryDir = %q, want /tmp/rsshub-stack/history", cfg.XAccounts.HistoryDir)
 	}
 	if cfg.XAccounts.Lookback != 24*time.Hour {
 		t.Fatalf("XAccounts.Lookback = %v, want 24h", cfg.XAccounts.Lookback)

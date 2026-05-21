@@ -2,11 +2,16 @@ package fetcher
 
 import (
 	"bufio"
+	"compress/gzip"
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/url"
 	"os"
+	"path/filepath"
+	"regexp"
+	"sort"
 	"strings"
 	"time"
 
@@ -15,6 +20,29 @@ import (
 )
 
 const xVisibleSourceName = "X Visible"
+
+var xVisibleHistoryPeriodPattern = regexp.MustCompile(`^[0-9]{8}T[0-9]{6}Z$`)
+
+type xVisibleReadOptions struct {
+	useHistory bool
+	historyDir string
+}
+
+type xVisibleHistoryArchive struct {
+	dir    string
+	name   string
+	status xVisibleRefreshStatus
+}
+
+type xVisibleNDJSONInput struct {
+	name string
+	path string
+}
+
+type xVisibleStatusWarningInput struct {
+	name   string
+	status xVisibleRefreshStatus
+}
 
 type xVisibleArticle struct {
 	Kind             string   `json:"kind"`
@@ -82,8 +110,15 @@ type xVisibleRefreshTargetDetails struct {
 }
 
 func fetchXVisibleNDJSON(ctx context.Context, cfg config.XAccountsConfig, keywords []string, from time.Time, to time.Time) ([]sourceFetchResult, []FailedSource, error) {
+	return fetchXVisibleNDJSONWithOptions(ctx, cfg, keywords, from, to, xVisibleReadOptions{})
+}
+
+func fetchXVisibleNDJSONWithOptions(ctx context.Context, cfg config.XAccountsConfig, keywords []string, from time.Time, to time.Time, options xVisibleReadOptions) ([]sourceFetchResult, []FailedSource, error) {
 	if !cfg.Enabled {
 		return nil, nil, nil
+	}
+	if options.useHistory {
+		return fetchXVisibleHistoryNDJSON(ctx, cfg, keywords, from, to, options.historyDir)
 	}
 	var failed []FailedSource
 	refreshFailure, err := waitForXVisibleRefresh(ctx, cfg, from, to)
@@ -100,17 +135,39 @@ func fetchXVisibleNDJSON(ctx context.Context, cfg config.XAccountsConfig, keywor
 			failed = append(failed, statusWarnings...)
 		}
 	}
+	inputs := []xVisibleNDJSONInput{
+		{name: "X accounts", path: cfg.AccountsPath},
+		{name: "X searches", path: cfg.SearchesPath},
+	}
+	return collectXVisibleNDJSON(ctx, cfg, keywords, from, to, inputs, nil, failed)
+}
+
+func fetchXVisibleHistoryNDJSON(ctx context.Context, cfg config.XAccountsConfig, keywords []string, from time.Time, to time.Time, historyDir string) ([]sourceFetchResult, []FailedSource, error) {
+	archives, failed := xVisibleHistoryArchives(historyDir, from, to)
+	var inputs []xVisibleNDJSONInput
+	var statuses []xVisibleStatusWarningInput
+	for _, archive := range archives {
+		statuses = append(statuses, xVisibleStatusWarningInput{name: "X history status/" + archive.name, status: archive.status})
+		inputs = append(inputs,
+			xVisibleNDJSONInput{name: "X accounts history/" + archive.name, path: filepath.Join(archive.dir, "accounts.ndjson.gz")},
+			xVisibleNDJSONInput{name: "X searches history/" + archive.name, path: filepath.Join(archive.dir, "searches.ndjson.gz")},
+		)
+	}
+	return collectXVisibleNDJSON(ctx, cfg, keywords, from, to, inputs, statuses, failed)
+}
+
+func collectXVisibleNDJSON(ctx context.Context, cfg config.XAccountsConfig, keywords []string, from time.Time, to time.Time, inputs []xVisibleNDJSONInput, statuses []xVisibleStatusWarningInput, failed []FailedSource) ([]sourceFetchResult, []FailedSource, error) {
 	allowedAccounts := xAccountHandleSet(cfg.Accounts)
 	seen := map[string]struct{}{}
 	coverageWarnings := map[string]struct{}{}
+	for _, input := range statuses {
+		if !xVisibleRefreshWindowOverlaps(input.status.Window, from, to) {
+			continue
+		}
+		failed = append(failed, xVisibleRefreshStatusWarningsFromStatus(input.status)...)
+	}
 	var candidates []fetchedCandidate
-	for _, input := range []struct {
-		name string
-		path string
-	}{
-		{name: "X accounts", path: cfg.AccountsPath},
-		{name: "X searches", path: cfg.SearchesPath},
-	} {
+	for _, input := range inputs {
 		if err := ctx.Err(); err != nil {
 			return nil, nil, err
 		}
@@ -155,8 +212,19 @@ func readXVisibleNDJSONFile(path string) ([]xVisibleArticle, error) {
 	}
 	defer file.Close()
 
+	var reader io.Reader = file
+	if strings.HasSuffix(path, ".gz") {
+		gzipReader, err := gzip.NewReader(file)
+		if err != nil {
+			return nil, err
+		}
+		defer gzipReader.Close()
+		reader = gzipReader
+	}
+
 	var items []xVisibleArticle
-	scanner := bufio.NewScanner(file)
+	scanner := bufio.NewScanner(reader)
+	scanner.Buffer(make([]byte, 0, 64*1024), 4*1024*1024)
 	for line := 1; scanner.Scan(); line++ {
 		text := strings.TrimSpace(scanner.Text())
 		if text == "" {
@@ -172,6 +240,57 @@ func readXVisibleNDJSONFile(path string) ([]xVisibleArticle, error) {
 		return nil, err
 	}
 	return items, nil
+}
+
+func xVisibleHistoryArchives(historyDir string, from, to time.Time) ([]xVisibleHistoryArchive, []FailedSource) {
+	trimmed := strings.TrimSpace(historyDir)
+	if trimmed == "" {
+		return nil, []FailedSource{{Name: "X history", Err: fmt.Errorf("x visible history dir is required")}}
+	}
+	base := expandHomePath(trimmed)
+	entries, err := os.ReadDir(base)
+	if err != nil {
+		return nil, []FailedSource{{Name: "X history", Err: err}}
+	}
+
+	var archives []xVisibleHistoryArchive
+	var failed []FailedSource
+	for _, entry := range entries {
+		if !entry.IsDir() || !xVisibleHistoryPeriodPattern.MatchString(entry.Name()) {
+			continue
+		}
+		dir := filepath.Join(base, entry.Name())
+		status, err := readXVisibleRefreshStatus(filepath.Join(dir, "status.json"))
+		if err != nil {
+			failed = append(failed, FailedSource{Name: "X history/" + entry.Name(), Err: err})
+			continue
+		}
+		if strings.ToLower(strings.TrimSpace(status.Status)) != "succeeded" {
+			continue
+		}
+		if !xVisibleRefreshWindowOverlaps(status.Window, from, to) {
+			continue
+		}
+		archives = append(archives, xVisibleHistoryArchive{dir: dir, name: entry.Name(), status: status})
+	}
+
+	sort.Slice(archives, func(i, j int) bool {
+		left := xVisibleArchiveWindowStart(archives[i].status)
+		right := xVisibleArchiveWindowStart(archives[j].status)
+		if !left.Equal(right) {
+			return left.Before(right)
+		}
+		return archives[i].name < archives[j].name
+	})
+	return archives, failed
+}
+
+func xVisibleArchiveWindowStart(status xVisibleRefreshStatus) time.Time {
+	start, err := time.Parse(time.RFC3339, strings.TrimSpace(status.Window.From))
+	if err != nil {
+		return time.Time{}
+	}
+	return start
 }
 
 func waitForXVisibleRefresh(ctx context.Context, cfg config.XAccountsConfig, from, to time.Time) (*FailedSource, error) {
@@ -269,7 +388,10 @@ func xVisibleRefreshStatusWarnings(path string, from, to time.Time) ([]FailedSou
 	if !xVisibleRefreshWindowOverlaps(status.Window, from, to) {
 		return nil, nil
 	}
+	return xVisibleRefreshStatusWarningsFromStatus(status), nil
+}
 
+func xVisibleRefreshStatusWarningsFromStatus(status xVisibleRefreshStatus) []FailedSource {
 	var failed []FailedSource
 	if warning := xVisibleRefreshSummaryWarning(status.TargetSummary, status.Targets); warning != nil {
 		failed = append(failed, *warning)
@@ -279,7 +401,7 @@ func xVisibleRefreshStatusWarnings(path string, from, to time.Time) ([]FailedSou
 			failed = append(failed, *warning)
 		}
 	}
-	return failed, nil
+	return failed
 }
 
 func xVisibleRefreshSummaryWarning(summary *xVisibleRefreshTargetSummary, targets []xVisibleRefreshTargetDetails) *FailedSource {
