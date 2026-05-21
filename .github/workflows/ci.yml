@@ -2,8 +2,13 @@ name: CI
 
 on:
   push:
-    tags-ignore: ["v*"]
+    branches:
+      - main
+    tags-ignore:
+      - "v*"
   pull_request:
+    branches:
+      - main
 
 jobs:
   test:
