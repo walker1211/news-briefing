@@ -166,7 +166,12 @@ func collectXVisibleNDJSON(ctx context.Context, cfg config.XAccountsConfig, keyw
 		}
 		failed = append(failed, xVisibleRefreshStatusWarningsFromStatus(input.status)...)
 	}
-	var candidates []fetchedCandidate
+	limit := cfg.MaxPostsPerTarget
+	if limit < 1 {
+		limit = config.DefaultXMaxPostsPerTarget
+	}
+	groupedCandidates := map[string][]fetchedCandidate{}
+	var targetOrder []string
 	for _, input := range inputs {
 		if err := ctx.Err(); err != nil {
 			return nil, nil, err
@@ -196,8 +201,16 @@ func collectXVisibleNDJSON(ctx context.Context, cfg config.XAccountsConfig, keyw
 				continue
 			}
 			seen[key] = struct{}{}
-			candidates = append(candidates, candidate)
+			target := xVisibleLimitTarget(item)
+			if _, exists := groupedCandidates[target]; !exists {
+				targetOrder = append(targetOrder, target)
+			}
+			groupedCandidates[target] = append(groupedCandidates[target], candidate)
 		}
+	}
+	var candidates []fetchedCandidate
+	for _, target := range targetOrder {
+		candidates = append(candidates, limitXVisibleCandidates(groupedCandidates[target], limit)...)
 	}
 	if len(candidates) == 0 {
 		return nil, failed, nil
@@ -615,6 +628,41 @@ func xVisibleArticleCandidate(item xVisibleArticle, category string, keywords []
 		},
 		MatchedKeywords: matchedKeywords(item.Text, keywords),
 	}, true
+}
+
+func xVisibleLimitTarget(item xVisibleArticle) string {
+	if item.TargetType == "account" {
+		if handle := xVisibleHandle(item); handle != "" {
+			return "account:" + strings.ToLower(handle)
+		}
+	}
+	target := strings.TrimSpace(item.TargetRaw)
+	if target == "" {
+		target = strings.TrimSpace(item.TargetURL)
+	}
+	if target == "" {
+		target = strings.TrimSpace(item.SourceURL)
+	}
+	if target == "" {
+		target = strings.TrimSpace(item.FinalURL)
+	}
+	if target == "" {
+		return "unknown"
+	}
+	if item.TargetType == "" {
+		return strings.ToLower(target)
+	}
+	return item.TargetType + ":" + strings.ToLower(target)
+}
+
+func limitXVisibleCandidates(candidates []fetchedCandidate, limit int) []fetchedCandidate {
+	if len(candidates) <= limit {
+		return candidates
+	}
+	sort.SliceStable(candidates, func(i, j int) bool {
+		return candidates[i].Article.Published.After(candidates[j].Article.Published)
+	})
+	return candidates[:limit]
 }
 
 func xAccountHandleSet(accounts []config.XAccountConfig) map[string]struct{} {

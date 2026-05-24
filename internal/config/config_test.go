@@ -113,8 +113,7 @@ x_accounts:
   searches_path: /tmp/rsshub-stack/searches.ndjson
   history_dir: /tmp/rsshub-stack/history
   lookback: 24h
-  max_posts_per_account: 10
-  concurrency: 8
+  max_posts_per_target: 10
   category: AI/科技
   accounts:
     - handle: OpenAIDevs
@@ -144,11 +143,8 @@ x_accounts:
 	if cfg.XAccounts.Lookback != 24*time.Hour {
 		t.Fatalf("XAccounts.Lookback = %v, want 24h", cfg.XAccounts.Lookback)
 	}
-	if cfg.XAccounts.MaxPostsPerAccount != 10 {
-		t.Fatalf("XAccounts.MaxPostsPerAccount = %d, want 10", cfg.XAccounts.MaxPostsPerAccount)
-	}
-	if cfg.XAccounts.Concurrency != 8 {
-		t.Fatalf("XAccounts.Concurrency = %d, want 8", cfg.XAccounts.Concurrency)
+	if cfg.XAccounts.MaxPostsPerTarget != 10 {
+		t.Fatalf("XAccounts.MaxPostsPerTarget = %d, want 10", cfg.XAccounts.MaxPostsPerTarget)
 	}
 	if cfg.XAccounts.Category != "AI/科技" {
 		t.Fatalf("XAccounts.Category = %q, want AI/科技", cfg.XAccounts.Category)

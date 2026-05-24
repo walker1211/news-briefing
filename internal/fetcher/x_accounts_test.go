@@ -3,6 +3,7 @@ package fetcher
 import (
 	"compress/gzip"
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -331,6 +332,81 @@ func TestFetchXVisibleNDJSONIgnoresSearchMaxScrollsCoverageWarning(t *testing.T)
 	}
 	if len(failed) != 0 {
 		t.Fatalf("failed = %#v, want search max-scrolls coverage ignored", failed)
+	}
+}
+
+func TestFetchXVisibleNDJSONLimitsPostsPerTargetForAccountsAndSearches(t *testing.T) {
+	dir := t.TempDir()
+	accountsPath := filepath.Join(dir, "accounts.ndjson")
+	searchesPath := filepath.Join(dir, "searches.ndjson")
+
+	var accountLines strings.Builder
+	for i := 0; i < 12; i++ {
+		accountLines.WriteString(fmt.Sprintf(`{"kind":"x-visible-article","schemaVersion":1,"targetRaw":"/twitter/user/OpenAI","targetType":"account","targetUrl":"https://x.com/OpenAI","sourceUrl":"https://x.com/OpenAI","finalUrl":"https://x.com/OpenAI","text":"OpenAI Codex account update %02d","datetime":"2026-05-20T%02d:00:00.000Z","statusUrl":"https://x.com/OpenAI/status/account-%02d","statusLinks":["https://x.com/OpenAI/status/account-%02d"]}`+"\n", i, i, i, i))
+	}
+	if err := os.WriteFile(accountsPath, []byte(accountLines.String()), 0o644); err != nil {
+		t.Fatalf("write accounts ndjson: %v", err)
+	}
+
+	var searchLines strings.Builder
+	for i := 0; i < 12; i++ {
+		searchLines.WriteString(fmt.Sprintf(`{"kind":"x-visible-article","schemaVersion":1,"targetRaw":"search:Codex","targetType":"search","targetUrl":"https://x.com/search?q=Codex","sourceUrl":"https://x.com/search?q=Codex","finalUrl":"https://x.com/search?q=Codex","text":"Codex search result %02d","datetime":"2026-05-20T%02d:30:00.000Z","statusUrl":"https://x.com/example/status/search-%02d","statusLinks":["https://x.com/example/status/search-%02d"]}`+"\n", i, i, i, i))
+	}
+	if err := os.WriteFile(searchesPath, []byte(searchLines.String()), 0o644); err != nil {
+		t.Fatalf("write searches ndjson: %v", err)
+	}
+
+	cfg := config.XAccountsConfig{
+		Enabled:           true,
+		AccountsPath:      accountsPath,
+		SearchesPath:      searchesPath,
+		MaxPostsPerTarget: 10,
+		Category:          "AI/科技",
+		Accounts:          []config.XAccountConfig{{Handle: "OpenAI"}},
+	}
+	from := time.Date(2026, 5, 20, 0, 0, 0, 0, time.UTC)
+	to := time.Date(2026, 5, 21, 0, 0, 0, 0, time.UTC)
+
+	results, failed, err := fetchXVisibleNDJSON(context.Background(), cfg, []string{"Codex"}, from, to)
+	if err != nil {
+		t.Fatalf("fetchXVisibleNDJSON() error = %v", err)
+	}
+	if len(failed) != 0 {
+		t.Fatalf("failed = %#v, want none", failed)
+	}
+	if len(results) != 1 {
+		t.Fatalf("len(results) = %d, want 1", len(results))
+	}
+
+	counts := map[string]int{}
+	links := map[string]struct{}{}
+	for _, candidate := range results[0].Candidates {
+		counts[candidate.Article.Source]++
+		links[candidate.Article.Link] = struct{}{}
+	}
+	if counts["X/@OpenAI"] != 10 {
+		t.Fatalf("account candidate count = %d, want 10", counts["X/@OpenAI"])
+	}
+	if counts["X Search/search:Codex"] != 10 {
+		t.Fatalf("search candidate count = %d, want 10", counts["X Search/search:Codex"])
+	}
+	for _, oldLink := range []string{
+		"https://x.com/OpenAI/status/account-00",
+		"https://x.com/OpenAI/status/account-01",
+		"https://x.com/example/status/search-00",
+		"https://x.com/example/status/search-01",
+	} {
+		if _, ok := links[oldLink]; ok {
+			t.Fatalf("oldest link %q survived target limit", oldLink)
+		}
+	}
+	for _, freshLink := range []string{
+		"https://x.com/OpenAI/status/account-11",
+		"https://x.com/example/status/search-11",
+	} {
+		if _, ok := links[freshLink]; !ok {
+			t.Fatalf("fresh link %q missing after target limit", freshLink)
+		}
 	}
 }
 

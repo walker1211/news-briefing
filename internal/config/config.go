@@ -46,6 +46,7 @@ const (
 	DefaultFetchRetryWaitTime   = 200 * time.Millisecond
 	DefaultXRefreshWaitTimeout  = 10 * time.Minute
 	DefaultXRefreshWaitInterval = 5 * time.Second
+	DefaultXMaxPostsPerTarget   = 10
 )
 
 type Source struct {
@@ -89,8 +90,7 @@ type XAccountsConfig struct {
 	LookbackRaw            string           `yaml:"lookback"`
 	RefreshWaitTimeoutRaw  string           `yaml:"refresh_wait_timeout"`
 	RefreshWaitIntervalRaw string           `yaml:"refresh_wait_interval"`
-	MaxPostsPerAccount     int              `yaml:"max_posts_per_account"`
-	Concurrency            int              `yaml:"concurrency"`
+	MaxPostsPerTarget      int              `yaml:"max_posts_per_target"`
 	Category               string           `yaml:"category"`
 	Accounts               []XAccountConfig `yaml:"accounts"`
 	Lookback               time.Duration    `yaml:"-"`
@@ -254,11 +254,8 @@ func applyXAccountsDefaults(cfg *XAccountsConfig) error {
 		return fmt.Errorf("validate x_accounts.refresh_wait_interval: must be greater than 0")
 	}
 	cfg.RefreshWaitInterval = refreshWaitInterval
-	if cfg.MaxPostsPerAccount == 0 {
-		cfg.MaxPostsPerAccount = 10
-	}
-	if cfg.Concurrency == 0 {
-		cfg.Concurrency = 8
+	if cfg.MaxPostsPerTarget == 0 {
+		cfg.MaxPostsPerTarget = DefaultXMaxPostsPerTarget
 	}
 	if strings.TrimSpace(cfg.Category) == "" {
 		cfg.Category = "AI/科技"
@@ -403,11 +400,8 @@ func validateWatchSite(index int, site WatchSite) error {
 }
 
 func validateXAccounts(cfg XAccountsConfig) error {
-	if cfg.MaxPostsPerAccount < 1 {
-		return fmt.Errorf("validate x_accounts.max_posts_per_account: must be at least 1")
-	}
-	if cfg.Concurrency < 1 {
-		return fmt.Errorf("validate x_accounts.concurrency: must be at least 1")
+	if cfg.MaxPostsPerTarget < 1 {
+		return fmt.Errorf("validate x_accounts.max_posts_per_target: must be at least 1")
 	}
 	if strings.TrimSpace(cfg.Category) == "" {
 		return fmt.Errorf("validate x_accounts.category: must not be empty")

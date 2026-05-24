@@ -93,8 +93,7 @@ x_accounts:
   lookback: 24h
   refresh_wait_timeout: 10m
   refresh_wait_interval: 5s
-  max_posts_per_account: 10
-  concurrency: 8
+  max_posts_per_target: 10
   category: AI/科技
   accounts:
     - handle: example_ai_company # Replace with the X account handle to track.
