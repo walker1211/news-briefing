@@ -53,15 +53,20 @@ func TestFetchXVisibleNDJSONWaitsForRunningRefresh(t *testing.T) {
 	dir := t.TempDir()
 	accountsPath := filepath.Join(dir, "accounts.ndjson")
 	statusPath := filepath.Join(dir, "status.json")
-	if err := os.WriteFile(statusPath, []byte(`{"kind":"x-visible-refresh-status","schemaVersion":1,"job":"x-visible-ai","period":"2026-05-20T08:00:00+08:00","status":"running","startedAt":"2026-05-20T00:00:00.000Z","window":{"from":"2026-05-20T00:00:00Z","to":"2026-05-20T08:00:00Z"},"outputs":{"accounts":"`+accountsPath+`"}}`), 0o644); err != nil {
+	from := time.Now().UTC().Add(-time.Hour).Truncate(time.Second)
+	to := time.Now().UTC().Add(2 * time.Second).Truncate(time.Second)
+	published := to.Add(-time.Second)
+	status := fmt.Sprintf(`{"kind":"x-visible-refresh-status","schemaVersion":1,"job":"x-visible-ai","period":"%s","status":"running","startedAt":"%s","window":{"from":"%s","to":"%s"},"outputs":{"accounts":"%s"}}`, to.Format(time.RFC3339), from.Format(time.RFC3339), from.Format(time.RFC3339), to.Format(time.RFC3339), accountsPath)
+	if err := os.WriteFile(statusPath, []byte(status), 0o644); err != nil {
 		t.Fatalf("write status: %v", err)
 	}
 	go func() {
 		time.Sleep(10 * time.Millisecond)
-		content := `{"kind":"x-visible-article","schemaVersion":1,"targetRaw":"/twitter/user/OpenAI","targetType":"account","targetUrl":"https://x.com/OpenAI","sourceUrl":"https://x.com/OpenAI","finalUrl":"https://x.com/OpenAI","text":"OpenAI launched Codex refresh","datetime":"2026-05-20T07:59:00.000Z","statusUrl":"https://x.com/OpenAI/status/fresh","statusLinks":["https://x.com/OpenAI/status/fresh"],"linkCount":1,"imageCount":0,"videoCount":0}
-`
+		content := fmt.Sprintf(`{"kind":"x-visible-article","schemaVersion":1,"targetRaw":"/twitter/user/OpenAI","targetType":"account","targetUrl":"https://x.com/OpenAI","sourceUrl":"https://x.com/OpenAI","finalUrl":"https://x.com/OpenAI","text":"OpenAI launched Codex refresh","datetime":"%s","statusUrl":"https://x.com/OpenAI/status/fresh","statusLinks":["https://x.com/OpenAI/status/fresh"],"linkCount":1,"imageCount":0,"videoCount":0}
+	`, published.Format(time.RFC3339))
 		_ = os.WriteFile(accountsPath, []byte(content), 0o644)
-		_ = os.WriteFile(statusPath, []byte(`{"kind":"x-visible-refresh-status","schemaVersion":1,"job":"x-visible-ai","period":"2026-05-20T08:00:00+08:00","status":"succeeded","startedAt":"2026-05-20T00:00:00.000Z","finishedAt":"2026-05-20T00:00:10.000Z","window":{"from":"2026-05-20T00:00:00Z","to":"2026-05-20T08:00:00Z"},"outputs":{"accounts":"`+accountsPath+`"}}`), 0o644)
+		succeeded := fmt.Sprintf(`{"kind":"x-visible-refresh-status","schemaVersion":1,"job":"x-visible-ai","period":"%s","status":"succeeded","startedAt":"%s","finishedAt":"%s","window":{"from":"%s","to":"%s"},"outputs":{"accounts":"%s"}}`, to.Format(time.RFC3339), from.Format(time.RFC3339), time.Now().UTC().Format(time.RFC3339), from.Format(time.RFC3339), to.Format(time.RFC3339), accountsPath)
+		_ = os.WriteFile(statusPath, []byte(succeeded), 0o644)
 	}()
 	cfg := config.XAccountsConfig{
 		Enabled:             true,
@@ -72,8 +77,6 @@ func TestFetchXVisibleNDJSONWaitsForRunningRefresh(t *testing.T) {
 		Category:            "AI/科技",
 		Accounts:            []config.XAccountConfig{{Handle: "OpenAI"}},
 	}
-	from := time.Date(2026, 5, 20, 0, 0, 0, 0, time.UTC)
-	to := time.Date(2026, 5, 20, 8, 0, 0, 0, time.UTC)
 
 	results, failed, err := fetchXVisibleNDJSON(context.Background(), cfg, []string{"Codex"}, from, to)
 	if err != nil {
@@ -88,6 +91,36 @@ func TestFetchXVisibleNDJSONWaitsForRunningRefresh(t *testing.T) {
 	if results[0].Candidates[0].Article.Link != "https://x.com/OpenAI/status/fresh" {
 		t.Fatalf("Article.Link = %q", results[0].Candidates[0].Article.Link)
 	}
+}
+
+func TestFetchXVisibleNDJSONReportsRunningRefreshAfterWindowCutoff(t *testing.T) {
+	dir := t.TempDir()
+	accountsPath := filepath.Join(dir, "accounts.ndjson")
+	statusPath := filepath.Join(dir, "status.json")
+	from := time.Now().UTC().Add(-2 * time.Hour).Truncate(time.Second)
+	to := time.Now().UTC().Add(-time.Hour).Truncate(time.Second)
+	status := fmt.Sprintf(`{"kind":"x-visible-refresh-status","schemaVersion":1,"job":"x-visible-ai","period":"%s","status":"running","startedAt":"%s","window":{"from":"%s","to":"%s"},"outputs":{"accounts":"%s"}}`, to.Format(time.RFC3339), from.Format(time.RFC3339), from.Format(time.RFC3339), to.Format(time.RFC3339), accountsPath)
+	if err := os.WriteFile(statusPath, []byte(status), 0o644); err != nil {
+		t.Fatalf("write status: %v", err)
+	}
+	if err := os.WriteFile(accountsPath, []byte(""), 0o644); err != nil {
+		t.Fatalf("write accounts: %v", err)
+	}
+	cfg := config.XAccountsConfig{
+		Enabled:             true,
+		AccountsPath:        accountsPath,
+		RefreshStatusPath:   statusPath,
+		RefreshWaitTimeout:  time.Millisecond,
+		RefreshWaitInterval: time.Hour,
+		Category:            "AI/科技",
+		Accounts:            []config.XAccountConfig{{Handle: "OpenAI"}},
+	}
+
+	_, failed, err := fetchXVisibleNDJSON(context.Background(), cfg, []string{"Codex"}, from, to)
+	if err != nil {
+		t.Fatalf("fetchXVisibleNDJSON() error = %v", err)
+	}
+	assertFailedSourceContains(t, failed, "X refresh status", "refresh still running after")
 }
 
 func TestFetchXVisibleNDJSONSkipsUnrelatedRunningRefresh(t *testing.T) {
@@ -420,6 +453,202 @@ func assertFailedSourceContains(t *testing.T, failed []FailedSource, name string
 	t.Fatalf("failed = %#v, want %s containing %q", failed, name, text)
 }
 
+func TestFetchXVisibleNDJSONReportsMissingExpectedHistoryArchive(t *testing.T) {
+	dir := t.TempDir()
+	accountsPath := filepath.Join(dir, "accounts.ndjson")
+	searchesPath := filepath.Join(dir, "searches.ndjson")
+	statusPath := filepath.Join(dir, "status.json")
+	historyDir := filepath.Join(dir, "history")
+	if err := os.MkdirAll(historyDir, 0o755); err != nil {
+		t.Fatalf("mkdir history: %v", err)
+	}
+	if err := os.WriteFile(accountsPath, []byte(""), 0o644); err != nil {
+		t.Fatalf("write accounts: %v", err)
+	}
+	if err := os.WriteFile(searchesPath, []byte(""), 0o644); err != nil {
+		t.Fatalf("write searches: %v", err)
+	}
+	status := `{"kind":"x-visible-refresh-status","schemaVersion":1,"job":"x-visible-ai","period":"2026-05-21T00:00:00.000Z","status":"succeeded","finishedAt":"2026-05-21T00:02:00.000Z","window":{"from":"2026-05-20T00:00:00.000Z","to":"2026-05-21T00:00:00.000Z"}}`
+	if err := os.WriteFile(statusPath, []byte(status), 0o644); err != nil {
+		t.Fatalf("write status: %v", err)
+	}
+	cfg := config.XAccountsConfig{
+		Enabled:           true,
+		AccountsPath:      accountsPath,
+		SearchesPath:      searchesPath,
+		HistoryDir:        historyDir,
+		RefreshStatusPath: statusPath,
+		Category:          "AI/科技",
+		Accounts:          []config.XAccountConfig{{Handle: "OpenAI"}},
+	}
+	from := time.Date(2026, 5, 20, 0, 0, 0, 0, time.UTC)
+	to := time.Date(2026, 5, 21, 0, 0, 0, 0, time.UTC)
+
+	_, failed, err := fetchXVisibleNDJSON(context.Background(), cfg, []string{"Codex"}, from, to)
+	if err != nil {
+		t.Fatalf("fetchXVisibleNDJSON() error = %v", err)
+	}
+	assertFailedSourceContains(t, failed, "X history", "no succeeded X history archive overlaps requested window")
+}
+
+func TestFetchXVisibleNDJSONReportsMissingExpectedHistoryArchiveWhenOlderArchiveOverlaps(t *testing.T) {
+	dir := t.TempDir()
+	accountsPath := filepath.Join(dir, "accounts.ndjson")
+	searchesPath := filepath.Join(dir, "searches.ndjson")
+	statusPath := filepath.Join(dir, "status.json")
+	historyDir := filepath.Join(dir, "history")
+	if err := os.WriteFile(accountsPath, []byte(""), 0o644); err != nil {
+		t.Fatalf("write accounts: %v", err)
+	}
+	if err := os.WriteFile(searchesPath, []byte(""), 0o644); err != nil {
+		t.Fatalf("write searches: %v", err)
+	}
+	writeXVisibleHistoryArchive(t, historyDir, "20260520T180000Z", "2026-05-20T12:00:00.000Z", "2026-05-20T18:00:00.000Z", "", "")
+	status := `{"kind":"x-visible-refresh-status","schemaVersion":1,"job":"x-visible-ai","period":"2026-05-21T00:00:00.000Z","status":"succeeded","finishedAt":"2026-05-21T00:02:00.000Z","window":{"from":"2026-05-20T00:00:00.000Z","to":"2026-05-21T00:00:00.000Z"}}`
+	if err := os.WriteFile(statusPath, []byte(status), 0o644); err != nil {
+		t.Fatalf("write status: %v", err)
+	}
+	cfg := config.XAccountsConfig{
+		Enabled:           true,
+		AccountsPath:      accountsPath,
+		SearchesPath:      searchesPath,
+		HistoryDir:        historyDir,
+		RefreshStatusPath: statusPath,
+		Category:          "AI/科技",
+		Accounts:          []config.XAccountConfig{{Handle: "OpenAI"}},
+	}
+	from := time.Date(2026, 5, 20, 0, 0, 0, 0, time.UTC)
+	to := time.Date(2026, 5, 21, 0, 0, 0, 0, time.UTC)
+
+	_, failed, err := fetchXVisibleNDJSON(context.Background(), cfg, []string{"Codex"}, from, to)
+	if err != nil {
+		t.Fatalf("fetchXVisibleNDJSON() error = %v", err)
+	}
+	assertFailedSourceContains(t, failed, "X history", "no succeeded X history archive overlaps requested window")
+}
+
+func TestFetchXVisibleNDJSONDoesNotRequireHistoryArchiveWhenHistoryDirMissing(t *testing.T) {
+	dir := t.TempDir()
+	accountsPath := filepath.Join(dir, "accounts.ndjson")
+	searchesPath := filepath.Join(dir, "searches.ndjson")
+	statusPath := filepath.Join(dir, "status.json")
+	if err := os.WriteFile(accountsPath, []byte(""), 0o644); err != nil {
+		t.Fatalf("write accounts: %v", err)
+	}
+	if err := os.WriteFile(searchesPath, []byte(""), 0o644); err != nil {
+		t.Fatalf("write searches: %v", err)
+	}
+	status := `{"kind":"x-visible-refresh-status","schemaVersion":1,"job":"x-visible-ai","period":"2026-05-21T00:00:00.000Z","status":"succeeded","finishedAt":"2026-05-21T00:02:00.000Z","window":{"from":"2026-05-20T00:00:00.000Z","to":"2026-05-21T00:00:00.000Z"}}`
+	if err := os.WriteFile(statusPath, []byte(status), 0o644); err != nil {
+		t.Fatalf("write status: %v", err)
+	}
+	cfg := config.XAccountsConfig{
+		Enabled:           true,
+		AccountsPath:      accountsPath,
+		SearchesPath:      searchesPath,
+		RefreshStatusPath: statusPath,
+		Category:          "AI/科技",
+		Accounts:          []config.XAccountConfig{{Handle: "OpenAI"}},
+	}
+	from := time.Date(2026, 5, 20, 0, 0, 0, 0, time.UTC)
+	to := time.Date(2026, 5, 21, 0, 0, 0, 0, time.UTC)
+
+	_, failed, err := fetchXVisibleNDJSON(context.Background(), cfg, []string{"Codex"}, from, to)
+	if err != nil {
+		t.Fatalf("fetchXVisibleNDJSON() error = %v", err)
+	}
+	if len(failed) != 0 {
+		t.Fatalf("failed = %#v, want none without history_dir", failed)
+	}
+}
+
+func TestFetchXVisibleHistoryNDJSONReportsNoMatchingArchive(t *testing.T) {
+	dir := t.TempDir()
+	historyDir := filepath.Join(dir, "history")
+	if err := os.MkdirAll(historyDir, 0o755); err != nil {
+		t.Fatalf("mkdir history: %v", err)
+	}
+	cfg := config.XAccountsConfig{
+		Enabled:  true,
+		Category: "AI/科技",
+		Accounts: []config.XAccountConfig{{Handle: "OpenAI"}},
+	}
+	from := time.Date(2026, 5, 20, 0, 0, 0, 0, time.UTC)
+	to := time.Date(2026, 5, 21, 0, 0, 0, 0, time.UTC)
+
+	results, failed, err := fetchXVisibleNDJSONWithOptions(context.Background(), cfg, []string{"Codex"}, from, to, xVisibleReadOptions{useHistory: true, historyDir: historyDir})
+	if err != nil {
+		t.Fatalf("fetchXVisibleNDJSONWithOptions() error = %v", err)
+	}
+	if len(results) != 0 {
+		t.Fatalf("results = %#v, want none", results)
+	}
+	assertFailedSourceContains(t, failed, "X history", "no succeeded X history archive overlaps requested window")
+}
+
+func TestFetchXVisibleHistoryNDJSONReportsFailedMatchingArchiveStatus(t *testing.T) {
+	dir := t.TempDir()
+	historyDir := filepath.Join(dir, "history")
+	archiveDir := filepath.Join(historyDir, "20260521T000000Z")
+	if err := os.MkdirAll(archiveDir, 0o755); err != nil {
+		t.Fatalf("mkdir archive: %v", err)
+	}
+	status := `{"kind":"x-visible-refresh-status","schemaVersion":1,"job":"x-visible-ai","period":"2026-05-21T00:00:00.000Z","status":"failed","error":"browser crashed","window":{"from":"2026-05-20T00:00:00.000Z","to":"2026-05-21T00:00:00.000Z"}}`
+	if err := os.WriteFile(filepath.Join(archiveDir, "status.json"), []byte(status), 0o644); err != nil {
+		t.Fatalf("write status: %v", err)
+	}
+	cfg := config.XAccountsConfig{
+		Enabled:  true,
+		Category: "AI/科技",
+		Accounts: []config.XAccountConfig{{Handle: "OpenAI"}},
+	}
+	from := time.Date(2026, 5, 20, 0, 0, 0, 0, time.UTC)
+	to := time.Date(2026, 5, 21, 0, 0, 0, 0, time.UTC)
+
+	_, failed, err := fetchXVisibleNDJSONWithOptions(context.Background(), cfg, []string{"Codex"}, from, to, xVisibleReadOptions{useHistory: true, historyDir: historyDir})
+	if err != nil {
+		t.Fatalf("fetchXVisibleNDJSONWithOptions() error = %v", err)
+	}
+	assertFailedSourceContains(t, failed, "X history/20260521T000000Z", "refresh failed: browser crashed")
+}
+
+func TestFetchXVisibleNDJSONReportsIncompleteHistoryArchive(t *testing.T) {
+	dir := t.TempDir()
+	accountsPath := filepath.Join(dir, "accounts.ndjson")
+	searchesPath := filepath.Join(dir, "searches.ndjson")
+	historyDir := filepath.Join(dir, "history")
+	archiveDir := filepath.Join(historyDir, "20260521T000000Z")
+	if err := os.MkdirAll(archiveDir, 0o755); err != nil {
+		t.Fatalf("mkdir archive: %v", err)
+	}
+	if err := os.WriteFile(accountsPath, []byte(""), 0o644); err != nil {
+		t.Fatalf("write accounts: %v", err)
+	}
+	if err := os.WriteFile(searchesPath, []byte(""), 0o644); err != nil {
+		t.Fatalf("write searches: %v", err)
+	}
+	status := `{"kind":"x-visible-refresh-status","schemaVersion":1,"job":"x-visible-ai","period":"2026-05-21T00:00:00.000Z","status":"succeeded","finishedAt":"2026-05-21T00:02:00.000Z","window":{"from":"2026-05-20T00:00:00.000Z","to":"2026-05-21T00:00:00.000Z"}}`
+	if err := os.WriteFile(filepath.Join(archiveDir, "status.json"), []byte(status), 0o644); err != nil {
+		t.Fatalf("write archive status: %v", err)
+	}
+	cfg := config.XAccountsConfig{
+		Enabled:      true,
+		AccountsPath: accountsPath,
+		SearchesPath: searchesPath,
+		HistoryDir:   historyDir,
+		Category:     "AI/科技",
+		Accounts:     []config.XAccountConfig{{Handle: "OpenAI"}},
+	}
+	from := time.Date(2026, 5, 20, 0, 0, 0, 0, time.UTC)
+	to := time.Date(2026, 5, 21, 0, 0, 0, 0, time.UTC)
+
+	_, failed, err := fetchXVisibleNDJSON(context.Background(), cfg, []string{"Codex"}, from, to)
+	if err != nil {
+		t.Fatalf("fetchXVisibleNDJSON() error = %v", err)
+	}
+	assertFailedSourceContains(t, failed, "X history/20260521T000000Z", "missing manifest.json")
+}
+
 func TestFetchXVisibleNDJSONReportsIncompleteCoverageWarning(t *testing.T) {
 	dir := t.TempDir()
 	accountsPath := filepath.Join(dir, "accounts.ndjson")
@@ -600,6 +829,11 @@ func writeXVisibleHistoryArchive(t *testing.T, historyDir string, periodKey stri
 `
 	if err := os.WriteFile(filepath.Join(dir, "status.json"), []byte(status), 0o644); err != nil {
 		t.Fatalf("write archive status: %v", err)
+	}
+	manifest := `{"kind":"x-visible-history-archive","schemaVersion":1,"period":"` + windowTo + `","periodKey":"` + periodKey + `","window":{"from":"` + windowFrom + `","to":"` + windowTo + `"}}
+	`
+	if err := os.WriteFile(filepath.Join(dir, "manifest.json"), []byte(manifest), 0o644); err != nil {
+		t.Fatalf("write archive manifest: %v", err)
 	}
 	writeGzipFile(t, filepath.Join(dir, "accounts.ndjson.gz"), accountsContent)
 	writeGzipFile(t, filepath.Join(dir, "searches.ndjson.gz"), searchesContent)

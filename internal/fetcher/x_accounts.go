@@ -134,6 +134,7 @@ func fetchXVisibleNDJSONWithOptions(ctx context.Context, cfg config.XAccountsCon
 		} else {
 			failed = append(failed, statusWarnings...)
 		}
+		failed = append(failed, xVisibleExpectedHistoryArchiveFailures(cfg.HistoryDir, cfg.RefreshStatusPath, from, to)...)
 	}
 	inputs := []xVisibleNDJSONInput{
 		{name: "X accounts", path: cfg.AccountsPath},
@@ -144,6 +145,9 @@ func fetchXVisibleNDJSONWithOptions(ctx context.Context, cfg config.XAccountsCon
 
 func fetchXVisibleHistoryNDJSON(ctx context.Context, cfg config.XAccountsConfig, keywords []string, from time.Time, to time.Time, historyDir string) ([]sourceFetchResult, []FailedSource, error) {
 	archives, failed := xVisibleHistoryArchives(historyDir, from, to)
+	if strings.TrimSpace(historyDir) != "" && len(archives) == 0 {
+		failed = append(failed, xVisibleMissingHistoryArchiveFailure(from, to))
+	}
 	var inputs []xVisibleNDJSONInput
 	var statuses []xVisibleStatusWarningInput
 	for _, archive := range archives {
@@ -255,7 +259,99 @@ func readXVisibleNDJSONFile(path string) ([]xVisibleArticle, error) {
 	return items, nil
 }
 
+func xVisibleExpectedHistoryArchiveFailures(historyDir string, refreshStatusPath string, from, to time.Time) []FailedSource {
+	if strings.TrimSpace(historyDir) == "" {
+		return nil
+	}
+	expectedTo, hasExpectedTo := xVisibleExpectedHistoryArchiveEnd(refreshStatusPath, from, to)
+	var archives []xVisibleHistoryArchive
+	var failed []FailedSource
+	if hasExpectedTo {
+		archives, failed = xVisibleExpectedHistoryArchives(historyDir, expectedTo)
+	} else {
+		archives, failed = xVisibleHistoryArchives(historyDir, from, to)
+	}
+	if len(archives) == 0 {
+		failed = append(failed, xVisibleMissingHistoryArchiveFailure(from, to))
+	}
+	return failed
+}
+
+func xVisibleExpectedHistoryArchiveEnd(refreshStatusPath string, from, to time.Time) (time.Time, bool) {
+	path := strings.TrimSpace(refreshStatusPath)
+	if path == "" {
+		return time.Time{}, false
+	}
+	status, err := readXVisibleRefreshStatus(path)
+	if err != nil {
+		return time.Time{}, false
+	}
+	if !xVisibleRefreshWindowOverlaps(status.Window, from, to) {
+		return time.Time{}, false
+	}
+	windowTo, err := time.Parse(time.RFC3339, strings.TrimSpace(status.Window.To))
+	if err != nil {
+		return time.Time{}, false
+	}
+	return windowTo, true
+}
+
+func xVisibleMissingHistoryArchiveFailure(from, to time.Time) FailedSource {
+	return FailedSource{
+		Name: "X history",
+		Err: fmt.Errorf(
+			"no succeeded X history archive overlaps requested window %s ~ %s",
+			from.Format(time.RFC3339),
+			to.Format(time.RFC3339),
+		),
+	}
+}
+
+func xVisibleRefreshFailureFromStatus(name string, status xVisibleRefreshStatus) FailedSource {
+	switch strings.ToLower(strings.TrimSpace(status.Status)) {
+	case "failed":
+		message := strings.TrimSpace(status.Error)
+		if message == "" {
+			message = "refresh failed"
+		} else {
+			message = "refresh failed: " + message
+		}
+		return FailedSource{Name: name, Err: fmt.Errorf("%s", message)}
+	case "running":
+		return FailedSource{Name: name, Err: fmt.Errorf("refresh still running; expected succeeded archive for requested window")}
+	default:
+		return FailedSource{Name: name, Err: fmt.Errorf("refresh status %q; expected succeeded archive for requested window", strings.TrimSpace(status.Status))}
+	}
+}
+
+func xVisibleHistoryArchiveReadinessFailures(dir string, name string) []FailedSource {
+	var failed []FailedSource
+	for _, filename := range []string{"manifest.json", "accounts.ndjson.gz", "searches.ndjson.gz"} {
+		path := filepath.Join(dir, filename)
+		if _, err := os.Stat(path); err != nil {
+			if os.IsNotExist(err) {
+				failed = append(failed, FailedSource{Name: "X history/" + name, Err: fmt.Errorf("missing %s", filename)})
+			} else {
+				failed = append(failed, FailedSource{Name: "X history/" + name, Err: fmt.Errorf("stat %s: %w", filename, err)})
+			}
+		}
+	}
+	return failed
+}
+
 func xVisibleHistoryArchives(historyDir string, from, to time.Time) ([]xVisibleHistoryArchive, []FailedSource) {
+	return xVisibleHistoryArchivesMatching(historyDir, func(status xVisibleRefreshStatus) bool {
+		return xVisibleRefreshWindowOverlaps(status.Window, from, to)
+	})
+}
+
+func xVisibleExpectedHistoryArchives(historyDir string, to time.Time) ([]xVisibleHistoryArchive, []FailedSource) {
+	return xVisibleHistoryArchivesMatching(historyDir, func(status xVisibleRefreshStatus) bool {
+		return xVisibleRefreshWindowEndsAt(status.Window, to)
+	})
+}
+
+func xVisibleHistoryArchivesMatching(historyDir string, matches func(xVisibleRefreshStatus) bool) ([]xVisibleHistoryArchive, []FailedSource) {
 	trimmed := strings.TrimSpace(historyDir)
 	if trimmed == "" {
 		return nil, []FailedSource{{Name: "X history", Err: fmt.Errorf("x visible history dir is required")}}
@@ -278,12 +374,14 @@ func xVisibleHistoryArchives(historyDir string, from, to time.Time) ([]xVisibleH
 			failed = append(failed, FailedSource{Name: "X history/" + entry.Name(), Err: err})
 			continue
 		}
+		if !matches(status) {
+			continue
+		}
 		if strings.ToLower(strings.TrimSpace(status.Status)) != "succeeded" {
+			failed = append(failed, xVisibleRefreshFailureFromStatus("X history/"+entry.Name(), status))
 			continue
 		}
-		if !xVisibleRefreshWindowOverlaps(status.Window, from, to) {
-			continue
-		}
+		failed = append(failed, xVisibleHistoryArchiveReadinessFailures(dir, entry.Name())...)
 		archives = append(archives, xVisibleHistoryArchive{dir: dir, name: entry.Name(), status: status})
 	}
 
@@ -306,6 +404,14 @@ func xVisibleArchiveWindowStart(status xVisibleRefreshStatus) time.Time {
 	return start
 }
 
+func xVisibleRefreshDeadline(status xVisibleRefreshStatus, requestedTo time.Time, timeout time.Duration) time.Time {
+	windowTo, err := time.Parse(time.RFC3339, strings.TrimSpace(status.Window.To))
+	if err == nil && !windowTo.IsZero() {
+		return windowTo.Add(timeout)
+	}
+	return requestedTo.Add(timeout)
+}
+
 func waitForXVisibleRefresh(ctx context.Context, cfg config.XAccountsConfig, from, to time.Time) (*FailedSource, error) {
 	path := strings.TrimSpace(cfg.RefreshStatusPath)
 	if path == "" {
@@ -319,8 +425,6 @@ func waitForXVisibleRefresh(ctx context.Context, cfg config.XAccountsConfig, fro
 	if interval <= 0 {
 		interval = config.DefaultXRefreshWaitInterval
 	}
-	deadline := time.Now().Add(timeout)
-
 	for {
 		status, err := readXVisibleRefreshStatus(path)
 		if os.IsNotExist(err) {
@@ -335,12 +439,16 @@ func waitForXVisibleRefresh(ctx context.Context, cfg config.XAccountsConfig, fro
 			if !xVisibleRefreshWindowOverlaps(status.Window, from, to) {
 				return nil, nil
 			}
+			deadline := xVisibleRefreshDeadline(status, to, timeout)
 			if !time.Now().Before(deadline) {
 				return &FailedSource{Name: "X refresh status", Err: fmt.Errorf("refresh still running after %s", timeout)}, nil
 			}
 			wait := interval
 			if remaining := time.Until(deadline); remaining < wait {
 				wait = remaining
+			}
+			if wait <= 0 {
+				return &FailedSource{Name: "X refresh status", Err: fmt.Errorf("refresh still running after %s", timeout)}, nil
 			}
 			timer := time.NewTimer(wait)
 			select {
@@ -545,6 +653,14 @@ func xVisibleRefreshTargetLabel(target xVisibleRefreshTargetDetails) string {
 		return targetURL
 	}
 	return "unknown"
+}
+
+func xVisibleRefreshWindowEndsAt(window xVisibleRefreshWindow, to time.Time) bool {
+	windowTo, err := time.Parse(time.RFC3339, strings.TrimSpace(window.To))
+	if err != nil {
+		return false
+	}
+	return windowTo.Equal(to)
 }
 
 func xVisibleRefreshWindowOverlaps(window xVisibleRefreshWindow, from, to time.Time) bool {

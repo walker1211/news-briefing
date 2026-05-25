@@ -814,6 +814,56 @@ func TestRenderBriefingAppendsTranslatedFilteredArticlesWhenEnabled(t *testing.T
 	}
 }
 
+func TestRenderBriefingIncludesFailedSourcesInBody(t *testing.T) {
+	var printed *model.Briefing
+	var written *model.Briefing
+	var emailed *model.Briefing
+	var emailedFailed []fetcher.FailedSource
+	failed := []fetcher.FailedSource{{
+		Name: "X history",
+		Err:  errors.New("no succeeded X history archive overlaps requested window 2026-05-20T00:00:00Z ~ 2026-05-21T00:00:00Z"),
+	}}
+
+	app := &app{
+		cfg: &config.Config{
+			Output: config.OutputCfg{Dir: t.TempDir(), Mode: model.OutputModeOriginalOnly},
+		},
+		output: outputDeps{
+			composeBody: func(string, model.OutputMode, model.OutputContent) (string, error) { return "正文", nil },
+			printCLI: func(b *model.Briefing) {
+				printed = b
+			},
+			writeMarkdown: func(b *model.Briefing, dir string) (string, error) {
+				written = b
+				return "", nil
+			},
+			printFailed: func([]fetcher.FailedSource) {},
+		},
+		email: emailDeps{
+			sendEmail: func(b *model.Briefing, cfg *config.Config, failed []fetcher.FailedSource) error {
+				emailedFailed = failed
+				emailed = b
+				return nil
+			},
+		},
+	}
+
+	if err := app.renderBriefing("run", "26.03.27", "1400", nil, nil, nil, failed, false, true); err != nil {
+		t.Fatalf("renderBriefing() error = %v", err)
+	}
+	for name, briefing := range map[string]*model.Briefing{"printCLI": printed, "writeMarkdown": written, "sendEmail": emailed} {
+		if briefing == nil {
+			t.Fatalf("%s briefing = nil", name)
+		}
+		if !strings.Contains(briefing.RawContent, "抓取异常") || !strings.Contains(briefing.RawContent, "X history") {
+			t.Fatalf("%s RawContent = %q, want failed section", name, briefing.RawContent)
+		}
+	}
+	if len(emailedFailed) != 0 {
+		t.Fatalf("emailed failed = %#v, want empty to avoid duplicate failed section", emailedFailed)
+	}
+}
+
 func TestRenderBriefingReturnsFilteredAppendixTranslateErrorBeforeSideEffects(t *testing.T) {
 	articles := sampleExecuteArticles()
 	filtered := []model.Article{{Title: "Market update without keyword", Category: "国际政治"}}

@@ -312,15 +312,15 @@ func (s *EmailSender) deliverSMTPMessage(cfg *config.Config, subject string, bod
 
 func buildEmailBody(briefing *model.Briefing, failed []fetcher.FailedSource) string {
 	header := briefingTitle(briefing.Date, briefing.Period) + "\n\n"
-	return appendFailedSection(header+briefing.RawContent, failed)
+	return AppendFailedSection(header+briefing.RawContent, failed)
 }
 
 func buildDeepEmailBody(topic string, briefing *model.Briefing, failed []fetcher.FailedSource) string {
 	header := deepEmailTitle(topic) + "\n\n"
-	return appendFailedSection(header+briefing.RawContent, failed)
+	return AppendFailedSection(header+briefing.RawContent, failed)
 }
 
-func appendFailedSection(body string, failed []fetcher.FailedSource) string {
+func AppendFailedSection(body string, failed []fetcher.FailedSource) string {
 	if len(failed) == 0 {
 		return body
 	}

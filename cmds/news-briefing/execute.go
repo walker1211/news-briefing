@@ -686,6 +686,7 @@ func (app *app) renderBriefingContext(ctx context.Context, commandPath string, d
 		return err
 	}
 	body = appendWatchSiteErrorNotices(body, watchSiteErrorNotices)
+	body = output.AppendFailedSection(body, failed)
 
 	briefing := &model.Briefing{
 		Date:       date,
@@ -725,7 +726,7 @@ func (app *app) renderBriefingContext(ctx context.Context, commandPath string, d
 		return nil
 	}
 	if err := runIfActive(ctx, func() error {
-		return app.email.sendEmail(briefing, app.cfg, failed)
+		return app.email.sendEmail(briefing, app.cfg, nil)
 	}); err != nil {
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			return ctxErr
