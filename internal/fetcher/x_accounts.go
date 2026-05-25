@@ -686,6 +686,9 @@ func xVisibleCoverageWarning(item xVisibleArticle, from, to time.Time) *FailedSo
 	if reason == "" || reason == "covered-window-start" {
 		return nil
 	}
+	if item.TargetType == "account" && reason == "stable" {
+		return nil
+	}
 	if item.TargetType == "search" && reason == "max-scrolls" {
 		return nil
 	}
