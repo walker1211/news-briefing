@@ -94,6 +94,110 @@ ai:
 	}
 }
 
+func TestLoadParsesXAccountsConfig(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	content := `sources: []
+keywords: []
+email:
+  smtp_host: smtp.example.com
+  smtp_port: 465
+  from: from@example.com
+  to: to@example.com
+schedule: []
+output: {}
+proxy: {}
+x_accounts:
+  enabled: true
+  accounts_path: /tmp/rsshub-stack/accounts.ndjson
+  searches_path: /tmp/rsshub-stack/searches.ndjson
+  history_dir: /tmp/rsshub-stack/history
+  lookback: 24h
+  max_posts_per_target: 10
+  category: AI/科技
+  accounts:
+    - handle: OpenAIDevs
+    - handle: thsottiaux
+`
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+
+	if !cfg.XAccounts.Enabled {
+		t.Fatalf("XAccounts.Enabled = false, want true")
+	}
+	if cfg.XAccounts.AccountsPath != "/tmp/rsshub-stack/accounts.ndjson" {
+		t.Fatalf("XAccounts.AccountsPath = %q, want /tmp/rsshub-stack/accounts.ndjson", cfg.XAccounts.AccountsPath)
+	}
+	if cfg.XAccounts.SearchesPath != "/tmp/rsshub-stack/searches.ndjson" {
+		t.Fatalf("XAccounts.SearchesPath = %q, want /tmp/rsshub-stack/searches.ndjson", cfg.XAccounts.SearchesPath)
+	}
+	if cfg.XAccounts.HistoryDir != "/tmp/rsshub-stack/history" {
+		t.Fatalf("XAccounts.HistoryDir = %q, want /tmp/rsshub-stack/history", cfg.XAccounts.HistoryDir)
+	}
+	if cfg.XAccounts.Lookback != 24*time.Hour {
+		t.Fatalf("XAccounts.Lookback = %v, want 24h", cfg.XAccounts.Lookback)
+	}
+	if cfg.XAccounts.MaxPostsPerTarget != 10 {
+		t.Fatalf("XAccounts.MaxPostsPerTarget = %d, want 10", cfg.XAccounts.MaxPostsPerTarget)
+	}
+	if cfg.XAccounts.Category != "AI/科技" {
+		t.Fatalf("XAccounts.Category = %q, want AI/科技", cfg.XAccounts.Category)
+	}
+	if got := []string{cfg.XAccounts.Accounts[0].Handle, cfg.XAccounts.Accounts[1].Handle}; !reflect.DeepEqual(got, []string{"OpenAIDevs", "thsottiaux"}) {
+		t.Fatalf("XAccounts handles = %v", got)
+	}
+}
+
+func TestLoadParsesXAccountsRefreshStatusConfig(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	content := `sources: []
+keywords: []
+email:
+  smtp_host: smtp.example.com
+  smtp_port: 465
+  from: from@example.com
+  to: to@example.com
+schedule: []
+output: {}
+proxy: {}
+x_accounts:
+  enabled: true
+  accounts_path: /tmp/rsshub-stack/accounts.ndjson
+  searches_path: /tmp/rsshub-stack/searches.ndjson
+  refresh_status_path: /tmp/rsshub-stack/status.json
+  refresh_wait_timeout: 2m
+  refresh_wait_interval: 500ms
+  category: AI/科技
+  accounts:
+    - handle: OpenAIDevs
+`
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+
+	if cfg.XAccounts.RefreshStatusPath != "/tmp/rsshub-stack/status.json" {
+		t.Fatalf("XAccounts.RefreshStatusPath = %q", cfg.XAccounts.RefreshStatusPath)
+	}
+	if cfg.XAccounts.RefreshWaitTimeout != 2*time.Minute {
+		t.Fatalf("XAccounts.RefreshWaitTimeout = %v, want 2m", cfg.XAccounts.RefreshWaitTimeout)
+	}
+	if cfg.XAccounts.RefreshWaitInterval != 500*time.Millisecond {
+		t.Fatalf("XAccounts.RefreshWaitInterval = %v, want 500ms", cfg.XAccounts.RefreshWaitInterval)
+	}
+}
+
 func TestLoadAppliesDefaultOutputMode(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.yaml")
@@ -308,6 +412,62 @@ proxy: {}
 	}
 	if got := cfg.ScheduleLocation.String(); got != "Asia/Shanghai" {
 		t.Fatalf("ScheduleLocation = %q, want %q", got, "Asia/Shanghai")
+	}
+}
+
+func TestLoadParsesScheduleDelay(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	content := `sources: []
+keywords: []
+email:
+  smtp_host: smtp.example.com
+  smtp_port: 465
+  from: from@example.com
+  to: to@example.com
+schedule: []
+schedule_delay: 5m
+output: {}
+proxy: {}
+`
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if cfg.ScheduleDelay != 5*time.Minute {
+		t.Fatalf("ScheduleDelay = %v, want 5m", cfg.ScheduleDelay)
+	}
+}
+
+func TestLoadRejectsNegativeScheduleDelay(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	content := `sources: []
+keywords: []
+email:
+  smtp_host: smtp.example.com
+  smtp_port: 465
+  from: from@example.com
+  to: to@example.com
+schedule: []
+schedule_delay: -5m
+output: {}
+proxy: {}
+`
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	_, err := Load(path)
+	if err == nil {
+		t.Fatal("Load() error = nil, want schedule_delay error")
+	}
+	if !strings.Contains(err.Error(), "schedule_delay") {
+		t.Fatalf("Load() error = %q, want mention schedule_delay", err)
 	}
 }
 
@@ -1113,7 +1273,6 @@ func TestProjectConfigIncludesDiscoveryEnhancementAISources(t *testing.T) {
 	}
 	want := []Source{
 		{Name: "AllenAI Blog", URL: "https://allenai.org/rss.xml", Type: SourceTypeRSS, Category: "AI/科技"},
-		{Name: "Cognition Blog", URL: "https://cognition.ai/rss.xml", Type: SourceTypeRSS, Category: "AI/科技"},
 		{Name: "Bing / Microsoft Search Blog", URL: "https://blogs.bing.com/Home/feed", Type: SourceTypeRSS, Category: "AI/科技"},
 	}
 
@@ -1149,6 +1308,19 @@ func TestProjectConfigIncludesDiscoveryEnhancementAISources(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestProjectConfigDoesNotIncludeRemovedCognitionRSS(t *testing.T) {
+	cfg, err := Load(filepath.Join("..", "..", "configs", "config.example.yaml"))
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+
+	for _, source := range cfg.Sources {
+		if source.Name == "Cognition Blog" || strings.Contains(source.URL, "cognition.ai/rss.xml") {
+			t.Fatalf("config.example.yaml includes removed Cognition RSS source: %+v", source)
+		}
 	}
 }
 

@@ -173,13 +173,15 @@ func (c *Client) FetchAllDetailed(cfg *config.Config, markSeen bool) (FetchResul
 }
 
 func FetchAllDetailedContext(ctx context.Context, cfg *config.Config, markSeen bool) (FetchResult, error) {
-	since := time.Now().Add(-12 * time.Hour)
-	return fetchWindowDetailedContext(ctx, cfg, since, time.Now(), markSeen, false, fetchAllSourcesDetailed)
+	now := time.Now()
+	since := now.Add(-12 * time.Hour)
+	return fetchWindowDetailedContextWithXLookback(ctx, cfg, since, now, markSeen, false, fetchAllSourcesDetailed)
 }
 
 func (c *Client) FetchAllDetailedContext(ctx context.Context, cfg *config.Config, markSeen bool) (FetchResult, error) {
-	since := time.Now().Add(-12 * time.Hour)
-	return c.FetchWindowDetailedContext(ctx, cfg, since, time.Now(), markSeen, false)
+	now := time.Now()
+	since := now.Add(-12 * time.Hour)
+	return fetchWindowDetailedContextWithXLookback(ctx, cfg, since, now, markSeen, false, c.fetchAllSourcesDetailed)
 }
 
 func FetchWindow(cfg *config.Config, from, to time.Time, markSeen bool, ignoreSeen bool) ([]model.Article, []FailedSource, error) {
@@ -216,12 +218,28 @@ func (c *Client) FetchWindowDetailedContext(ctx context.Context, cfg *config.Con
 	return fetchWindowDetailedContext(ctx, cfg, from, to, markSeen, ignoreSeen, c.fetchAllSourcesDetailed)
 }
 
+func FetchWindowDetailedWithXVisibleHistoryContext(ctx context.Context, cfg *config.Config, from, to time.Time, markSeen bool, ignoreSeen bool, historyDir string) (FetchResult, error) {
+	return fetchWindowDetailedContextWithOptions(ctx, cfg, from, to, markSeen, ignoreSeen, fetchAllSourcesDetailed, false, xVisibleReadOptions{useHistory: true, historyDir: historyDir})
+}
+
+func (c *Client) FetchWindowDetailedWithXVisibleHistoryContext(ctx context.Context, cfg *config.Config, from, to time.Time, markSeen bool, ignoreSeen bool, historyDir string) (FetchResult, error) {
+	return fetchWindowDetailedContextWithOptions(ctx, cfg, from, to, markSeen, ignoreSeen, c.fetchAllSourcesDetailed, false, xVisibleReadOptions{useHistory: true, historyDir: historyDir})
+}
+
 func fetchWindowContext(ctx context.Context, cfg *config.Config, from, to time.Time, markSeen bool, ignoreSeen bool, fetchAll fetchAllSourcesDetailedFunc) ([]model.Article, []FailedSource, error) {
 	result, err := fetchWindowDetailedContext(ctx, cfg, from, to, markSeen, ignoreSeen, fetchAll)
 	return result.Articles, result.Failed, err
 }
 
 func fetchWindowDetailedContext(ctx context.Context, cfg *config.Config, from, to time.Time, markSeen bool, ignoreSeen bool, fetchAll fetchAllSourcesDetailedFunc) (FetchResult, error) {
+	return fetchWindowDetailedContextWithOptions(ctx, cfg, from, to, markSeen, ignoreSeen, fetchAll, false)
+}
+
+func fetchWindowDetailedContextWithXLookback(ctx context.Context, cfg *config.Config, from, to time.Time, markSeen bool, ignoreSeen bool, fetchAll fetchAllSourcesDetailedFunc) (FetchResult, error) {
+	return fetchWindowDetailedContextWithOptions(ctx, cfg, from, to, markSeen, ignoreSeen, fetchAll, true)
+}
+
+func fetchWindowDetailedContextWithOptions(ctx context.Context, cfg *config.Config, from, to time.Time, markSeen bool, ignoreSeen bool, fetchAll fetchAllSourcesDetailedFunc, useXLookback bool, xVisibleOptions ...xVisibleReadOptions) (FetchResult, error) {
 	if err := ctx.Err(); err != nil {
 		return FetchResult{}, err
 	}
@@ -229,6 +247,20 @@ func fetchWindowDetailedContext(ctx context.Context, cfg *config.Config, from, t
 	if err != nil {
 		return FetchResult{}, err
 	}
+	xFrom := from
+	if useXLookback && cfg.XAccounts.Lookback > 0 {
+		xFrom = to.Add(-cfg.XAccounts.Lookback)
+	}
+	xReadOptions := xVisibleReadOptions{}
+	if len(xVisibleOptions) > 0 {
+		xReadOptions = xVisibleOptions[0]
+	}
+	xResults, xFailed, err := fetchXVisibleNDJSONWithOptions(ctx, cfg.XAccounts, cfg.Keywords, xFrom, to, xReadOptions)
+	if err != nil {
+		return FetchResult{}, err
+	}
+	results = append(results, xResults...)
+	failed = append(failed, xFailed...)
 	if err := ctx.Err(); err != nil {
 		return FetchResult{}, err
 	}
@@ -236,8 +268,12 @@ func fetchWindowDetailedContext(ctx context.Context, cfg *config.Config, from, t
 	accepted := make([]model.Article, 0)
 	filtered := make([]model.Article, 0)
 	for _, result := range results {
+		windowFrom := from
+		if result.Source.Name == xVisibleSourceName {
+			windowFrom = xFrom
+		}
 		for _, candidate := range result.Candidates {
-			if !articleWithinWindow(candidate.Article, from, to) {
+			if !articleWithinWindow(candidate.Article, windowFrom, to) {
 				continue
 			}
 			if len(candidate.MatchedKeywords) == 0 {
@@ -275,7 +311,7 @@ func MarkArticlesSeen(outputDir string, articles []model.Article) error {
 }
 
 func articleWithinWindow(a model.Article, from, to time.Time) bool {
-	return a.Published.After(from) && !a.Published.After(to)
+	return !a.Published.Before(from) && a.Published.Before(to)
 }
 
 func filterArticlesByWindow(articles []model.Article, from, to time.Time) []model.Article {

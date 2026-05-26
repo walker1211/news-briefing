@@ -23,34 +23,36 @@ func TestNewAppWiresInstanceDependencies(t *testing.T) {
 	app := newApp(cfg)
 
 	funcs := map[string]any{
-		"scheduler.startCron":              app.scheduler.startCron,
-		"scheduler.startCronContext":       app.scheduler.startCronContext,
-		"fetch.fetchAll":                   app.fetch.fetchAll,
-		"fetch.fetchAllContext":            app.fetch.fetchAllContext,
-		"fetch.fetchAllDetailedContext":    app.fetch.fetchAllDetailedContext,
-		"fetch.fetchWindow":                app.fetch.fetchWindow,
-		"fetch.fetchWindowContext":         app.fetch.fetchWindowContext,
-		"fetch.fetchWindowDetailedContext": app.fetch.fetchWindowDetailedContext,
-		"fetch.markSeen":                   app.fetch.markSeen,
-		"watch.fetchWatch":                 app.watch.fetchWatch,
-		"watch.fetchWatchContext":          app.watch.fetchWatchContext,
-		"ai.summarize":                     app.ai.summarize,
-		"ai.summarizeContext":              app.ai.summarizeContext,
-		"ai.translate":                     app.ai.translate,
-		"ai.translateContext":              app.ai.translateContext,
-		"ai.deepDive":                      app.ai.deepDive,
-		"ai.deepDiveContext":               app.ai.deepDiveContext,
-		"output.composeBody":               app.output.composeBody,
-		"output.printText":                 app.output.printText,
-		"output.printFailed":               app.output.printFailed,
-		"output.printArticles":             app.output.printArticles,
-		"output.printCLI":                  app.output.printCLI,
-		"output.writeMarkdown":             app.output.writeMarkdown,
-		"output.writeWatchMarkdown":        app.output.writeWatchMarkdown,
-		"output.writeDeepDive":             app.output.writeDeepDive,
-		"email.sendEmail":                  app.email.sendEmail,
-		"email.sendDeepEmail":              app.email.sendDeepEmail,
-		"email.resendMarkdownEmail":        app.email.resendMarkdownEmail,
+		"scheduler.startCron":                     app.scheduler.startCron,
+		"scheduler.startCronContext":              app.scheduler.startCronContext,
+		"fetch.fetchAll":                          app.fetch.fetchAll,
+		"fetch.fetchAllContext":                   app.fetch.fetchAllContext,
+		"fetch.fetchAllDetailedContext":           app.fetch.fetchAllDetailedContext,
+		"fetch.fetchWindow":                       app.fetch.fetchWindow,
+		"fetch.fetchWindowContext":                app.fetch.fetchWindowContext,
+		"fetch.fetchWindowDetailedContext":        app.fetch.fetchWindowDetailedContext,
+		"fetch.fetchWindowDetailedHistoryContext": app.fetch.fetchWindowDetailedHistoryContext,
+		"fetch.fetchXAlertsContext":               app.fetch.fetchXAlertsContext,
+		"fetch.markSeen":                          app.fetch.markSeen,
+		"watch.fetchWatch":                        app.watch.fetchWatch,
+		"watch.fetchWatchContext":                 app.watch.fetchWatchContext,
+		"ai.summarize":                            app.ai.summarize,
+		"ai.summarizeContext":                     app.ai.summarizeContext,
+		"ai.translate":                            app.ai.translate,
+		"ai.translateContext":                     app.ai.translateContext,
+		"ai.deepDive":                             app.ai.deepDive,
+		"ai.deepDiveContext":                      app.ai.deepDiveContext,
+		"output.composeBody":                      app.output.composeBody,
+		"output.printText":                        app.output.printText,
+		"output.printFailed":                      app.output.printFailed,
+		"output.printArticles":                    app.output.printArticles,
+		"output.printCLI":                         app.output.printCLI,
+		"output.writeMarkdown":                    app.output.writeMarkdown,
+		"output.writeWatchMarkdown":               app.output.writeWatchMarkdown,
+		"output.writeDeepDive":                    app.output.writeDeepDive,
+		"email.sendEmail":                         app.email.sendEmail,
+		"email.sendDeepEmail":                     app.email.sendDeepEmail,
+		"email.resendMarkdownEmail":               app.email.resendMarkdownEmail,
 	}
 	for name, fn := range funcs {
 		if reflect.ValueOf(fn).IsNil() {
@@ -172,6 +174,152 @@ func TestExecuteContextFetchPassesContext(t *testing.T) {
 	}
 	if !called {
 		t.Fatal("fetchAllContext() did not receive execute context")
+	}
+}
+
+func TestExecuteContextAlertsFetchesXAlertsForCurrentTime(t *testing.T) {
+	ctx := context.WithValue(context.Background(), contextTestKey{}, "alerts")
+	now := time.Date(2026, 5, 19, 12, 0, 0, 0, time.UTC)
+	called := false
+	printed := false
+	failedPrinted := false
+	app := &app{
+		cfg: executeTestConfig(t, model.OutputModeTranslatedOnly),
+		now: func() time.Time {
+			return now
+		},
+		fetch: fetchDeps{
+			fetchXAlertsContext: func(got context.Context, cfg *config.Config, gotNow time.Time) (fetcher.FetchResult, error) {
+				called = got.Value(contextTestKey{}) == "alerts" && gotNow.Equal(now)
+				return fetcher.FetchResult{Articles: sampleExecuteArticles()}, nil
+			},
+		},
+		ai: aiDeps{
+			summarizeContext: func(context.Context, []model.Article, []string, *time.Location) (string, error) {
+				t.Fatal("alerts should not summarize")
+				return "", nil
+			},
+			translateContext: func(context.Context, []model.Article, []string, *time.Location) (string, error) {
+				t.Fatal("alerts should not translate")
+				return "", nil
+			},
+		},
+		output: outputDeps{
+			printArticles: func(articles []model.Article) {
+				printed = len(articles) == 1 && articles[0].Title == "OpenAI ships feature"
+			},
+			printFailed: func([]fetcher.FailedSource) {
+				failedPrinted = true
+			},
+			printText: func(string) {},
+			composeBody: func(string, model.OutputMode, model.OutputContent) (string, error) {
+				t.Fatal("alerts should not compose output")
+				return "", nil
+			},
+			writeMarkdown: func(*model.Briefing, string) (string, error) {
+				t.Fatal("alerts should not write markdown")
+				return "", nil
+			},
+		},
+		email: emailDeps{
+			sendEmail: func(*model.Briefing, *config.Config, []fetcher.FailedSource) error {
+				t.Fatal("alerts should not send email")
+				return nil
+			},
+		},
+	}
+
+	if err := executeContext(ctx, app, alertsCommand{}); err != nil {
+		t.Fatalf("executeContext() error = %v", err)
+	}
+	if !called {
+		t.Fatal("fetchXAlertsContext() did not receive context/current time")
+	}
+	if !printed {
+		t.Fatal("printArticles() was not called with alert articles")
+	}
+	if !failedPrinted {
+		t.Fatal("printFailed() was not called")
+	}
+}
+
+func TestExecuteAlertsPrintsEmptyMessage(t *testing.T) {
+	var message string
+	app := &app{
+		cfg: executeTestConfig(t, model.OutputModeOriginalOnly),
+		now: func() time.Time {
+			return time.Date(2026, 5, 19, 12, 0, 0, 0, time.UTC)
+		},
+		fetch: fetchDeps{
+			fetchXAlertsContext: func(context.Context, *config.Config, time.Time) (fetcher.FetchResult, error) {
+				return fetcher.FetchResult{}, nil
+			},
+		},
+		output: outputDeps{
+			printArticles: func([]model.Article) {},
+			printFailed:   func([]fetcher.FailedSource) {},
+			printText:     func(s string) { message = s },
+		},
+	}
+
+	if err := execute(app, alertsCommand{}); err != nil {
+		t.Fatalf("execute() error = %v", err)
+	}
+	if !strings.Contains(message, "No X alerts") {
+		t.Fatalf("empty message = %q, want No X alerts", message)
+	}
+}
+
+func TestExecuteContextXRoutesPrintsConfiguredAccounts(t *testing.T) {
+	ctx := context.WithValue(context.Background(), contextTestKey{}, "x-routes")
+	var printed string
+	app := &app{
+		cfg: &config.Config{
+			XAccounts: config.XAccountsConfig{
+				Enabled: false,
+				Accounts: []config.XAccountConfig{
+					{Handle: " @OpenAI "},
+					{Handle: ""},
+					{Handle: "AnthropicAI"},
+				},
+			},
+		},
+		fetch: fetchDeps{
+			fetchAllContext: func(context.Context, *config.Config, bool) ([]model.Article, []fetcher.FailedSource, error) {
+				t.Fatal("x routes should not fetch articles")
+				return nil, nil, nil
+			},
+			fetchXAlertsContext: func(context.Context, *config.Config, time.Time) (fetcher.FetchResult, error) {
+				t.Fatal("x routes should not fetch alerts")
+				return fetcher.FetchResult{}, nil
+			},
+		},
+		ai: aiDeps{
+			summarizeContext: func(context.Context, []model.Article, []string, *time.Location) (string, error) {
+				t.Fatal("x routes should not summarize")
+				return "", nil
+			},
+		},
+		output: outputDeps{
+			printText: func(s string) { printed = s },
+			writeMarkdown: func(*model.Briefing, string) (string, error) {
+				t.Fatal("x routes should not write markdown")
+				return "", nil
+			},
+		},
+		email: emailDeps{
+			sendEmail: func(*model.Briefing, *config.Config, []fetcher.FailedSource) error {
+				t.Fatal("x routes should not send email")
+				return nil
+			},
+		},
+	}
+
+	if err := executeContext(ctx, app, xRoutesCommand{}); err != nil {
+		t.Fatalf("executeContext() error = %v", err)
+	}
+	if printed != "/twitter/user/OpenAI\n/twitter/user/AnthropicAI" {
+		t.Fatalf("printed routes = %q", printed)
 	}
 }
 
@@ -420,6 +568,61 @@ func TestExecuteRegenUsesParsedWindowAndFlags(t *testing.T) {
 	}
 }
 
+func TestExecuteRegenUsesXVisibleHistoryOptions(t *testing.T) {
+	loc, err := time.LoadLocation("Asia/Shanghai")
+	if err != nil {
+		t.Fatalf("LoadLocation() error = %v", err)
+	}
+	from := time.Date(2026, 5, 19, 8, 0, 0, 0, loc)
+	to := time.Date(2026, 5, 21, 8, 0, 0, 0, loc)
+
+	called := false
+	app := &app{
+		cfg: &config.Config{
+			ScheduleLocation: loc,
+			Output:           config.OutputCfg{Dir: t.TempDir(), Mode: model.OutputModeOriginalOnly},
+			XAccounts:        config.XAccountsConfig{HistoryDir: "/config/history"},
+		},
+		fetch: fetchDeps{
+			fetchWindowDetailedHistoryContext: func(ctx context.Context, cfg *config.Config, gotFrom, gotTo time.Time, markSeen bool, ignoreSeen bool, historyDir string) (fetcher.FetchResult, error) {
+				called = gotFrom.Equal(from) && gotTo.Equal(to) && !markSeen && ignoreSeen && historyDir == "/override/history"
+				return fetcher.FetchResult{Articles: sampleExecuteArticles()}, nil
+			},
+		},
+		output: silentBriefingOutputDeps(""),
+	}
+
+	cmd := regenCommand{
+		fromRaw:             "2026-05-19 08:00",
+		toRaw:               "2026-05-21 08:00",
+		ignoreSeen:          true,
+		xVisibleHistoryDays: 2,
+		xVisibleHistoryDir:  "/override/history",
+	}
+	if err := execute(app, cmd); err != nil {
+		t.Fatalf("execute() error = %v", err)
+	}
+	if !called {
+		t.Fatalf("history fetch was not called with parsed regen arguments")
+	}
+}
+
+func TestExecuteRegenHistoryRejectsMissingDir(t *testing.T) {
+	app := &app{cfg: &config.Config{}}
+	err := execute(app, regenCommand{fromRaw: "2026-05-19 08:00", toRaw: "2026-05-20 08:00", xVisibleHistoryDays: 1})
+	if err == nil || !strings.Contains(err.Error(), "x visible history dir") {
+		t.Fatalf("execute() error = %v, want missing x visible history dir", err)
+	}
+}
+
+func TestExecuteRegenHistoryRejectsWindowWiderThanDays(t *testing.T) {
+	app := &app{cfg: &config.Config{XAccounts: config.XAccountsConfig{HistoryDir: "/config/history"}}}
+	err := execute(app, regenCommand{fromRaw: "2026-05-19 08:00", toRaw: "2026-05-21 08:01", xVisibleHistoryDays: 2})
+	if err == nil || !strings.Contains(err.Error(), "--x-visible-history-days") {
+		t.Fatalf("execute() error = %v, want history days window validation", err)
+	}
+}
+
 func TestExecuteRegenParsesRawWindowInConfiguredTimezone(t *testing.T) {
 	loc, err := time.LoadLocation("America/Los_Angeles")
 	if err != nil {
@@ -608,6 +811,56 @@ func TestRenderBriefingAppendsTranslatedFilteredArticlesWhenEnabled(t *testing.T
 	}
 	if len(translated) != 1 || translated[0].Title != "Market update without keyword" {
 		t.Fatalf("translated = %#v, want filtered articles only", translated)
+	}
+}
+
+func TestRenderBriefingIncludesFailedSourcesInBody(t *testing.T) {
+	var printed *model.Briefing
+	var written *model.Briefing
+	var emailed *model.Briefing
+	var emailedFailed []fetcher.FailedSource
+	failed := []fetcher.FailedSource{{
+		Name: "X history",
+		Err:  errors.New("no succeeded X history archive overlaps requested window 2026-05-20T00:00:00Z ~ 2026-05-21T00:00:00Z"),
+	}}
+
+	app := &app{
+		cfg: &config.Config{
+			Output: config.OutputCfg{Dir: t.TempDir(), Mode: model.OutputModeOriginalOnly},
+		},
+		output: outputDeps{
+			composeBody: func(string, model.OutputMode, model.OutputContent) (string, error) { return "正文", nil },
+			printCLI: func(b *model.Briefing) {
+				printed = b
+			},
+			writeMarkdown: func(b *model.Briefing, dir string) (string, error) {
+				written = b
+				return "", nil
+			},
+			printFailed: func([]fetcher.FailedSource) {},
+		},
+		email: emailDeps{
+			sendEmail: func(b *model.Briefing, cfg *config.Config, failed []fetcher.FailedSource) error {
+				emailedFailed = failed
+				emailed = b
+				return nil
+			},
+		},
+	}
+
+	if err := app.renderBriefing("run", "26.03.27", "1400", nil, nil, nil, failed, false, true); err != nil {
+		t.Fatalf("renderBriefing() error = %v", err)
+	}
+	for name, briefing := range map[string]*model.Briefing{"printCLI": printed, "writeMarkdown": written, "sendEmail": emailed} {
+		if briefing == nil {
+			t.Fatalf("%s briefing = nil", name)
+		}
+		if !strings.Contains(briefing.RawContent, "抓取异常") || !strings.Contains(briefing.RawContent, "X history") {
+			t.Fatalf("%s RawContent = %q, want failed section", name, briefing.RawContent)
+		}
+	}
+	if len(emailedFailed) != 0 {
+		t.Fatalf("emailed failed = %#v, want empty to avoid duplicate failed section", emailedFailed)
 	}
 }
 

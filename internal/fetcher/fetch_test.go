@@ -32,7 +32,7 @@ func TestFilterArticlesByWindowUsesHalfOpenInterval(t *testing.T) {
 	if len(got) != 2 {
 		t.Fatalf("len(filterArticlesByWindow(...)) = %d, want 2", len(got))
 	}
-	if got[0].Title != "middle" || got[1].Title != "to" {
+	if got[0].Title != "from" || got[1].Title != "middle" {
 		t.Fatalf("filterArticlesByWindow(...) = %#v", got)
 	}
 }
@@ -44,11 +44,11 @@ func TestFilterArticlesByWindowDoesNotDuplicateBoundaryAcrossAdjacentWindows(t *
 
 	first := filterArticlesByWindow(articles, boundary.Add(-6*time.Hour), boundary)
 	second := filterArticlesByWindow(articles, boundary, boundary.Add(6*time.Hour))
-	if len(first) != 1 {
-		t.Fatalf("len(first) = %d, want 1", len(first))
+	if len(first) != 0 {
+		t.Fatalf("len(first) = %d, want 0", len(first))
 	}
-	if len(second) != 0 {
-		t.Fatalf("len(second) = %d, want 0", len(second))
+	if len(second) != 1 {
+		t.Fatalf("len(second) = %d, want 1", len(second))
 	}
 }
 
@@ -95,10 +95,10 @@ func TestFetchWindowUsesExplicitBounds(t *testing.T) {
 	if len(failed) != 1 {
 		t.Fatalf("len(failed) = %d, want 1", len(failed))
 	}
-	if len(articles) != 2 {
-		t.Fatalf("len(articles) = %d, want 2", len(articles))
+	if len(articles) != 1 {
+		t.Fatalf("len(articles) = %d, want 1", len(articles))
 	}
-	if articles[0].Title != "to" || articles[1].Title != "dup" {
+	if articles[0].Title != "dup" {
 		t.Fatalf("FetchWindow() articles = %#v", articles)
 	}
 }

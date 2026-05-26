@@ -20,7 +20,7 @@ func TestParseArgsRun(t *testing.T) {
 }
 
 func TestParseArgsRegen(t *testing.T) {
-	cmd, err := parseArgs([]string{"regen", "--from", "2026-03-18 08:00", "--to", "2026-03-18 14:00", "--period", "1400", "--ignore-seen", "--send-email", "--raw"})
+	cmd, err := parseArgs([]string{"regen", "--from", "2026-03-18 08:00", "--to", "2026-03-18 14:00", "--period", "1400", "--ignore-seen", "--send-email", "--raw", "--x-visible-history-days", "2", "--x-visible-history-dir", "/tmp/x-visible/history"})
 	if err != nil {
 		t.Fatalf("parseArgs() error = %v", err)
 	}
@@ -33,6 +33,9 @@ func TestParseArgsRegen(t *testing.T) {
 	}
 	if regen.period != "1400" || !regen.ignoreSeen || !regen.sendEmail || !regen.raw {
 		t.Fatalf("regen command = %#v", regen)
+	}
+	if regen.xVisibleHistoryDays != 2 || regen.xVisibleHistoryDir != "/tmp/x-visible/history" {
+		t.Fatalf("regen history options = %#v", regen)
 	}
 }
 
@@ -48,6 +51,49 @@ func TestParseArgsFetch(t *testing.T) {
 	if !fetch.zh {
 		t.Fatalf("fetch command = %#v", fetch)
 	}
+}
+
+func TestParseArgsAlerts(t *testing.T) {
+	cmd, err := parseArgs([]string{"alerts"})
+	if err != nil {
+		t.Fatalf("parseArgs() error = %v", err)
+	}
+	if _, ok := cmd.(alertsCommand); !ok {
+		t.Fatalf("command type = %T", cmd)
+	}
+}
+
+func TestParseArgsXRoutes(t *testing.T) {
+	cmd, err := parseArgs([]string{"x", "routes"})
+	if err != nil {
+		t.Fatalf("parseArgs() error = %v", err)
+	}
+	if _, ok := cmd.(xRoutesCommand); !ok {
+		t.Fatalf("command type = %T", cmd)
+	}
+}
+
+func TestParseArgsXRoutesRejects(t *testing.T) {
+	t.Run("missing subcommand", func(t *testing.T) {
+		_, err := parseArgs([]string{"x"})
+		if err == nil || !strings.Contains(err.Error(), "x subcommand") {
+			t.Fatalf("parseArgs() error = %v, want missing x subcommand", err)
+		}
+	})
+
+	t.Run("unsupported subcommand", func(t *testing.T) {
+		_, err := parseArgs([]string{"x", "foo"})
+		if err == nil || !strings.Contains(err.Error(), "unsupported x subcommand") {
+			t.Fatalf("parseArgs() error = %v, want unsupported x subcommand", err)
+		}
+	})
+
+	t.Run("unexpected route args", func(t *testing.T) {
+		_, err := parseArgs([]string{"x", "routes", "--bad"})
+		if err == nil || !strings.Contains(err.Error(), "unexpected arguments for x routes") {
+			t.Fatalf("parseArgs() error = %v, want unexpected arguments for x routes", err)
+		}
+	})
 }
 
 func TestParseArgsServe(t *testing.T) {
@@ -78,6 +124,13 @@ func TestParseArgsRegenRequiresTo(t *testing.T) {
 	_, err := parseArgs([]string{"regen", "--from", "2026-03-18 08:00"})
 	if err == nil || !strings.Contains(err.Error(), "--to") {
 		t.Fatalf("parseArgs() error = %v, want missing --to", err)
+	}
+}
+
+func TestParseArgsRegenRejectsInvalidXVisibleHistoryDays(t *testing.T) {
+	_, err := parseArgs([]string{"regen", "--from", "2026-03-18 08:00", "--to", "2026-03-18 14:00", "--x-visible-history-days", "0"})
+	if err == nil || !strings.Contains(err.Error(), "--x-visible-history-days") {
+		t.Fatalf("parseArgs() error = %v, want invalid --x-visible-history-days", err)
 	}
 }
 
@@ -123,6 +176,22 @@ func TestParseArgsFetchRejects(t *testing.T) {
 		_, err := parseArgs([]string{"fetch", "--bad"})
 		if err == nil || !strings.Contains(err.Error(), "unknown flag for fetch: --bad") {
 			t.Fatalf("parseArgs() error = %v, want unknown flag for fetch: --bad", err)
+		}
+	})
+}
+
+func TestParseArgsAlertsRejects(t *testing.T) {
+	t.Run("unexpected args", func(t *testing.T) {
+		_, err := parseArgs([]string{"alerts", "foo"})
+		if err == nil || !strings.Contains(err.Error(), "unexpected arguments for alerts") {
+			t.Fatalf("parseArgs() error = %v, want unexpected arguments for alerts", err)
+		}
+	})
+
+	t.Run("unknown flag", func(t *testing.T) {
+		_, err := parseArgs([]string{"alerts", "--bad"})
+		if err == nil || !strings.Contains(err.Error(), "unknown flag for alerts: --bad") {
+			t.Fatalf("parseArgs() error = %v, want unknown flag for alerts: --bad", err)
 		}
 	})
 }

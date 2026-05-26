@@ -99,6 +99,269 @@ func TestBuildDeepEmailBodyAppendsFailedSection(t *testing.T) {
 	}
 }
 
+func TestBuildHTMLBodyRendersStructuredNewsletter(t *testing.T) {
+	body := strings.Join([]string{
+		"国际资讯简报 26.05.26 晚间 18:00",
+		"",
+		"== AI/科技 (1篇) ==",
+		"",
+		"1. Claude Code 更新 <Beta>",
+		"**摘要：** 这是摘要内容。",
+		"   Source: Anthropic | 2026-05-26 18:00",
+		"   Link: https://example.com/articles/very-long-path?utm_source=rss&from=mail",
+		"",
+	}, "\n")
+
+	got := buildHTMLBody(body)
+	wantParts := []string{
+		"newsletter-shell",
+		"newsletter-card",
+		"<h1>国际资讯简报 26.05.26 晚间 18:00</h1>",
+		"<h2>AI/科技 <span>1篇</span></h2>",
+		`<article class="news-item">`,
+		"<h3>Claude Code 更新 &lt;Beta&gt;</h3>",
+		`<p class="summary"><strong>摘要：</strong>这是摘要内容。</p>`,
+		`<p class="meta">Anthropic · 2026-05-26 18:00</p>`,
+		`<a class="source-link" href="https://example.com/articles/very-long-path?utm_source=rss&amp;from=mail">原文链接</a>`,
+		"overflow-wrap:anywhere",
+	}
+	for _, want := range wantParts {
+		if !strings.Contains(got, want) {
+			t.Fatalf("buildHTMLBody() = %q, want substring %q", got, want)
+		}
+	}
+	if strings.Contains(got, "email-body") || strings.Contains(got, "white-space:pre-wrap") {
+		t.Fatalf("buildHTMLBody() still renders as pre-wrapped text dump: %q", got)
+	}
+	if strings.Contains(got, ">https://example.com/articles/very-long-path") {
+		t.Fatalf("buildHTMLBody() exposes long URL as visible text: %q", got)
+	}
+}
+
+func TestBuildHTMLBodyRendersBriefingMarkdownHeadings(t *testing.T) {
+	body := strings.Join([]string{
+		"# 国际资讯简报 26.05.26 晚间 18:00",
+		"",
+		"## AI/科技",
+		"",
+		"### 优步称AI支出越来越难证明合理",
+		"**摘要：** 优步总裁表示，公司越来越难证明高额AI投入的合理性。  ",
+		"**影响：** 大型企业可能转向更严格的ROI审查。  ",
+		"> 来源: The Verge；Reddit Singularity | 2026-05-26 17:55；17:44",
+		"",
+	}, "\n")
+
+	got := buildHTMLBody(body)
+	wantParts := []string{
+		"<h1>国际资讯简报 26.05.26 晚间 18:00</h1>",
+		"<h2>AI/科技</h2>",
+		`<article class="news-item">`,
+		"<h3>优步称AI支出越来越难证明合理</h3>",
+		`<p class="summary"><strong>摘要：</strong>优步总裁表示，公司越来越难证明高额AI投入的合理性。</p>`,
+		`<p class="impact"><strong>影响：</strong>大型企业可能转向更严格的ROI审查。</p>`,
+		`<p class="meta">The Verge；Reddit Singularity · 2026-05-26 17:55；17:44</p>`,
+	}
+	for _, want := range wantParts {
+		if !strings.Contains(got, want) {
+			t.Fatalf("buildHTMLBody() = %q, want substring %q", got, want)
+		}
+	}
+	if strings.Contains(got, "# 国际资讯") || strings.Contains(got, "**摘要：**") || strings.Contains(got, "&gt; 来源") {
+		t.Fatalf("buildHTMLBody() leaked markdown syntax: %q", got)
+	}
+}
+
+func TestBuildHTMLBodyStylesBriefingSectionsAndWarningBlocks(t *testing.T) {
+	body := strings.Join([]string{
+		"# 国际资讯简报 26.05.26 晚间 18:00",
+		"",
+		"## AI/科技",
+		"AI 正文",
+		"",
+		"---",
+		"## 今日态势",
+		"中东仍是今日最大风险源。",
+		"",
+		"---",
+		"## 未命中关键词的候选新闻",
+		"候选新闻列表。",
+		"",
+		"## Watch 站点异常",
+		"- Watch 站点异常：Claude Platform Release Notes — 抓取失败：release notes fragment \"plugins\" not found",
+		"",
+		"---",
+		"抓取异常",
+		"- X coverage/OpenAI: target may not fully cover requested window: limit-reached",
+	}, "\n")
+
+	got := renderNewsletterHTML(body)
+	wantParts := []string{
+		`<section class="briefing-section section-news"><h2>AI/科技</h2>`,
+		`<section class="briefing-section section-status"><h2>今日态势</h2>`,
+		`<section class="briefing-section section-candidates"><h2>未命中关键词的候选新闻</h2>`,
+		`<section class="briefing-section warning-block watch-warning"><h2>Watch 站点异常</h2>`,
+		`<p class="warning-item">Watch 站点异常：Claude Platform Release Notes — 抓取失败：release notes fragment &#34;plugins&#34; not found</p>`,
+		`<section class="briefing-section warning-block fetch-warning"><h2>抓取异常</h2>`,
+		`<p class="warning-item">X coverage/OpenAI: target may not fully cover requested window: limit-reached</p>`,
+	}
+	for _, want := range wantParts {
+		if !strings.Contains(got, want) {
+			t.Fatalf("renderNewsletterHTML() = %q, want substring %q", got, want)
+		}
+	}
+	if strings.Contains(got, `<p class="paragraph">---</p>`) {
+		t.Fatalf("renderNewsletterHTML() rendered markdown separator: %q", got)
+	}
+
+	withoutWarnings := renderNewsletterHTML(strings.Join([]string{
+		"# 国际资讯简报 26.05.26 晚间 18:00",
+		"",
+		"## AI/科技",
+		"AI 正文",
+	}, "\n"))
+	if strings.Contains(withoutWarnings, "warning-block") || strings.Contains(withoutWarnings, "warning-item") {
+		t.Fatalf("renderNewsletterHTML() rendered warning styling without warning sections: %q", withoutWarnings)
+	}
+}
+
+func TestBuildHTMLBodyStylesCategoryTitlesWithoutCandidateBackground(t *testing.T) {
+	body := strings.Join([]string{
+		"# 国际资讯简报 26.05.26 晚间 18:00",
+		"",
+		"## AI/科技",
+		"AI 正文",
+		"",
+		"## 国际政治",
+		"政治正文",
+		"",
+		"## 未命中关键词的候选新闻",
+		"候选新闻列表。",
+	}, "\n")
+
+	got := buildHTMLBody(body)
+	wantParts := []string{
+		`.section-news h2{padding-top:0;border-top:0;color:#2563eb;`,
+		`.section-candidates{padding:0;border:0;background:transparent;`,
+		`.section-candidates h2{padding-top:0;border-top:0;color:#7c3aed;`,
+		`<section class="briefing-section section-news"><h2>AI/科技</h2>`,
+		`<section class="briefing-section section-news"><h2>国际政治</h2>`,
+		`<section class="briefing-section section-candidates"><h2>未命中关键词的候选新闻</h2>`,
+	}
+	for _, want := range wantParts {
+		if !strings.Contains(got, want) {
+			t.Fatalf("buildHTMLBody() = %q, want substring %q", got, want)
+		}
+	}
+	if strings.Contains(got, `.section-candidates{padding:16px 18px`) || strings.Contains(got, `.section-candidates{background:#`) {
+		t.Fatalf("buildHTMLBody() gives candidate section a card background: %q", got)
+	}
+}
+
+func TestBuildHTMLBodySuppressesStaleSearchLimitReachedWarningItems(t *testing.T) {
+	body := strings.Join([]string{
+		"# 国际资讯简报 26.05.26 晚间 18:00",
+		"",
+		"抓取异常",
+		"- X coverage/search:Codex limits: target may not fully cover requested window: limit-reached",
+		"- X coverage/OpenAI: target may not fully cover requested window: limit-reached",
+	}, "\n")
+
+	got := renderNewsletterHTML(body)
+	if strings.Contains(got, "X coverage/search:Codex") {
+		t.Fatalf("renderNewsletterHTML() kept stale search limit-reached warning: %q", got)
+	}
+	if !strings.Contains(got, "X coverage/OpenAI") {
+		t.Fatalf("renderNewsletterHTML() removed account limit-reached warning too: %q", got)
+	}
+}
+
+func TestBuildHTMLBodyOmitsFetchWarningBlockWhenOnlySearchLimitReachedWasSuppressed(t *testing.T) {
+	body := strings.Join([]string{
+		"# 国际资讯简报 26.05.26 晚间 18:00",
+		"",
+		"抓取异常",
+		"- X coverage/search:Codex limits: target may not fully cover requested window: limit-reached",
+	}, "\n")
+
+	got := renderNewsletterHTML(body)
+	if strings.Contains(got, "fetch-warning") || strings.Contains(got, "抓取异常") || strings.Contains(got, "X coverage/search:Codex") {
+		t.Fatalf("renderNewsletterHTML() kept an empty fetch warning block: %q", got)
+	}
+}
+
+func TestBuildHTMLBodyRendersFollowDirectionBoldLabels(t *testing.T) {
+	body := strings.Join([]string{
+		"# 国际资讯简报 26.05.26 晚间 18:00",
+		"",
+		"## 今日最值得追的方向",
+		"",
+		"### 方向1：美国对伊朗打击与霍尔木兹风险",
+		"**为什么值得追：** 这是原因。  ",
+		"**接下来关注什么：** 看会议纪要。",
+		"**深挖命令：** `./news-briefing deep \"US Iran\" --ignore-seen`",
+	}, "\n")
+
+	got := renderNewsletterHTML(body)
+	wantParts := []string{
+		`<p class="markdown-label"><strong>为什么值得追：</strong>这是原因。</p>`,
+		`<p class="markdown-label"><strong>接下来关注什么：</strong>看会议纪要。</p>`,
+		`<p class="markdown-label"><strong>深挖命令：</strong><code>./news-briefing deep &#34;US Iran&#34; --ignore-seen</code></p>`,
+	}
+	for _, want := range wantParts {
+		if !strings.Contains(got, want) {
+			t.Fatalf("renderNewsletterHTML() = %q, want substring %q", got, want)
+		}
+	}
+	if strings.Contains(got, "**为什么值得追：**") || strings.Contains(got, "`./news-briefing") {
+		t.Fatalf("renderNewsletterHTML() leaked markdown emphasis syntax: %q", got)
+	}
+}
+
+func TestSendMarkdownFileUsesHTMLMailPathWithPlainFallback(t *testing.T) {
+	dir := t.TempDir()
+	outputDir := filepath.Join(dir, "output")
+	if err := os.Mkdir(outputDir, 0o755); err != nil {
+		t.Fatalf("Mkdir() error = %v", err)
+	}
+	path := filepath.Join(outputDir, "26.04.13-晚间-1800.md")
+	body := "简报\n   Link: https://example.com/articles/very-long-path?utm_source=rss&from=mail"
+	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	cfg := &config.Config{Output: config.OutputCfg{Dir: outputDir}, Email: config.Email{RetryTimes: 1}}
+	sender := NewEmailSender()
+	sender.smtpSend = func(cfg *config.Config, subject, body, password string) error {
+		return errors.New("plain text SMTP sender should not be used for email delivery")
+	}
+	var gotSubject string
+	var gotText string
+	var gotHTML string
+	sender.smtpHTMLSend = func(cfg *config.Config, subject, textBody, htmlBody, password string) error {
+		gotSubject = subject
+		gotText = textBody
+		gotHTML = htmlBody
+		return nil
+	}
+	t.Setenv("EMAIL_SMTP_AUTH_CODE", "secret")
+
+	if err := sender.SendMarkdownFile(path, cfg); err != nil {
+		t.Fatalf("SendMarkdownFile() error = %v", err)
+	}
+	if gotSubject != "国际资讯简报 26.04.13 晚间 18:00" {
+		t.Fatalf("subject = %q", gotSubject)
+	}
+	if gotText != body {
+		t.Fatalf("plain fallback = %q, want %q", gotText, body)
+	}
+	if !strings.Contains(gotHTML, `<a class="source-link" href="https://example.com/articles/very-long-path?utm_source=rss&amp;from=mail">原文链接</a>`) {
+		t.Fatalf("html body = %q", gotHTML)
+	}
+	if strings.Contains(gotHTML, ">https://example.com/articles/very-long-path") {
+		t.Fatalf("html body exposes long URL as visible text: %q", gotHTML)
+	}
+}
+
 func TestEmailSenderRejectsNilInputs(t *testing.T) {
 	sender := NewEmailSender()
 	cfg := &config.Config{}

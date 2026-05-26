@@ -43,10 +43,6 @@ sources:
     url: https://allenai.org/rss.xml
     type: rss
     category: AI/科技
-  - name: Cognition Blog
-    url: https://cognition.ai/rss.xml
-    type: rss
-    category: AI/科技
   - name: Bing / Microsoft Search Blog
     url: https://blogs.bing.com/Home/feed
     type: rss
@@ -87,6 +83,20 @@ sources:
     url: https://thediplomat.com/feed/
     type: rss
     category: 国际政治
+
+x_accounts:
+  enabled: false
+  accounts_path: <x-visible-data-dir>/accounts.ndjson
+  searches_path: <x-visible-data-dir>/searches.ndjson
+  history_dir: <x-visible-data-dir>/history
+  refresh_status_path: <x-visible-data-dir>/status.json
+  lookback: 24h
+  refresh_wait_timeout: 10m
+  refresh_wait_interval: 5s
+  max_posts_per_target: 10
+  category: AI/科技
+  accounts:
+    - handle: example_ai_company # Replace with the X account handle to track.
 
 keywords:
   - AI
@@ -220,8 +230,10 @@ email:
   use_proxy: false
 
 schedule:
-  - "0 6 * * *"
+  - "0 8 * * *"
   - "0 18 * * *"
+# Optional. Delays actual execution while keeping the schedule window boundaries above.
+schedule_delay: 10m
 
 # Optional. Defaults to the machine's local timezone when omitted.
 # schedule_timezone: Asia/Shanghai

@@ -15,17 +15,20 @@ import (
 )
 
 type Config struct {
-	Sources          []Source       `yaml:"sources"`
-	Keywords         []string       `yaml:"keywords"`
-	Fetch            FetchConfig    `yaml:"fetch"`
-	Watch            WatchConfig    `yaml:"watch"`
-	Email            Email          `yaml:"email"`
-	Schedule         Schedule       `yaml:"schedule"`
-	ScheduleTimezone string         `yaml:"schedule_timezone"`
-	ScheduleLocation *time.Location `yaml:"-"`
-	Output           OutputCfg      `yaml:"output"`
-	Proxy            Proxy          `yaml:"proxy"`
-	AI               AICfg          `yaml:"ai"`
+	Sources          []Source        `yaml:"sources"`
+	Keywords         []string        `yaml:"keywords"`
+	Fetch            FetchConfig     `yaml:"fetch"`
+	Watch            WatchConfig     `yaml:"watch"`
+	XAccounts        XAccountsConfig `yaml:"x_accounts"`
+	Email            Email           `yaml:"email"`
+	Schedule         Schedule        `yaml:"schedule"`
+	ScheduleDelayRaw string          `yaml:"schedule_delay"`
+	ScheduleDelay    time.Duration   `yaml:"-"`
+	ScheduleTimezone string          `yaml:"schedule_timezone"`
+	ScheduleLocation *time.Location  `yaml:"-"`
+	Output           OutputCfg       `yaml:"output"`
+	Proxy            Proxy           `yaml:"proxy"`
+	AI               AICfg           `yaml:"ai"`
 }
 
 const (
@@ -38,9 +41,12 @@ const (
 	WatchTypeAnthropicSupport = "anthropic_support"
 	WatchTypeAnnouncementPage = "announcement_page"
 
-	DefaultFetchTimeout       = 30 * time.Second
-	DefaultFetchRetryTimes    = 3
-	DefaultFetchRetryWaitTime = 200 * time.Millisecond
+	DefaultFetchTimeout         = 30 * time.Second
+	DefaultFetchRetryTimes      = 3
+	DefaultFetchRetryWaitTime   = 200 * time.Millisecond
+	DefaultXRefreshWaitTimeout  = 10 * time.Minute
+	DefaultXRefreshWaitInterval = 5 * time.Second
+	DefaultXMaxPostsPerTarget   = 10
 )
 
 type Source struct {
@@ -73,6 +79,27 @@ type WatchSite struct {
 	BriefingCategory  string   `yaml:"briefing_category"`
 	CategoryAllowlist []string `yaml:"category_allowlist"`
 	HighValueKeywords []string `yaml:"high_value_keywords"`
+}
+
+type XAccountsConfig struct {
+	Enabled                bool             `yaml:"enabled"`
+	AccountsPath           string           `yaml:"accounts_path"`
+	SearchesPath           string           `yaml:"searches_path"`
+	HistoryDir             string           `yaml:"history_dir"`
+	RefreshStatusPath      string           `yaml:"refresh_status_path"`
+	LookbackRaw            string           `yaml:"lookback"`
+	RefreshWaitTimeoutRaw  string           `yaml:"refresh_wait_timeout"`
+	RefreshWaitIntervalRaw string           `yaml:"refresh_wait_interval"`
+	MaxPostsPerTarget      int              `yaml:"max_posts_per_target"`
+	Category               string           `yaml:"category"`
+	Accounts               []XAccountConfig `yaml:"accounts"`
+	Lookback               time.Duration    `yaml:"-"`
+	RefreshWaitTimeout     time.Duration    `yaml:"-"`
+	RefreshWaitInterval    time.Duration    `yaml:"-"`
+}
+
+type XAccountConfig struct {
+	Handle string `yaml:"handle"`
 }
 
 type Email struct {
@@ -126,6 +153,23 @@ func resolveScheduleLocation(name string) (*time.Location, error) {
 	return loc, nil
 }
 
+func applyScheduleDelay(cfg *Config) error {
+	raw := strings.TrimSpace(cfg.ScheduleDelayRaw)
+	if raw == "" {
+		cfg.ScheduleDelay = 0
+		return nil
+	}
+	delay, err := time.ParseDuration(raw)
+	if err != nil {
+		return fmt.Errorf("parse schedule_delay: %w", err)
+	}
+	if delay < 0 {
+		return fmt.Errorf("validate schedule_delay: must be zero or greater")
+	}
+	cfg.ScheduleDelay = delay
+	return nil
+}
+
 var supportedSourceTypes = map[string]struct{}{
 	SourceTypeRSS:        {},
 	SourceTypeHackerNews: {},
@@ -173,6 +217,49 @@ func applyFetchDefaults(fetch *FetchConfig) error {
 	fetch.Timeout = timeout
 	fetch.RetryTimes = *fetch.RetryTimesRaw
 	fetch.RetryWaitTime = wait
+	return nil
+}
+
+func applyXAccountsDefaults(cfg *XAccountsConfig) error {
+	if strings.TrimSpace(cfg.LookbackRaw) == "" {
+		cfg.LookbackRaw = "24h"
+	}
+	lookback, err := time.ParseDuration(strings.TrimSpace(cfg.LookbackRaw))
+	if err != nil {
+		return fmt.Errorf("parse x_accounts.lookback: %w", err)
+	}
+	if lookback <= 0 {
+		return fmt.Errorf("validate x_accounts.lookback: must be greater than 0")
+	}
+	cfg.Lookback = lookback
+	if strings.TrimSpace(cfg.RefreshWaitTimeoutRaw) == "" {
+		cfg.RefreshWaitTimeoutRaw = DefaultXRefreshWaitTimeout.String()
+	}
+	refreshWaitTimeout, err := time.ParseDuration(strings.TrimSpace(cfg.RefreshWaitTimeoutRaw))
+	if err != nil {
+		return fmt.Errorf("parse x_accounts.refresh_wait_timeout: %w", err)
+	}
+	if refreshWaitTimeout <= 0 {
+		return fmt.Errorf("validate x_accounts.refresh_wait_timeout: must be greater than 0")
+	}
+	cfg.RefreshWaitTimeout = refreshWaitTimeout
+	if strings.TrimSpace(cfg.RefreshWaitIntervalRaw) == "" {
+		cfg.RefreshWaitIntervalRaw = DefaultXRefreshWaitInterval.String()
+	}
+	refreshWaitInterval, err := time.ParseDuration(strings.TrimSpace(cfg.RefreshWaitIntervalRaw))
+	if err != nil {
+		return fmt.Errorf("parse x_accounts.refresh_wait_interval: %w", err)
+	}
+	if refreshWaitInterval <= 0 {
+		return fmt.Errorf("validate x_accounts.refresh_wait_interval: must be greater than 0")
+	}
+	cfg.RefreshWaitInterval = refreshWaitInterval
+	if cfg.MaxPostsPerTarget == 0 {
+		cfg.MaxPostsPerTarget = DefaultXMaxPostsPerTarget
+	}
+	if strings.TrimSpace(cfg.Category) == "" {
+		cfg.Category = "AI/科技"
+	}
 	return nil
 }
 
@@ -252,6 +339,9 @@ func (cfg *Config) Validate() error {
 			return err
 		}
 	}
+	if err := validateXAccounts(cfg.XAccounts); err != nil {
+		return err
+	}
 	if err := validateEmail(cfg.Email); err != nil {
 		return err
 	}
@@ -305,6 +395,27 @@ func validateWatchSite(index int, site WatchSite) error {
 	}
 	if err := validateHTTPURL(prefix+".home_url", site.HomeURL); err != nil {
 		return err
+	}
+	return nil
+}
+
+func validateXAccounts(cfg XAccountsConfig) error {
+	if cfg.MaxPostsPerTarget < 1 {
+		return fmt.Errorf("validate x_accounts.max_posts_per_target: must be at least 1")
+	}
+	if strings.TrimSpace(cfg.Category) == "" {
+		return fmt.Errorf("validate x_accounts.category: must not be empty")
+	}
+	if !cfg.Enabled {
+		return nil
+	}
+	if len(cfg.Accounts) == 0 {
+		return fmt.Errorf("validate x_accounts.accounts: must not be empty when enabled")
+	}
+	for i, account := range cfg.Accounts {
+		if strings.TrimSpace(account.Handle) == "" {
+			return fmt.Errorf("validate x_accounts.accounts[%d].handle: must not be empty", i)
+		}
 	}
 	return nil
 }
@@ -413,7 +524,13 @@ func Load(configPath string) (*Config, error) {
 		return nil, err
 	}
 	cfg.ScheduleLocation = loc
+	if err := applyScheduleDelay(&cfg); err != nil {
+		return nil, err
+	}
 	if err := applyFetchDefaults(&cfg.Fetch); err != nil {
+		return nil, err
+	}
+	if err := applyXAccountsDefaults(&cfg.XAccounts); err != nil {
 		return nil, err
 	}
 	if err := applyEmailDefaults(&cfg.Email); err != nil {

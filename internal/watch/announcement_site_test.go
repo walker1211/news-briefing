@@ -55,6 +55,30 @@ func TestParseClaudeReleaseNotesIndexExtractsEntries(t *testing.T) {
 	}
 }
 
+func TestParseClaudeReleaseNotesIndexIgnoresNonReleaseFragments(t *testing.T) {
+	html := `<html><body><main>
+		<h3><div id="plugins"><div>Plugins</div></div></h3>
+		<ul>
+			<li>Use plugins to extend Claude Code.</li>
+		</ul>
+		<h3><div id="april-16-2026"><div>April 16, 2026</div></div></h3>
+		<ul>
+			<li>We've launched <a href="https://www.anthropic.com/news/claude-opus-4-7">Claude Opus 4.7</a>, our most capable generally available model for complex reasoning and agentic coding.</li>
+		</ul>
+	</main></body></html>`
+
+	snapshot, err := parseAnthropicAnnouncementIndex("Claude Platform Release Notes", "https://platform.claude.com/docs/en/release-notes/overview", html)
+	if err != nil {
+		t.Fatalf("parseAnthropicAnnouncementIndex() error = %v", err)
+	}
+	if len(snapshot.Items) != 1 {
+		t.Fatalf("len(snapshot.Items) = %d, want 1; items=%#v", len(snapshot.Items), snapshot.Items)
+	}
+	if snapshot.Items[0].URL != "https://platform.claude.com/docs/en/release-notes/overview#april-16-2026" {
+		t.Fatalf("snapshot.Items[0].URL = %q", snapshot.Items[0].URL)
+	}
+}
+
 func TestParseAnthropicAnnouncementArticleExtractsSummaryAndBody(t *testing.T) {
 	html := mustReadAnnouncementFixture(t, "anthropic_news_opus47.html")
 

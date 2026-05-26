@@ -82,6 +82,45 @@ func TestStartContextReturnsContextErrorWhenCancelled(t *testing.T) {
 	}
 }
 
+func TestRunWindowAfterDelayWaitsBeforeRun(t *testing.T) {
+	window := Window{Expr: "0 18 * * *", Period: "1800"}
+	var waited time.Duration
+	var ran bool
+
+	runWindowAfterDelay(context.Background(), window, 5*time.Minute, func(ctx context.Context, d time.Duration) error {
+		waited = d
+		return nil
+	}, func(got Window) {
+		ran = true
+		if got.Period != window.Period {
+			t.Fatalf("window.Period = %q, want %q", got.Period, window.Period)
+		}
+	})
+
+	if waited != 5*time.Minute {
+		t.Fatalf("waited = %v, want 5m", waited)
+	}
+	if !ran {
+		t.Fatal("runFunc was not called")
+	}
+}
+
+func TestRunWindowAfterDelaySkipsRunWhenCancelled(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	var ran bool
+
+	runWindowAfterDelay(ctx, Window{Expr: "0 18 * * *"}, 5*time.Minute, func(ctx context.Context, d time.Duration) error {
+		return ctx.Err()
+	}, func(Window) {
+		ran = true
+	})
+
+	if ran {
+		t.Fatal("runFunc was called after cancelled delay")
+	}
+}
+
 func TestBuildWindowFormatsPeriodInScheduleTimezone(t *testing.T) {
 	loc, err := time.LoadLocation("America/Los_Angeles")
 	if err != nil {
@@ -160,6 +199,36 @@ func TestBuildWindowDerivesLatestPointForHighFrequencySchedule(t *testing.T) {
 
 	wantFrom := time.Date(2026, 3, 27, 17, 45, 0, 0, loc)
 	assertWindow(t, got, "*/15 * * * *", "1800", wantFrom, to)
+}
+
+func TestBuildWindowConvertsSevenEighteenShanghaiWindowsToUTCInstants(t *testing.T) {
+	loc, err := time.LoadLocation("Asia/Shanghai")
+	if err != nil {
+		t.Fatalf("LoadLocation() error = %v", err)
+	}
+	schedules := []string{"0 7 * * *", "0 18 * * *"}
+
+	evening, err := buildWindow(time.Date(2026, 5, 20, 18, 0, 0, 0, loc), "0 18 * * *", schedules, loc)
+	if err != nil {
+		t.Fatalf("buildWindow(evening) error = %v", err)
+	}
+	if got := evening.From.UTC().Format(time.RFC3339); got != "2026-05-19T23:00:00Z" {
+		t.Fatalf("evening.From.UTC() = %s, want 2026-05-19T23:00:00Z", got)
+	}
+	if got := evening.To.UTC().Format(time.RFC3339); got != "2026-05-20T10:00:00Z" {
+		t.Fatalf("evening.To.UTC() = %s, want 2026-05-20T10:00:00Z", got)
+	}
+
+	morning, err := buildWindow(time.Date(2026, 5, 20, 7, 0, 0, 0, loc), "0 7 * * *", schedules, loc)
+	if err != nil {
+		t.Fatalf("buildWindow(morning) error = %v", err)
+	}
+	if got := morning.From.UTC().Format(time.RFC3339); got != "2026-05-19T10:00:00Z" {
+		t.Fatalf("morning.From.UTC() = %s, want 2026-05-19T10:00:00Z", got)
+	}
+	if got := morning.To.UTC().Format(time.RFC3339); got != "2026-05-19T23:00:00Z" {
+		t.Fatalf("morning.To.UTC() = %s, want 2026-05-19T23:00:00Z", got)
+	}
 }
 
 func assertWindow(t *testing.T, got Window, wantExpr, wantPeriod string, wantFrom, wantTo time.Time) {
