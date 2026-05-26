@@ -368,6 +368,34 @@ func TestFetchXVisibleNDJSONIgnoresSearchMaxScrollsCoverageWarning(t *testing.T)
 	}
 }
 
+func TestFetchXVisibleNDJSONIgnoresSearchLimitReachedCoverageWarning(t *testing.T) {
+	dir := t.TempDir()
+	searchesPath := filepath.Join(dir, "searches.ndjson")
+	content := `{"kind":"x-visible-article","schemaVersion":1,"targetRaw":"search:Codex","targetType":"search","targetUrl":"https://x.com/search?q=Codex&src=typed_query&f=live","sourceUrl":"https://x.com/search?q=Codex&src=typed_query&f=live","finalUrl":"https://x.com/search?q=Codex&src=typed_query&f=live","windowFrom":"2026-05-20T10:00:00.000Z","windowTo":"2026-05-21T00:00:00.000Z","scrollStopReason":"limit-reached","text":"Codex launched and released a major update","datetime":"2026-05-20T23:59:40.000Z","statusUrl":"https://x.com/example/status/limit-reached","statusLinks":["https://x.com/example/status/limit-reached"],"linkCount":1,"imageCount":0,"videoCount":0}
+`
+	if err := os.WriteFile(searchesPath, []byte(content), 0o644); err != nil {
+		t.Fatalf("write searches ndjson: %v", err)
+	}
+	cfg := config.XAccountsConfig{
+		Enabled:      true,
+		SearchesPath: searchesPath,
+		Category:     "AI/科技",
+	}
+	from := time.Date(2026, 5, 20, 10, 0, 0, 0, time.UTC)
+	to := time.Date(2026, 5, 21, 0, 0, 0, 0, time.UTC)
+
+	results, failed, err := fetchXVisibleNDJSON(context.Background(), cfg, []string{"Codex"}, from, to)
+	if err != nil {
+		t.Fatalf("fetchXVisibleNDJSON() error = %v", err)
+	}
+	if len(results) != 1 || len(results[0].Candidates) != 1 {
+		t.Fatalf("results = %#v, want one X search candidate", results)
+	}
+	if len(failed) != 0 {
+		t.Fatalf("failed = %#v, want search limit-reached coverage ignored", failed)
+	}
+}
+
 func TestFetchXVisibleNDJSONLimitsPostsPerTargetForAccountsAndSearches(t *testing.T) {
 	dir := t.TempDir()
 	accountsPath := filepath.Join(dir, "accounts.ndjson")

@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net/url"
+	"regexp"
 	"strings"
 	"time"
 
@@ -11,6 +12,8 @@ import (
 	"github.com/walker1211/news-briefing/internal/config"
 	"github.com/walker1211/news-briefing/internal/model"
 )
+
+var claudeReleaseNotesDateFragmentPattern = regexp.MustCompile(`(?i)^(january|february|march|april|may|june|july|august|september|october|november|december)-[0-9]{1,2}-[0-9]{4}$`)
 
 func runAnnouncementSite(ctx context.Context, site config.WatchSite, now time.Time, indexState IndexState, articleState ArticleState, fetchHTML fetchHTMLFunc) ([]model.Article, []model.WatchSeenArticle, []model.WatchEvent, error) {
 	type seenPayload struct {
@@ -270,7 +273,7 @@ func parseClaudeReleaseNotesOverview(doc *goquery.Document, pageURL string) []mo
 	items := make([]model.WatchIndexItem, 0)
 	doc.Find("h3 div[id]").Each(func(i int, heading *goquery.Selection) {
 		fragment := strings.TrimSpace(heading.AttrOr("id", ""))
-		if fragment == "" {
+		if fragment == "" || !isClaudeReleaseNotesDateFragment(fragment) {
 			return
 		}
 		entryURL := releaseNotesOverviewURLWithFragment(pageURL, fragment)
@@ -295,6 +298,10 @@ func parseClaudeReleaseNotesOverview(doc *goquery.Document, pageURL string) []mo
 		return items
 	}
 	return parseClaudeReleaseNotesOverviewLegacy(doc, pageURL)
+}
+
+func isClaudeReleaseNotesDateFragment(fragment string) bool {
+	return claudeReleaseNotesDateFragmentPattern.MatchString(strings.TrimSpace(fragment))
 }
 
 func parseClaudeReleaseNotesOverviewLegacy(doc *goquery.Document, pageURL string) []model.WatchIndexItem {
