@@ -529,16 +529,21 @@ func xVisibleRefreshSummaryWarning(summary *xVisibleRefreshTargetSummary, target
 	if summary == nil {
 		return nil
 	}
+	loginSignalCount := summary.LoginSignalCount
 	challengeSignalCount := summary.ChallengeSignalCount
 	if len(targets) > 0 {
+		loginSignalCount = 0
 		challengeSignalCount = 0
 		for _, target := range targets {
+			if xVisibleTargetLoginProblem(target) {
+				loginSignalCount++
+			}
 			if xVisibleTargetChallengeProblem(target) {
 				challengeSignalCount++
 			}
 		}
 	}
-	if summary.ErrorCount == 0 && summary.TimeoutCount == 0 && summary.LoginSignalCount == 0 && challengeSignalCount == 0 {
+	if summary.ErrorCount == 0 && summary.TimeoutCount == 0 && loginSignalCount == 0 && challengeSignalCount == 0 {
 		return nil
 	}
 	return &FailedSource{
@@ -549,7 +554,7 @@ func xVisibleRefreshSummaryWarning(summary *xVisibleRefreshTargetSummary, target
 			summary.OKCount,
 			summary.ErrorCount,
 			summary.TimeoutCount,
-			summary.LoginSignalCount,
+			loginSignalCount,
 			challengeSignalCount,
 			summary.RetryCount,
 		),
@@ -562,7 +567,7 @@ func xVisibleRefreshTargetWarning(target xVisibleRefreshTargetDetails) *FailedSo
 	if xVisibleProblemLoadStopReason(loadStopReason) {
 		messageParts = append(messageParts, "loadStopReason="+loadStopReason)
 	}
-	if xVisibleRawSignalPresent(target.LoginSignals) {
+	if xVisibleTargetLoginProblem(target) {
 		messageParts = append(messageParts, "loginSignals=true")
 	}
 	if xVisibleTargetChallengeProblem(target) {
@@ -588,9 +593,20 @@ func xVisibleRefreshTargetWarning(target xVisibleRefreshTargetDetails) *FailedSo
 
 func xVisibleTargetHasProblem(target xVisibleRefreshTargetDetails) bool {
 	return xVisibleProblemLoadStopReason(strings.TrimSpace(target.LoadStopReason)) ||
-		xVisibleRawSignalPresent(target.LoginSignals) ||
+		xVisibleTargetLoginProblem(target) ||
 		xVisibleTargetChallengeProblem(target) ||
 		strings.TrimSpace(target.Error) != ""
+}
+
+func xVisibleTargetLoginProblem(target xVisibleRefreshTargetDetails) bool {
+	loadStopReason := strings.TrimSpace(target.LoadStopReason)
+	if strings.EqualFold(loadStopReason, "login-signal") {
+		return true
+	}
+	if !xVisibleRawSignalPresent(target.LoginSignals) {
+		return false
+	}
+	return !strings.EqualFold(loadStopReason, "article-ready") || target.ArticleCount == 0
 }
 
 func xVisibleTargetChallengeProblem(target xVisibleRefreshTargetDetails) bool {

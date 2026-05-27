@@ -340,6 +340,41 @@ func TestFetchXVisibleNDJSONIgnoresWeakChallengeSignalAfterArticlesReady(t *test
 	}
 }
 
+func TestFetchXVisibleNDJSONIgnoresWeakLoginSignalAfterArticlesReady(t *testing.T) {
+	dir := t.TempDir()
+	searchesPath := filepath.Join(dir, "searches.ndjson")
+	statusPath := filepath.Join(dir, "status.json")
+	content := `{"kind":"x-visible-article","schemaVersion":1,"targetRaw":"search:Codex limits","targetType":"search","targetUrl":"https://x.com/search?q=Codex%20limits&src=typed_query&f=live","sourceUrl":"https://x.com/search?q=Codex%20limits&src=typed_query&f=live","finalUrl":"https://x.com/search?q=Codex%20limits&src=typed_query&f=live","text":"Codex usage limits discussion","datetime":"2026-05-27T09:00:00.000Z","statusUrl":"https://x.com/example/status/2057249933124886592","statusLinks":["https://x.com/example/status/2057249933124886592"],"linkCount":1,"imageCount":0,"videoCount":0}
+`
+	if err := os.WriteFile(searchesPath, []byte(content), 0o644); err != nil {
+		t.Fatalf("write searches ndjson: %v", err)
+	}
+	status := `{"kind":"x-visible-refresh-status","schemaVersion":1,"job":"x-visible-ai","period":"2026-05-27T10:00:00.000Z","status":"succeeded","startedAt":"2026-05-27T10:00:18.964Z","finishedAt":"2026-05-27T10:02:32.463Z","window":{"from":"2026-05-27T00:00:00.000Z","to":"2026-05-27T10:00:00.000Z"},"targetSummary":{"targetCount":48,"okCount":48,"errorCount":0,"timeoutCount":0,"loginSignalCount":1,"challengeSignalCount":0,"retryCount":0},"targets":[{"source":"searches","targetRaw":"search:Codex limits","targetType":"search","loadStopReason":"article-ready","loginSignals":true,"attempts":1,"articleCount":30}]}
+`
+	if err := os.WriteFile(statusPath, []byte(status), 0o644); err != nil {
+		t.Fatalf("write status: %v", err)
+	}
+	cfg := config.XAccountsConfig{
+		Enabled:           true,
+		SearchesPath:      searchesPath,
+		RefreshStatusPath: statusPath,
+		Category:          "AI/科技",
+	}
+	from := time.Date(2026, 5, 27, 0, 0, 0, 0, time.UTC)
+	to := time.Date(2026, 5, 27, 10, 0, 0, 0, time.UTC)
+
+	results, failed, err := fetchXVisibleNDJSON(context.Background(), cfg, []string{"Codex"}, from, to)
+	if err != nil {
+		t.Fatalf("fetchXVisibleNDJSON() error = %v", err)
+	}
+	if len(results) != 1 || len(results[0].Candidates) != 1 {
+		t.Fatalf("results = %#v, want one X candidate", results)
+	}
+	if len(failed) != 0 {
+		t.Fatalf("failed = %#v, want weak login signal ignored", failed)
+	}
+}
+
 func TestFetchXVisibleNDJSONIgnoresSearchMaxScrollsCoverageWarning(t *testing.T) {
 	dir := t.TempDir()
 	searchesPath := filepath.Join(dir, "searches.ndjson")
