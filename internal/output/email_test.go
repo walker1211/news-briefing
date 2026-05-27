@@ -257,7 +257,7 @@ func TestBuildHTMLBodyStylesCategoryTitlesWithoutCandidateBackground(t *testing.
 	}
 }
 
-func TestBuildHTMLBodySuppressesStaleSearchLimitReachedWarningItems(t *testing.T) {
+func TestBuildHTMLBodyRendersSearchLimitReachedWarningItems(t *testing.T) {
 	body := strings.Join([]string{
 		"# 国际资讯简报 26.05.26 晚间 18:00",
 		"",
@@ -267,15 +267,19 @@ func TestBuildHTMLBodySuppressesStaleSearchLimitReachedWarningItems(t *testing.T
 	}, "\n")
 
 	got := renderNewsletterHTML(body)
-	if strings.Contains(got, "X coverage/search:Codex") {
-		t.Fatalf("renderNewsletterHTML() kept stale search limit-reached warning: %q", got)
+	wantParts := []string{
+		`<section class="briefing-section warning-block fetch-warning"><h2>抓取异常</h2>`,
+		`<p class="warning-item">X coverage/search:Codex limits: target may not fully cover requested window: limit-reached</p>`,
+		`<p class="warning-item">X coverage/OpenAI: target may not fully cover requested window: limit-reached</p>`,
 	}
-	if !strings.Contains(got, "X coverage/OpenAI") {
-		t.Fatalf("renderNewsletterHTML() removed account limit-reached warning too: %q", got)
+	for _, want := range wantParts {
+		if !strings.Contains(got, want) {
+			t.Fatalf("renderNewsletterHTML() = %q, want substring %q", got, want)
+		}
 	}
 }
 
-func TestBuildHTMLBodyOmitsFetchWarningBlockWhenOnlySearchLimitReachedWasSuppressed(t *testing.T) {
+func TestBuildHTMLBodyRendersFetchWarningBlockWhenOnlySearchLimitReachedIsPresent(t *testing.T) {
 	body := strings.Join([]string{
 		"# 国际资讯简报 26.05.26 晚间 18:00",
 		"",
@@ -284,8 +288,14 @@ func TestBuildHTMLBodyOmitsFetchWarningBlockWhenOnlySearchLimitReachedWasSuppres
 	}, "\n")
 
 	got := renderNewsletterHTML(body)
-	if strings.Contains(got, "fetch-warning") || strings.Contains(got, "抓取异常") || strings.Contains(got, "X coverage/search:Codex") {
-		t.Fatalf("renderNewsletterHTML() kept an empty fetch warning block: %q", got)
+	wantParts := []string{
+		`<section class="briefing-section warning-block fetch-warning"><h2>抓取异常</h2>`,
+		`<p class="warning-item">X coverage/search:Codex limits: target may not fully cover requested window: limit-reached</p>`,
+	}
+	for _, want := range wantParts {
+		if !strings.Contains(got, want) {
+			t.Fatalf("renderNewsletterHTML() = %q, want substring %q", got, want)
+		}
 	}
 }
 
