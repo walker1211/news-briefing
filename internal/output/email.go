@@ -451,14 +451,8 @@ func renderNewsletterHTML(body string) string {
 			openSection(line, "")
 			continue
 		}
-		if item, ok := strings.CutPrefix(line, "- "); ok && shouldSuppressHTMLWarningItem(item) {
-			continue
-		}
 		if inWarningSection {
 			if item, ok := strings.CutPrefix(line, "- "); ok {
-				if shouldSuppressHTMLWarningItem(item) {
-					continue
-				}
 				out.WriteString(`<p class="warning-item">`)
 				out.WriteString(linkifyHTML(cleanMarkdownLine(item), "链接"))
 				out.WriteString("</p>")
@@ -548,20 +542,12 @@ func hasRenderableHTMLWarningItems(lines []string, start int) bool {
 		if _, _, ok := parseHTMLCategoryLine(line); ok {
 			return false
 		}
-		item, ok := strings.CutPrefix(line, "- ")
-		if !ok {
+		if _, ok := strings.CutPrefix(line, "- "); !ok {
 			return false
 		}
-		if !shouldSuppressHTMLWarningItem(item) {
-			return true
-		}
+		return true
 	}
 	return false
-}
-
-func shouldSuppressHTMLWarningItem(item string) bool {
-	text := strings.TrimSpace(item)
-	return strings.HasPrefix(text, "X coverage/search:") && strings.Contains(text, "limit-reached")
 }
 
 func parseHTMLCategoryLine(line string) (string, string, bool) {
