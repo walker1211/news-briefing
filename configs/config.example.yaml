@@ -217,6 +217,7 @@ watch:
   proxy_provider:
     enabled: false
     type: browsebox
+    mode: proxy
     command: browsebox
     group: ""
     # health_urls omitted: defaults to watch.sites[*].home_url

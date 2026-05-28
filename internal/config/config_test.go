@@ -1018,6 +1018,9 @@ ai: {}
 	if provider.Command != "browsebox" {
 		t.Fatalf("Command = %q, want browsebox", provider.Command)
 	}
+	if provider.Mode != "proxy" {
+		t.Fatalf("Mode = %q, want proxy", provider.Mode)
+	}
 	if provider.NodesConcurrency != 12 {
 		t.Fatalf("NodesConcurrency = %d, want 12", provider.NodesConcurrency)
 	}
@@ -1042,6 +1045,7 @@ watch:
   proxy_provider:
     enabled: true
     type: browsebox
+    mode: proxy
     health_urls:
       - https://support.claude.com/zh-CN
       - https://www.anthropic.com/news
@@ -1058,6 +1062,9 @@ ai: {}
 	if err != nil {
 		t.Fatalf("Load() error = %v", err)
 	}
+	if cfg.Watch.ProxyProvider.Mode != "proxy" {
+		t.Fatalf("Mode = %q, want proxy", cfg.Watch.ProxyProvider.Mode)
+	}
 	want := []string{"https://support.claude.com/zh-CN", "https://www.anthropic.com/news"}
 	if !reflect.DeepEqual(cfg.Watch.ProxyProvider.HealthURLs, want) {
 		t.Fatalf("HealthURLs = %#v, want %#v", cfg.Watch.ProxyProvider.HealthURLs, want)
@@ -1071,6 +1078,7 @@ func TestLoadRejectsInvalidWatchProxyProviderConfig(t *testing.T) {
 		wantErr  string
 	}{
 		{name: "bad type", provider: "enabled: true\ntype: other", wantErr: "watch.proxy_provider.type"},
+		{name: "bad mode", provider: "enabled: true\ntype: browsebox\nmode: run", wantErr: "watch.proxy_provider.mode"},
 		{name: "blank command", provider: "enabled: true\ntype: browsebox\ncommand: ' '", wantErr: "watch.proxy_provider.command"},
 		{name: "bad health url", provider: "enabled: true\ntype: browsebox\nhealth_urls:\n  - not-a-url", wantErr: "watch.proxy_provider.health_urls[0]"},
 		{name: "bad concurrency", provider: "enabled: true\ntype: browsebox\nnodes_concurrency: -1", wantErr: "watch.proxy_provider.nodes_concurrency"},

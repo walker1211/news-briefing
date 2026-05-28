@@ -29,8 +29,12 @@ func watchProxyProviderEnabled(cfg *config.Config) bool {
 
 func browseboxProxyArgs(cfg *config.Config) []string {
 	provider := cfg.Watch.ProxyProvider
+	mode := strings.TrimSpace(provider.Mode)
+	if mode == "" {
+		mode = config.WatchProxyProviderModeProxy
+	}
 	args := []string{
-		"proxy",
+		mode,
 		"--select-fastest",
 		"--group", provider.Group,
 		"--proxy-port", strconv.Itoa(provider.ProxyPort),

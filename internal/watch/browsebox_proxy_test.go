@@ -13,6 +13,25 @@ import (
 	"github.com/walker1211/news-briefing/internal/model"
 )
 
+func TestBrowseboxProxyArgsUsesConfiguredMode(t *testing.T) {
+	cfg := &config.Config{
+		Watch: config.WatchConfig{
+			ProxyProvider: config.WatchProxyProvider{
+				Mode:             "custom-mode",
+				Group:            "",
+				NodesConcurrency: 12,
+				DelayTimeoutMS:   7000,
+				ProxyPort:        17997,
+				ControllerPort:   17998,
+			},
+		},
+	}
+	got := browseboxProxyArgs(cfg)
+	if got[0] != "custom-mode" {
+		t.Fatalf("first arg = %q, want configured mode", got[0])
+	}
+}
+
 func TestBrowseboxProxyArgsDefaultHealthURLsFromWatchSites(t *testing.T) {
 	cfg := &config.Config{
 		Watch: config.WatchConfig{
