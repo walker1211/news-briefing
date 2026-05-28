@@ -135,6 +135,17 @@ func runContext(ctx context.Context, cfg *config.Config, now time.Time, fetchHTM
 	if cfg == nil || len(cfg.Watch.Sites) == 0 {
 		return nil, report, nil
 	}
+	if watchProxyProviderEnabled(cfg) {
+		session, err := startBrowseboxProxy(ctx, cfg)
+		if err != nil {
+			return nil, nil, err
+		}
+		defer func() { _ = session.Close() }()
+		client := watchHTTPClientForProxy(cfg, session.proxyURL)
+		fetchHTML = func(ctx context.Context, url string) (string, error) {
+			return fetchWatchHTMLWith(ctx, client, url)
+		}
+	}
 	fetchHTML = retryingFetchHTML(fetchHTML, watchFetchRetrySettingsFromConfig(cfg))
 
 	indexStore := NewIndexStore(cfg.Output.Dir)

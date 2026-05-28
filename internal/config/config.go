@@ -41,12 +41,19 @@ const (
 	WatchTypeAnthropicSupport = "anthropic_support"
 	WatchTypeAnnouncementPage = "announcement_page"
 
-	DefaultFetchTimeout         = 30 * time.Second
-	DefaultFetchRetryTimes      = 3
-	DefaultFetchRetryWaitTime   = 200 * time.Millisecond
-	DefaultXRefreshWaitTimeout  = 10 * time.Minute
-	DefaultXRefreshWaitInterval = 5 * time.Second
-	DefaultXMaxPostsPerTarget   = 10
+	WatchProxyProviderTypeBrowsebox = "browsebox"
+
+	DefaultFetchTimeout                   = 30 * time.Second
+	DefaultFetchRetryTimes                = 3
+	DefaultFetchRetryWaitTime             = 200 * time.Millisecond
+	DefaultWatchBrowseboxCommand          = "browsebox"
+	DefaultWatchBrowseboxNodesConcurrency = 12
+	DefaultWatchBrowseboxDelayTimeoutMS   = 7000
+	DefaultWatchBrowseboxProxyPort        = 17997
+	DefaultWatchBrowseboxControllerPort   = 17998
+	DefaultXRefreshWaitTimeout            = 10 * time.Minute
+	DefaultXRefreshWaitInterval           = 5 * time.Second
+	DefaultXMaxPostsPerTarget             = 10
 )
 
 type Source struct {
@@ -69,7 +76,26 @@ type FetchConfig struct {
 }
 
 type WatchConfig struct {
-	Sites []WatchSite `yaml:"sites"`
+	Sites         []WatchSite        `yaml:"sites"`
+	ProxyProvider WatchProxyProvider `yaml:"proxy_provider"`
+}
+
+type WatchProxyProvider struct {
+	Enabled             bool     `yaml:"enabled"`
+	TypeRaw             *string  `yaml:"type"`
+	CommandRaw          *string  `yaml:"command"`
+	Group               string   `yaml:"group"`
+	HealthURLs          []string `yaml:"health_urls"`
+	NodesConcurrencyRaw *int     `yaml:"nodes_concurrency"`
+	DelayTimeoutMSRaw   *int     `yaml:"delay_timeout_ms"`
+	ProxyPortRaw        *int     `yaml:"proxy_port"`
+	ControllerPortRaw   *int     `yaml:"controller_port"`
+	Type                string   `yaml:"-"`
+	Command             string   `yaml:"-"`
+	NodesConcurrency    int      `yaml:"-"`
+	DelayTimeoutMS      int      `yaml:"-"`
+	ProxyPort           int      `yaml:"-"`
+	ControllerPort      int      `yaml:"-"`
 }
 
 type WatchSite struct {
@@ -181,6 +207,44 @@ var supportedSourceTypes = map[string]struct{}{
 var supportedWatchTypes = map[string]struct{}{
 	WatchTypeAnthropicSupport: {},
 	WatchTypeAnnouncementPage: {},
+}
+
+func applyWatchDefaults(watch *WatchConfig) error {
+	provider := &watch.ProxyProvider
+	if !provider.Enabled {
+		return nil
+	}
+	if provider.TypeRaw != nil {
+		provider.Type = *provider.TypeRaw
+	} else if strings.TrimSpace(provider.Type) == "" {
+		provider.Type = WatchProxyProviderTypeBrowsebox
+	}
+	if provider.CommandRaw != nil {
+		provider.Command = *provider.CommandRaw
+	} else if strings.TrimSpace(provider.Command) == "" {
+		provider.Command = DefaultWatchBrowseboxCommand
+	}
+	if provider.NodesConcurrencyRaw == nil {
+		provider.NodesConcurrency = DefaultWatchBrowseboxNodesConcurrency
+	} else {
+		provider.NodesConcurrency = *provider.NodesConcurrencyRaw
+	}
+	if provider.DelayTimeoutMSRaw == nil {
+		provider.DelayTimeoutMS = DefaultWatchBrowseboxDelayTimeoutMS
+	} else {
+		provider.DelayTimeoutMS = *provider.DelayTimeoutMSRaw
+	}
+	if provider.ProxyPortRaw == nil {
+		provider.ProxyPort = DefaultWatchBrowseboxProxyPort
+	} else {
+		provider.ProxyPort = *provider.ProxyPortRaw
+	}
+	if provider.ControllerPortRaw == nil {
+		provider.ControllerPort = DefaultWatchBrowseboxControllerPort
+	} else {
+		provider.ControllerPort = *provider.ControllerPortRaw
+	}
+	return nil
 }
 
 func applyFetchDefaults(fetch *FetchConfig) error {
@@ -339,6 +403,9 @@ func (cfg *Config) Validate() error {
 			return err
 		}
 	}
+	if err := validateWatchProxyProvider(cfg.Watch.ProxyProvider); err != nil {
+		return err
+	}
 	if err := validateXAccounts(cfg.XAccounts); err != nil {
 		return err
 	}
@@ -395,6 +462,39 @@ func validateWatchSite(index int, site WatchSite) error {
 	}
 	if err := validateHTTPURL(prefix+".home_url", site.HomeURL); err != nil {
 		return err
+	}
+	return nil
+}
+
+func validateWatchProxyProvider(provider WatchProxyProvider) error {
+	if !provider.Enabled {
+		return nil
+	}
+	if strings.TrimSpace(provider.Type) != WatchProxyProviderTypeBrowsebox {
+		return fmt.Errorf("validate watch.proxy_provider.type: unsupported provider type %q", provider.Type)
+	}
+	if strings.TrimSpace(provider.Command) == "" {
+		return fmt.Errorf("validate watch.proxy_provider.command: must not be empty")
+	}
+	if provider.NodesConcurrency < 1 {
+		return fmt.Errorf("validate watch.proxy_provider.nodes_concurrency: must be at least 1")
+	}
+	if provider.DelayTimeoutMS < 1 {
+		return fmt.Errorf("validate watch.proxy_provider.delay_timeout_ms: must be at least 1")
+	}
+	if err := validatePort("watch.proxy_provider.proxy_port", provider.ProxyPort); err != nil {
+		return err
+	}
+	if err := validatePort("watch.proxy_provider.controller_port", provider.ControllerPort); err != nil {
+		return err
+	}
+	if provider.ProxyPort == provider.ControllerPort {
+		return fmt.Errorf("validate watch.proxy_provider.controller_port: must differ from proxy_port")
+	}
+	for i, rawURL := range provider.HealthURLs {
+		if err := validateHTTPURL(fmt.Sprintf("watch.proxy_provider.health_urls[%d]", i), rawURL); err != nil {
+			return err
+		}
 	}
 	return nil
 }
@@ -472,6 +572,13 @@ func validateHTTPURL(field string, value string) error {
 	return validateURLScheme(field, trimmed, map[string]struct{}{"http": {}, "https": {}})
 }
 
+func validatePort(field string, value int) error {
+	if value < 1 || value > 65535 {
+		return fmt.Errorf("validate %s: must be between 1 and 65535", field)
+	}
+	return nil
+}
+
 func validateOptionalURLScheme(field string, value string, allowed map[string]struct{}) error {
 	trimmed := strings.TrimSpace(value)
 	if trimmed == "" {
@@ -528,6 +635,9 @@ func Load(configPath string) (*Config, error) {
 		return nil, err
 	}
 	if err := applyFetchDefaults(&cfg.Fetch); err != nil {
+		return nil, err
+	}
+	if err := applyWatchDefaults(&cfg.Watch); err != nil {
 		return nil, err
 	}
 	if err := applyXAccountsDefaults(&cfg.XAccounts); err != nil {
