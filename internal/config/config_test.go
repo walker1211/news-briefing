@@ -1272,7 +1272,6 @@ func TestProjectConfigIncludesDiscoveryEnhancementAISources(t *testing.T) {
 		"example": filepath.Join("..", "..", "configs", "config.example.yaml"),
 	}
 	want := []Source{
-		{Name: "AllenAI Blog", URL: "https://allenai.org/rss.xml", Type: SourceTypeRSS, Category: "AI/科技"},
 		{Name: "Bing / Microsoft Search Blog", URL: "https://blogs.bing.com/Home/feed", Type: SourceTypeRSS, Category: "AI/科技"},
 	}
 
@@ -1320,6 +1319,19 @@ func TestProjectConfigDoesNotIncludeRemovedCognitionRSS(t *testing.T) {
 	for _, source := range cfg.Sources {
 		if source.Name == "Cognition Blog" || strings.Contains(source.URL, "cognition.ai/rss.xml") {
 			t.Fatalf("config.example.yaml includes removed Cognition RSS source: %+v", source)
+		}
+	}
+}
+
+func TestProjectConfigDoesNotIncludeRemovedAllenAIRSS(t *testing.T) {
+	cfg, err := Load(filepath.Join("..", "..", "configs", "config.example.yaml"))
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+
+	for _, source := range cfg.Sources {
+		if source.Name == "AllenAI Blog" || strings.Contains(source.URL, "allenai.org/rss.xml") {
+			t.Fatalf("config.example.yaml includes removed AllenAI RSS source: %+v", source)
 		}
 	}
 }
