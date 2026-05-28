@@ -214,6 +214,16 @@ watch:
         - Sonnet
         - API
         - release
+  proxy_provider:
+    enabled: false
+    type: browsebox
+    command: browsebox
+    group: ""
+    # health_urls omitted: defaults to watch.sites[*].home_url
+    nodes_concurrency: 12
+    delay_timeout_ms: 7000
+    proxy_port: 17997
+    controller_port: 17998
 
 email:
   smtp_host: smtp.example.com

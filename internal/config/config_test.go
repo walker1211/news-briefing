@@ -983,6 +983,125 @@ func TestLoadRejectsInvalidEmailIdentityConfig(t *testing.T) {
 	}
 }
 
+func TestLoadAppliesBrowseboxWatchProxyProviderDefaults(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	content := `sources: []
+keywords: []
+fetch: {}
+watch:
+  sites:
+    - name: Claude Platform Release Notes
+      type: announcement_page
+      home_url: https://platform.claude.com/docs/en/release-notes/overview
+      briefing_category: AI/科技
+  proxy_provider:
+    enabled: true
+    type: browsebox
+email: {}
+schedule: []
+output: {}
+proxy: {}
+ai: {}
+`
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	provider := cfg.Watch.ProxyProvider
+	if !provider.Enabled || provider.Type != "browsebox" {
+		t.Fatalf("ProxyProvider = %#v", provider)
+	}
+	if provider.Command != "browsebox" {
+		t.Fatalf("Command = %q, want browsebox", provider.Command)
+	}
+	if provider.NodesConcurrency != 12 {
+		t.Fatalf("NodesConcurrency = %d, want 12", provider.NodesConcurrency)
+	}
+	if provider.DelayTimeoutMS != 7000 {
+		t.Fatalf("DelayTimeoutMS = %d, want 7000", provider.DelayTimeoutMS)
+	}
+	if provider.ProxyPort != 17997 || provider.ControllerPort != 17998 {
+		t.Fatalf("ports = %d/%d", provider.ProxyPort, provider.ControllerPort)
+	}
+	if len(provider.HealthURLs) != 0 {
+		t.Fatalf("HealthURLs = %#v, want empty so Watch sites are used at runtime", provider.HealthURLs)
+	}
+}
+
+func TestLoadAcceptsBrowseboxWatchProxyProviderHealthURLs(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	content := `sources: []
+keywords: []
+fetch: {}
+watch:
+  proxy_provider:
+    enabled: true
+    type: browsebox
+    health_urls:
+      - https://support.claude.com/zh-CN
+      - https://www.anthropic.com/news
+email: {}
+schedule: []
+output: {}
+proxy: {}
+ai: {}
+`
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	want := []string{"https://support.claude.com/zh-CN", "https://www.anthropic.com/news"}
+	if !reflect.DeepEqual(cfg.Watch.ProxyProvider.HealthURLs, want) {
+		t.Fatalf("HealthURLs = %#v, want %#v", cfg.Watch.ProxyProvider.HealthURLs, want)
+	}
+}
+
+func TestLoadRejectsInvalidWatchProxyProviderConfig(t *testing.T) {
+	tests := []struct {
+		name     string
+		provider string
+		wantErr  string
+	}{
+		{name: "bad type", provider: "enabled: true\ntype: other", wantErr: "watch.proxy_provider.type"},
+		{name: "blank command", provider: "enabled: true\ntype: browsebox\ncommand: ' '", wantErr: "watch.proxy_provider.command"},
+		{name: "bad health url", provider: "enabled: true\ntype: browsebox\nhealth_urls:\n  - not-a-url", wantErr: "watch.proxy_provider.health_urls[0]"},
+		{name: "bad concurrency", provider: "enabled: true\ntype: browsebox\nnodes_concurrency: -1", wantErr: "watch.proxy_provider.nodes_concurrency"},
+		{name: "bad delay timeout", provider: "enabled: true\ntype: browsebox\ndelay_timeout_ms: 0", wantErr: "watch.proxy_provider.delay_timeout_ms"},
+		{name: "bad proxy port", provider: "enabled: true\ntype: browsebox\nproxy_port: 70000", wantErr: "watch.proxy_provider.proxy_port"},
+		{name: "bad controller port", provider: "enabled: true\ntype: browsebox\ncontroller_port: 70000", wantErr: "watch.proxy_provider.controller_port"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dir := t.TempDir()
+			path := filepath.Join(dir, "config.yaml")
+			content := "sources: []\n" +
+				"keywords: []\n" +
+				"fetch: {}\n" +
+				"watch:\n  proxy_provider:\n    " + strings.ReplaceAll(tt.provider, "\n", "\n    ") + "\n" +
+				"email: {}\n" +
+				"schedule: []\n" +
+				"output: {}\n" +
+				"proxy: {}\n" +
+				"ai: {}\n"
+			if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+				t.Fatalf("write config: %v", err)
+			}
+			_, err := Load(path)
+			if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
+				t.Fatalf("Load() error = %v, want %q", err, tt.wantErr)
+			}
+		})
+	}
+}
+
 func TestLoadRejectsInvalidProxyConfig(t *testing.T) {
 	tests := []struct {
 		name    string
