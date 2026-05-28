@@ -39,10 +39,6 @@ sources:
     url: https://devblogs.microsoft.com/feed/
     type: rss
     category: AI/科技
-  - name: AllenAI Blog
-    url: https://allenai.org/rss.xml
-    type: rss
-    category: AI/科技
   - name: Bing / Microsoft Search Blog
     url: https://blogs.bing.com/Home/feed
     type: rss
