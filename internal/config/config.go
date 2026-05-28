@@ -42,6 +42,7 @@ const (
 	WatchTypeAnnouncementPage = "announcement_page"
 
 	WatchProxyProviderTypeBrowsebox = "browsebox"
+	WatchProxyProviderModeProxy     = "proxy"
 
 	DefaultFetchTimeout                   = 30 * time.Second
 	DefaultFetchRetryTimes                = 3
@@ -83,6 +84,7 @@ type WatchConfig struct {
 type WatchProxyProvider struct {
 	Enabled             bool     `yaml:"enabled"`
 	TypeRaw             *string  `yaml:"type"`
+	ModeRaw             *string  `yaml:"mode"`
 	CommandRaw          *string  `yaml:"command"`
 	Group               string   `yaml:"group"`
 	HealthURLs          []string `yaml:"health_urls"`
@@ -91,6 +93,7 @@ type WatchProxyProvider struct {
 	ProxyPortRaw        *int     `yaml:"proxy_port"`
 	ControllerPortRaw   *int     `yaml:"controller_port"`
 	Type                string   `yaml:"-"`
+	Mode                string   `yaml:"-"`
 	Command             string   `yaml:"-"`
 	NodesConcurrency    int      `yaml:"-"`
 	DelayTimeoutMS      int      `yaml:"-"`
@@ -218,6 +221,11 @@ func applyWatchDefaults(watch *WatchConfig) error {
 		provider.Type = *provider.TypeRaw
 	} else if strings.TrimSpace(provider.Type) == "" {
 		provider.Type = WatchProxyProviderTypeBrowsebox
+	}
+	if provider.ModeRaw != nil {
+		provider.Mode = *provider.ModeRaw
+	} else if strings.TrimSpace(provider.Mode) == "" {
+		provider.Mode = WatchProxyProviderModeProxy
 	}
 	if provider.CommandRaw != nil {
 		provider.Command = *provider.CommandRaw
@@ -472,6 +480,9 @@ func validateWatchProxyProvider(provider WatchProxyProvider) error {
 	}
 	if strings.TrimSpace(provider.Type) != WatchProxyProviderTypeBrowsebox {
 		return fmt.Errorf("validate watch.proxy_provider.type: unsupported provider type %q", provider.Type)
+	}
+	if strings.TrimSpace(provider.Mode) != WatchProxyProviderModeProxy {
+		return fmt.Errorf("validate watch.proxy_provider.mode: unsupported provider mode %q", provider.Mode)
 	}
 	if strings.TrimSpace(provider.Command) == "" {
 		return fmt.Errorf("validate watch.proxy_provider.command: must not be empty")
