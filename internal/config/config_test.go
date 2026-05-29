@@ -1035,6 +1035,38 @@ ai: {}
 	}
 }
 
+func TestLoadExpandsBrowseboxWatchProxyProviderCommandHome(t *testing.T) {
+	dir := t.TempDir()
+	home := filepath.Join(dir, "home")
+	t.Setenv("HOME", home)
+	path := filepath.Join(dir, "config.yaml")
+	content := `sources: []
+keywords: []
+fetch: {}
+watch:
+  proxy_provider:
+    enabled: true
+    type: browsebox
+    command: ~/Projects/browsebox/browsebox
+email: {}
+schedule: []
+output: {}
+proxy: {}
+ai: {}
+`
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	want := filepath.Join(home, "Projects", "browsebox", "browsebox")
+	if cfg.Watch.ProxyProvider.Command != want {
+		t.Fatalf("Command = %q, want %q", cfg.Watch.ProxyProvider.Command, want)
+	}
+}
+
 func TestLoadAcceptsBrowseboxWatchProxyProviderHealthURLs(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.yaml")
