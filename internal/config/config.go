@@ -212,6 +212,22 @@ var supportedWatchTypes = map[string]struct{}{
 	WatchTypeAnnouncementPage: {},
 }
 
+func expandHomePath(path string) string {
+	if path == "~" {
+		home, err := os.UserHomeDir()
+		if err == nil {
+			return home
+		}
+	}
+	if strings.HasPrefix(path, "~/") {
+		home, err := os.UserHomeDir()
+		if err == nil {
+			return home + path[1:]
+		}
+	}
+	return path
+}
+
 func applyWatchDefaults(watch *WatchConfig) error {
 	provider := &watch.ProxyProvider
 	if !provider.Enabled {
@@ -228,7 +244,7 @@ func applyWatchDefaults(watch *WatchConfig) error {
 		provider.Mode = WatchProxyProviderModeProxy
 	}
 	if provider.CommandRaw != nil {
-		provider.Command = *provider.CommandRaw
+		provider.Command = expandHomePath(*provider.CommandRaw)
 	} else if strings.TrimSpace(provider.Command) == "" {
 		provider.Command = DefaultWatchBrowseboxCommand
 	}
