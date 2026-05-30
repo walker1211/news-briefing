@@ -50,6 +50,7 @@ const (
 	DefaultWatchBrowseboxCommand          = "browsebox"
 	DefaultWatchBrowseboxNodesConcurrency = 12
 	DefaultWatchBrowseboxDelayTimeoutMS   = 7000
+	DefaultWatchBrowseboxStartupTimeout   = 2 * time.Minute
 	DefaultWatchBrowseboxProxyPort        = 17997
 	DefaultWatchBrowseboxControllerPort   = 17998
 	DefaultXRefreshWaitTimeout            = 10 * time.Minute
@@ -82,23 +83,25 @@ type WatchConfig struct {
 }
 
 type WatchProxyProvider struct {
-	Enabled             bool     `yaml:"enabled"`
-	TypeRaw             *string  `yaml:"type"`
-	ModeRaw             *string  `yaml:"mode"`
-	CommandRaw          *string  `yaml:"command"`
-	Group               string   `yaml:"group"`
-	HealthURLs          []string `yaml:"health_urls"`
-	NodesConcurrencyRaw *int     `yaml:"nodes_concurrency"`
-	DelayTimeoutMSRaw   *int     `yaml:"delay_timeout_ms"`
-	ProxyPortRaw        *int     `yaml:"proxy_port"`
-	ControllerPortRaw   *int     `yaml:"controller_port"`
-	Type                string   `yaml:"-"`
-	Mode                string   `yaml:"-"`
-	Command             string   `yaml:"-"`
-	NodesConcurrency    int      `yaml:"-"`
-	DelayTimeoutMS      int      `yaml:"-"`
-	ProxyPort           int      `yaml:"-"`
-	ControllerPort      int      `yaml:"-"`
+	Enabled             bool          `yaml:"enabled"`
+	TypeRaw             *string       `yaml:"type"`
+	ModeRaw             *string       `yaml:"mode"`
+	CommandRaw          *string       `yaml:"command"`
+	Group               string        `yaml:"group"`
+	HealthURLs          []string      `yaml:"health_urls"`
+	NodesConcurrencyRaw *int          `yaml:"nodes_concurrency"`
+	DelayTimeoutMSRaw   *int          `yaml:"delay_timeout_ms"`
+	StartupTimeoutRaw   string        `yaml:"startup_timeout"`
+	ProxyPortRaw        *int          `yaml:"proxy_port"`
+	ControllerPortRaw   *int          `yaml:"controller_port"`
+	Type                string        `yaml:"-"`
+	Mode                string        `yaml:"-"`
+	Command             string        `yaml:"-"`
+	NodesConcurrency    int           `yaml:"-"`
+	DelayTimeoutMS      int           `yaml:"-"`
+	StartupTimeout      time.Duration `yaml:"-"`
+	ProxyPort           int           `yaml:"-"`
+	ControllerPort      int           `yaml:"-"`
 }
 
 type WatchSite struct {
@@ -258,6 +261,14 @@ func applyWatchDefaults(watch *WatchConfig) error {
 	} else {
 		provider.DelayTimeoutMS = *provider.DelayTimeoutMSRaw
 	}
+	if strings.TrimSpace(provider.StartupTimeoutRaw) == "" {
+		provider.StartupTimeoutRaw = DefaultWatchBrowseboxStartupTimeout.String()
+	}
+	startupTimeout, err := time.ParseDuration(strings.TrimSpace(provider.StartupTimeoutRaw))
+	if err != nil {
+		return fmt.Errorf("parse watch.proxy_provider.startup_timeout: %w", err)
+	}
+	provider.StartupTimeout = startupTimeout
 	if provider.ProxyPortRaw == nil {
 		provider.ProxyPort = DefaultWatchBrowseboxProxyPort
 	} else {
@@ -508,6 +519,9 @@ func validateWatchProxyProvider(provider WatchProxyProvider) error {
 	}
 	if provider.DelayTimeoutMS < 1 {
 		return fmt.Errorf("validate watch.proxy_provider.delay_timeout_ms: must be at least 1")
+	}
+	if provider.StartupTimeout <= 0 {
+		return fmt.Errorf("validate watch.proxy_provider.startup_timeout: must be greater than 0")
 	}
 	if err := validatePort("watch.proxy_provider.proxy_port", provider.ProxyPort); err != nil {
 		return err
