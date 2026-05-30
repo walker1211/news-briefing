@@ -2,10 +2,16 @@ package watch
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"os/signal"
+	"path/filepath"
 	"reflect"
+	"strconv"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -98,6 +104,97 @@ func TestBrowseboxProxyArgsUseExplicitHealthURLs(t *testing.T) {
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("args = %#v, want %#v", got, want)
 	}
+}
+
+func TestStartBrowseboxProxyProcessUsesConfiguredStartupTimeout(t *testing.T) {
+	dir := t.TempDir()
+	commandPath := filepath.Join(dir, "browsebox")
+	command := `#!/bin/sh
+sleep 0.2
+printf 'Proxy: http://127.0.0.1:17997\n'
+sleep 5
+`
+	if err := os.WriteFile(commandPath, []byte(command), 0o755); err != nil {
+		t.Fatalf("write fake browsebox: %v", err)
+	}
+	cfg := &config.Config{Watch: config.WatchConfig{ProxyProvider: config.WatchProxyProvider{
+		Command:        commandPath,
+		ProxyPort:      17997,
+		ControllerPort: 17998,
+		StartupTimeout: 50 * time.Millisecond,
+	}}}
+
+	session, err := startBrowseboxProxyProcess(context.Background(), cfg)
+	if err == nil {
+		_ = session.Close()
+		t.Fatal("startBrowseboxProxyProcess() error = nil, want startup timeout")
+	}
+	if !strings.Contains(err.Error(), "timeout") {
+		t.Fatalf("startBrowseboxProxyProcess() error = %v, want timeout", err)
+	}
+}
+
+func TestStartBrowseboxProxyProcessTerminatesChildGracefullyOnContextCancel(t *testing.T) {
+	dir := t.TempDir()
+	startedPath := filepath.Join(dir, "started")
+	markerPath := filepath.Join(dir, "terminated")
+	commandPath := filepath.Join(dir, "browsebox")
+	command := "#!/bin/sh\nWATCH_BROWSEBOX_PROXY_TEST_HELPER=1 WATCH_BROWSEBOX_PROXY_TEST_STARTED=" + strconv.Quote(startedPath) + " WATCH_BROWSEBOX_PROXY_TEST_MARKER=" + strconv.Quote(markerPath) + " exec " + strconv.Quote(os.Args[0]) + " -test.run=TestBrowseboxProxySignalHelper\n"
+	if err := os.WriteFile(commandPath, []byte(command), 0o755); err != nil {
+		t.Fatalf("write fake browsebox: %v", err)
+	}
+	cfg := &config.Config{Watch: config.WatchConfig{ProxyProvider: config.WatchProxyProvider{
+		Command:        commandPath,
+		ProxyPort:      17997,
+		ControllerPort: 17998,
+	}}}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	errs := make(chan error, 1)
+	go func() {
+		_, err := startBrowseboxProxyProcess(ctx, cfg)
+		errs <- err
+	}()
+
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		if _, err := os.Stat(startedPath); err == nil {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("fake browsebox did not start")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	cancel()
+
+	select {
+	case err := <-errs:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("startBrowseboxProxyProcess() error = %v, want context canceled", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("startBrowseboxProxyProcess() did not return after context cancel")
+	}
+	if _, err := os.Stat(markerPath); err != nil {
+		t.Fatalf("fake browsebox was not terminated gracefully: %v", err)
+	}
+}
+
+func TestBrowseboxProxySignalHelper(t *testing.T) {
+	if os.Getenv("WATCH_BROWSEBOX_PROXY_TEST_HELPER") != "1" {
+		return
+	}
+	signals := make(chan os.Signal, 1)
+	signal.Notify(signals, os.Interrupt, syscall.SIGTERM)
+	if err := os.WriteFile(os.Getenv("WATCH_BROWSEBOX_PROXY_TEST_STARTED"), []byte("started"), 0o644); err != nil {
+		os.Exit(2)
+	}
+	<-signals
+	if err := os.WriteFile(os.Getenv("WATCH_BROWSEBOX_PROXY_TEST_MARKER"), []byte("terminated"), 0o644); err != nil {
+		os.Exit(2)
+	}
+	os.Exit(0)
 }
 
 func TestRunContextUsesBrowseboxProxyForWatchFetches(t *testing.T) {

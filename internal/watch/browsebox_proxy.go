@@ -3,9 +3,11 @@ package watch
 import (
 	"bufio"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
+	"os"
 	"os/exec"
 	"strconv"
 	"strings"
@@ -72,6 +74,17 @@ func startBrowseboxProxyProcess(ctx context.Context, cfg *config.Config) (*brows
 	provider := cfg.Watch.ProxyProvider
 	commandCtx, cancel := context.WithCancel(ctx)
 	cmd := exec.CommandContext(commandCtx, provider.Command, browseboxProxyArgs(cfg)...)
+	cmd.Cancel = func() error {
+		if cmd.Process == nil {
+			return nil
+		}
+		err := cmd.Process.Signal(os.Interrupt)
+		if err == nil || errors.Is(err, os.ErrProcessDone) {
+			return nil
+		}
+		return err
+	}
+	cmd.WaitDelay = 5 * time.Second
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
 		cancel()
@@ -91,7 +104,11 @@ func startBrowseboxProxyProcess(ctx context.Context, cfg *config.Config) (*brows
 	go func() { done <- cmd.Wait() }()
 	go io.Copy(io.Discard, stderr)
 
-	proxyURL, err := waitBrowseboxProxyReady(ctx, stdout, provider.ProxyPort, done)
+	startupTimeout := provider.StartupTimeout
+	if startupTimeout <= 0 {
+		startupTimeout = config.DefaultWatchBrowseboxStartupTimeout
+	}
+	proxyURL, err := waitBrowseboxProxyReady(ctx, stdout, provider.ProxyPort, done, startupTimeout)
 	if err != nil {
 		cancel()
 		<-done
@@ -100,7 +117,7 @@ func startBrowseboxProxyProcess(ctx context.Context, cfg *config.Config) (*brows
 	return &browseboxProxySession{proxyURL: proxyURL, cancel: cancel, done: done}, nil
 }
 
-func waitBrowseboxProxyReady(ctx context.Context, stdout io.Reader, port int, done <-chan error) (string, error) {
+func waitBrowseboxProxyReady(ctx context.Context, stdout io.Reader, port int, done <-chan error, timeout time.Duration) (string, error) {
 	ready := fmt.Sprintf("Proxy: http://127.0.0.1:%d", port)
 	lines := make(chan string, 1)
 	go func() {
@@ -109,7 +126,7 @@ func waitBrowseboxProxyReady(ctx context.Context, stdout io.Reader, port int, do
 			lines <- scanner.Text()
 		}
 	}()
-	timer := time.NewTimer(30 * time.Second)
+	timer := time.NewTimer(timeout)
 	defer timer.Stop()
 	for {
 		select {

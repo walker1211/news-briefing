@@ -1027,6 +1027,9 @@ ai: {}
 	if provider.DelayTimeoutMS != 7000 {
 		t.Fatalf("DelayTimeoutMS = %d, want 7000", provider.DelayTimeoutMS)
 	}
+	if provider.StartupTimeout != 2*time.Minute {
+		t.Fatalf("StartupTimeout = %v, want 2m", provider.StartupTimeout)
+	}
 	if provider.ProxyPort != 17997 || provider.ControllerPort != 17998 {
 		t.Fatalf("ports = %d/%d", provider.ProxyPort, provider.ControllerPort)
 	}
@@ -1103,6 +1106,35 @@ ai: {}
 	}
 }
 
+func TestLoadAcceptsBrowseboxWatchProxyProviderStartupTimeout(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	content := `sources: []
+keywords: []
+fetch: {}
+watch:
+  proxy_provider:
+    enabled: true
+    type: browsebox
+    startup_timeout: 90s
+email: {}
+schedule: []
+output: {}
+proxy: {}
+ai: {}
+`
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if cfg.Watch.ProxyProvider.StartupTimeout != 90*time.Second {
+		t.Fatalf("StartupTimeout = %v, want 90s", cfg.Watch.ProxyProvider.StartupTimeout)
+	}
+}
+
 func TestLoadRejectsInvalidWatchProxyProviderConfig(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -1115,6 +1147,7 @@ func TestLoadRejectsInvalidWatchProxyProviderConfig(t *testing.T) {
 		{name: "bad health url", provider: "enabled: true\ntype: browsebox\nhealth_urls:\n  - not-a-url", wantErr: "watch.proxy_provider.health_urls[0]"},
 		{name: "bad concurrency", provider: "enabled: true\ntype: browsebox\nnodes_concurrency: -1", wantErr: "watch.proxy_provider.nodes_concurrency"},
 		{name: "bad delay timeout", provider: "enabled: true\ntype: browsebox\ndelay_timeout_ms: 0", wantErr: "watch.proxy_provider.delay_timeout_ms"},
+		{name: "bad startup timeout", provider: "enabled: true\ntype: browsebox\nstartup_timeout: 0s", wantErr: "watch.proxy_provider.startup_timeout"},
 		{name: "bad proxy port", provider: "enabled: true\ntype: browsebox\nproxy_port: 70000", wantErr: "watch.proxy_provider.proxy_port"},
 		{name: "bad controller port", provider: "enabled: true\ntype: browsebox\ncontroller_port: 70000", wantErr: "watch.proxy_provider.controller_port"},
 	}

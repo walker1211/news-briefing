@@ -223,6 +223,7 @@ watch:
     # health_urls omitted: defaults to watch.sites[*].home_url
     nodes_concurrency: 12
     delay_timeout_ms: 7000
+    startup_timeout: 2m
     proxy_port: 17997
     controller_port: 17998
 
