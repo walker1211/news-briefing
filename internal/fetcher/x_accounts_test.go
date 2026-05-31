@@ -774,7 +774,7 @@ func TestFetchXVisibleNDJSONIgnoresAccountStableCoverageWarning(t *testing.T) {
 	}
 }
 
-func TestFetchXVisibleNDJSONReportsSearchStableCoverageWarning(t *testing.T) {
+func TestFetchXVisibleNDJSONIgnoresSearchStableCoverageWarning(t *testing.T) {
 	dir := t.TempDir()
 	searchesPath := filepath.Join(dir, "searches.ndjson")
 	content := `{"kind":"x-visible-article","schemaVersion":1,"targetRaw":"search:Claude Code outage","targetType":"search","targetUrl":"https://x.com/search?q=Claude%20Code%20outage&src=typed_query&f=live","sourceUrl":"https://x.com/search?q=Claude%20Code%20outage&src=typed_query&f=live","finalUrl":"https://x.com/search?q=Claude%20Code%20outage&src=typed_query&f=live","windowFrom":"2026-05-19T00:00:00.000Z","windowTo":"2026-05-20T00:00:00.000Z","scrollStopReason":"stable","text":"Claude Code outage update","datetime":"2026-05-19T07:00:00.000Z","statusUrl":"https://x.com/example/status/stable-search","statusLinks":["https://x.com/example/status/stable-search"],"linkCount":1,"imageCount":0,"videoCount":0}
@@ -798,7 +798,9 @@ func TestFetchXVisibleNDJSONReportsSearchStableCoverageWarning(t *testing.T) {
 	if len(results) != 1 || len(results[0].Candidates) != 1 {
 		t.Fatalf("results = %#v, want one X candidate", results)
 	}
-	assertFailedSourceContains(t, failed, "X coverage/search:Claude Code outage", "stable")
+	if len(failed) != 0 {
+		t.Fatalf("failed = %#v, want search stable coverage ignored", failed)
+	}
 }
 
 func TestFetchXVisibleNDJSONFiltersWindowWhitelistAndDeduplicates(t *testing.T) {
