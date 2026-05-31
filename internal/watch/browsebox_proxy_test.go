@@ -156,15 +156,21 @@ func TestStartBrowseboxProxyProcessTerminatesChildGracefullyOnContextCancel(t *t
 		errs <- err
 	}()
 
-	deadline := time.Now().Add(2 * time.Second)
+	startupTimeout := time.NewTimer(10 * time.Second)
+	defer startupTimeout.Stop()
+	ticker := time.NewTicker(10 * time.Millisecond)
+	defer ticker.Stop()
 	for {
 		if _, err := os.Stat(startedPath); err == nil {
 			break
 		}
-		if time.Now().After(deadline) {
+		select {
+		case err := <-errs:
+			t.Fatalf("startBrowseboxProxyProcess() returned before helper started: %v", err)
+		case <-startupTimeout.C:
 			t.Fatal("fake browsebox did not start")
+		case <-ticker.C:
 		}
-		time.Sleep(10 * time.Millisecond)
 	}
 	cancel()
 
