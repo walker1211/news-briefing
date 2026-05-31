@@ -35,6 +35,10 @@ func runAnnouncementSite(ctx context.Context, site config.WatchSite, now time.Ti
 
 	stateKey := watchCategoryStateKey(site.Name, site.Name)
 	prevSnapshot, hasPrev := indexState.Categories[stateKey]
+	if hasPrev && isClaudeReleaseNotesOverviewURL(site.HomeURL) {
+		prevSnapshot = normalizeClaudeReleaseNotesSnapshotURLs(prevSnapshot, site.HomeURL)
+		migrateClaudeReleaseNotesArticleState(articleState, site.HomeURL)
+	}
 	if !hasPrev {
 		for _, item := range current.Items {
 			articleHTML, err := fetchHTML(ctx, item.URL)
@@ -206,6 +210,9 @@ func parseAnthropicAnnouncementIndex(source string, url string, html string) (mo
 
 	var items []model.WatchIndexItem
 	if isClaudeReleaseNotesOverviewURL(url) {
+		if isClaudeAppUnavailablePage(doc) {
+			return model.WatchIndexSnapshot{}, fmt.Errorf("release notes page unavailable: redirected to Claude app unavailable in region page")
+		}
 		items = parseClaudeReleaseNotesOverview(doc, url)
 		if len(items) == 0 {
 			return model.WatchIndexSnapshot{}, fmt.Errorf("release notes date anchors not found")
@@ -304,12 +311,70 @@ func isClaudeReleaseNotesDateFragment(fragment string) bool {
 	return claudeReleaseNotesDateFragmentPattern.MatchString(strings.TrimSpace(fragment))
 }
 
+func normalizeClaudeReleaseNotesSnapshotURLs(snapshot model.WatchIndexSnapshot, pageURL string) model.WatchIndexSnapshot {
+	for i := range snapshot.Items {
+		normalizedURL := normalizeClaudeReleaseNotesEntryURL(snapshot.Items[i].URL, pageURL)
+		if normalizedURL == snapshot.Items[i].URL {
+			continue
+		}
+		snapshot.Items[i].URL = normalizedURL
+		snapshot.Items[i].ItemHash = hashWatchFields(snapshot.Items[i].Title, normalizedURL, snapshot.Items[i].Snippet)
+	}
+	snapshot.Hash = hashSnapshotItems(snapshot.Items)
+	return snapshot
+}
+
+func migrateClaudeReleaseNotesArticleState(articleState ArticleState, pageURL string) {
+	for rawURL, state := range articleState {
+		normalizedURL := normalizeClaudeReleaseNotesEntryURL(rawURL, pageURL)
+		if normalizedURL == rawURL {
+			continue
+		}
+		if _, exists := articleState[normalizedURL]; !exists {
+			state.URL = normalizedURL
+			articleState[normalizedURL] = state
+		}
+		delete(articleState, rawURL)
+	}
+}
+
+func normalizeClaudeReleaseNotesEntryURL(rawURL string, pageURL string) string {
+	if !isClaudeReleaseNotesOverviewEntryURL(rawURL) {
+		return rawURL
+	}
+	fragment := releaseNotesOverviewFragment(rawURL)
+	if fragment == "" {
+		return rawURL
+	}
+	normalizedURL := releaseNotesOverviewURLWithFragment(pageURL, fragment)
+	if normalizedURL == "" {
+		return rawURL
+	}
+	return normalizedURL
+}
+
 func isClaudeReleaseNotesOverviewURL(rawURL string) bool {
 	parsed, err := url.Parse(rawURL)
 	if err != nil {
 		return false
 	}
-	return parsed.Host == "platform.claude.com" && parsed.Path == "/docs/en/release-notes/overview"
+	return isClaudeReleaseNotesOverview(parsed)
+}
+
+func isClaudeReleaseNotesOverview(parsed *url.URL) bool {
+	switch parsed.Host {
+	case "platform.claude.com":
+		return parsed.Path == "/docs/en/release-notes/overview"
+	case "docs.claude.com", "docs.anthropic.com":
+		return parsed.Path == "/en/release-notes/overview"
+	default:
+		return false
+	}
+}
+
+func isClaudeAppUnavailablePage(doc *goquery.Document) bool {
+	text := strings.ToLower(normalizeWatchText(doc.Find("title, h1").Text()))
+	return strings.Contains(text, "app unavailable in region")
 }
 
 func parseAnnouncementArticleFromURL(rawURL string, html string) (title string, summary string, body string, err error) {
@@ -367,7 +432,7 @@ func isClaudeReleaseNotesOverviewEntryURL(rawURL string) bool {
 	if err != nil {
 		return false
 	}
-	return parsed.Host == "platform.claude.com" && parsed.Path == "/docs/en/release-notes/overview" && strings.TrimSpace(parsed.Fragment) != ""
+	return isClaudeReleaseNotesOverview(parsed) && strings.TrimSpace(parsed.Fragment) != ""
 }
 
 func parseClaudeReleaseNotesOverviewArticle(rawURL string, html string) (title string, summary string, body string, err error) {

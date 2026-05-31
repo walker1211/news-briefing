@@ -405,6 +405,70 @@ func TestRunClaudeReleaseNotesIncludesNewArticleInBriefing(t *testing.T) {
 	}
 }
 
+func TestRunClaudeReleaseNotesHostMigrationDoesNotReannounceExistingEntries(t *testing.T) {
+	oldHome := `<html><body><main><h3><div id="february-17-2026"><div>February 17, 2026</div></div></h3><ul><li>We've launched <a href="https://www.anthropic.com/news/claude-sonnet-4-6">Claude Sonnet 4.6</a>, our latest balanced model combining speed and intelligence for everyday tasks. Sonnet 4.6 delivers improved agentic search performance while consuming fewer tokens.</li></ul></main></body></html>`
+	responses := map[string]string{
+		"https://docs.claude.com/en/release-notes/overview":                  mustReadAnnouncementFixture(t, "claude_release_notes_home.html"),
+		"https://docs.claude.com/en/release-notes/overview#april-16-2026":    mustReadAnnouncementFixture(t, "claude_release_notes_home.html"),
+		"https://docs.claude.com/en/release-notes/overview#february-17-2026": mustReadAnnouncementFixture(t, "claude_release_notes_home.html"),
+	}
+	fetchHTML := func(ctx context.Context, url string) (string, error) { return responses[url], nil }
+
+	cfg := &config.Config{
+		Output: config.OutputCfg{Dir: t.TempDir()},
+		Watch: config.WatchConfig{Sites: []config.WatchSite{{
+			Name:             "Claude Platform Release Notes",
+			Type:             config.WatchTypeAnnouncementPage,
+			HomeURL:          "https://docs.claude.com/en/release-notes/overview",
+			BriefingCategory: "AI/科技",
+			HighValueKeywords: []string{
+				"Claude", "Opus", "Sonnet", "API", "release",
+			},
+		}}},
+	}
+
+	indexStore := NewIndexStore(cfg.Output.Dir)
+	articleStore := NewArticleStore(cfg.Output.Dir)
+	baseline, err := parseAnthropicAnnouncementIndex("Claude Platform Release Notes", "https://platform.claude.com/docs/en/release-notes/overview", oldHome)
+	if err != nil {
+		t.Fatalf("parseAnthropicAnnouncementIndex() error = %v", err)
+	}
+	if err := indexStore.Save(IndexState{Categories: map[string]model.WatchIndexSnapshot{
+		"Claude Platform Release Notes::Claude Platform Release Notes": baseline,
+	}}); err != nil {
+		t.Fatalf("indexStore.Save() error = %v", err)
+	}
+	if err := articleStore.Save(ArticleState{
+		"https://platform.claude.com/docs/en/release-notes/overview#february-17-2026": {
+			URL:         "https://platform.claude.com/docs/en/release-notes/overview#february-17-2026",
+			Title:       "We've launched Claude Sonnet 4.6",
+			SummaryHash: hashWatchContent("We've launched Claude Sonnet 4.6, our latest balanced model combining speed and intelligence for everyday tasks. Sonnet 4.6 delivers improved agentic search performance while consuming fewer tokens."),
+			BodyHash:    hashWatchContent("We've launched Claude Sonnet 4.6, our latest balanced model combining speed and intelligence for everyday tasks. Sonnet 4.6 delivers improved agentic search performance while consuming fewer tokens. API code execution is now free when used with web search or web fetch."),
+		},
+	}); err != nil {
+		t.Fatalf("articleStore.Save() error = %v", err)
+	}
+
+	articles, report, err := runContext(context.Background(), cfg, time.Date(2026, 5, 31, 18, 0, 0, 0, time.UTC), fetchHTML)
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if len(articles) != 1 {
+		t.Fatalf("len(articles) = %d, want 1; articles=%#v", len(articles), articles)
+	}
+	if articles[0].Link != "https://docs.claude.com/en/release-notes/overview#april-16-2026" {
+		t.Fatalf("articles[0].Link = %q", articles[0].Link)
+	}
+	for _, event := range report.Events {
+		if event.ArticleURL == "https://docs.claude.com/en/release-notes/overview#february-17-2026" && event.EventType == "new_article" {
+			t.Fatalf("existing February entry was reannounced after host migration: %#v", event)
+		}
+		if event.ArticleURL == "https://platform.claude.com/docs/en/release-notes/overview#february-17-2026" && event.EventType == "removed_article" {
+			t.Fatalf("legacy February entry was reported removed after host migration: %#v", event)
+		}
+	}
+}
+
 func TestRunSkipsFailedAnnouncementSiteAndKeepsOtherWatchSites(t *testing.T) {
 	responses := map[string]string{
 		"https://support.claude.com/zh-CN":                                  mustReadFixture(t, "anthropic/home.html"),
