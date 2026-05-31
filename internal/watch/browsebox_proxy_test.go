@@ -197,6 +197,58 @@ func TestBrowseboxProxySignalHelper(t *testing.T) {
 	os.Exit(0)
 }
 
+func TestRunContextBypassesBrowseboxProxyForClaudeReleaseNotesDocs(t *testing.T) {
+	proxyHits := 0
+	proxy := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		proxyHits++
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		_, _ = w.Write([]byte(`<html><head><title>App unavailable in region | Claude</title></head><body><h1>App unavailable in region</h1></body></html>`))
+	}))
+	t.Cleanup(proxy.Close)
+
+	oldStart := startBrowseboxProxy
+	t.Cleanup(func() { startBrowseboxProxy = oldStart })
+	startBrowseboxProxy = func(ctx context.Context, cfg *config.Config) (*browseboxProxySession, error) {
+		done := make(chan error, 1)
+		done <- nil
+		return &browseboxProxySession{proxyURL: proxy.URL, cancel: func() {}, done: done}, nil
+	}
+
+	directFetches := 0
+	fixture := mustReadAnnouncementFixture(t, "claude_release_notes_home.html")
+	fetchHTML := func(ctx context.Context, url string) (string, error) {
+		directFetches++
+		if !strings.HasPrefix(url, "https://docs.claude.com/en/release-notes/overview") {
+			t.Fatalf("direct fetch URL = %s, want Claude docs release notes URL", url)
+		}
+		return fixture, nil
+	}
+	cfg := &config.Config{
+		Output: config.OutputCfg{Dir: t.TempDir(), Mode: model.OutputModeOriginalOnly},
+		Fetch:  config.FetchConfig{RetryTimes: 1, Timeout: 2 * time.Second},
+		Watch: config.WatchConfig{
+			Sites: []config.WatchSite{
+				{Name: "Claude Platform Release Notes", Type: config.WatchTypeAnnouncementPage, HomeURL: "https://docs.claude.com/en/release-notes/overview", BriefingCategory: "AI/科技"},
+			},
+			ProxyProvider: config.WatchProxyProvider{Enabled: true, Type: config.WatchProxyProviderTypeBrowsebox},
+		},
+	}
+
+	_, report, err := runContext(context.Background(), cfg, time.Date(2026, 5, 31, 18, 0, 0, 0, time.UTC), fetchHTML)
+	if err != nil {
+		t.Fatalf("runContext() error = %v", err)
+	}
+	if len(report.Events) != 0 {
+		t.Fatalf("report.Events = %#v, want none", report.Events)
+	}
+	if proxyHits != 0 {
+		t.Fatalf("proxyHits = %d, want 0", proxyHits)
+	}
+	if directFetches == 0 {
+		t.Fatal("direct fetcher was not used")
+	}
+}
+
 func TestRunContextUsesBrowseboxProxyForWatchFetches(t *testing.T) {
 	var fetchedURLs []string
 	proxy := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

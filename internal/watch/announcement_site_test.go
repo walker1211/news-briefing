@@ -3,6 +3,7 @@ package watch
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -37,7 +38,7 @@ func TestParseAnthropicAnnouncementIndexExtractsNewsArticles(t *testing.T) {
 func TestParseClaudeReleaseNotesIndexExtractsEntries(t *testing.T) {
 	html := mustReadAnnouncementFixture(t, "claude_release_notes_home.html")
 
-	snapshot, err := parseAnthropicAnnouncementIndex("Claude Platform Release Notes", "https://platform.claude.com/docs/en/release-notes/overview", html)
+	snapshot, err := parseAnthropicAnnouncementIndex("Claude Platform Release Notes", "https://docs.claude.com/en/release-notes/overview", html)
 	if err != nil {
 		t.Fatalf("parseAnthropicAnnouncementIndex() error = %v", err)
 	}
@@ -47,11 +48,35 @@ func TestParseClaudeReleaseNotesIndexExtractsEntries(t *testing.T) {
 	if snapshot.Items[0].Title != "We've launched Claude Opus 4.7" {
 		t.Fatalf("snapshot.Items[0].Title = %q", snapshot.Items[0].Title)
 	}
-	if snapshot.Items[0].URL != "https://platform.claude.com/docs/en/release-notes/overview#april-16-2026" {
+	if snapshot.Items[0].URL != "https://docs.claude.com/en/release-notes/overview#april-16-2026" {
 		t.Fatalf("snapshot.Items[0].URL = %q", snapshot.Items[0].URL)
 	}
-	if snapshot.Items[1].URL != "https://platform.claude.com/docs/en/release-notes/overview#february-17-2026" {
+	if snapshot.Items[1].URL != "https://docs.claude.com/en/release-notes/overview#february-17-2026" {
 		t.Fatalf("snapshot.Items[1].URL = %q", snapshot.Items[1].URL)
+	}
+}
+
+func TestParseClaudeReleaseNotesIndexExtractsEntriesFromDocsAnthropicHost(t *testing.T) {
+	html := mustReadAnnouncementFixture(t, "claude_release_notes_home.html")
+
+	snapshot, err := parseAnthropicAnnouncementIndex("Claude Platform Release Notes", "https://docs.anthropic.com/en/release-notes/overview", html)
+	if err != nil {
+		t.Fatalf("parseAnthropicAnnouncementIndex() error = %v", err)
+	}
+	if len(snapshot.Items) == 0 {
+		t.Fatal("len(snapshot.Items) = 0, want > 0")
+	}
+	if snapshot.Items[0].URL != "https://docs.anthropic.com/en/release-notes/overview#april-16-2026" {
+		t.Fatalf("snapshot.Items[0].URL = %q", snapshot.Items[0].URL)
+	}
+}
+
+func TestParseClaudeReleaseNotesIndexReportsUnavailableRedirectPage(t *testing.T) {
+	html := `<html><head><title>App unavailable in region | Claude</title></head><body><main><h1>App unavailable in region</h1></main></body></html>`
+
+	_, err := parseAnthropicAnnouncementIndex("Claude Platform Release Notes", "https://docs.claude.com/en/release-notes/overview", html)
+	if err == nil || !strings.Contains(err.Error(), "release notes page unavailable") {
+		t.Fatalf("parseAnthropicAnnouncementIndex() error = %v, want release notes page unavailable", err)
 	}
 }
 
@@ -121,7 +146,7 @@ func TestParseClaudeReleaseNotesOverviewArticleExtractsEntryByFragment(t *testin
 		</ul>
 	</main></body></html>`
 
-	title, summary, body, err := parseAnnouncementArticleFromURL("https://platform.claude.com/docs/en/release-notes/overview#april-16-2026", html)
+	title, summary, body, err := parseAnnouncementArticleFromURL("https://docs.claude.com/en/release-notes/overview#april-16-2026", html)
 	if err != nil {
 		t.Fatalf("parseAnnouncementArticleFromURL() error = %v", err)
 	}
