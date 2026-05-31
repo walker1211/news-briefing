@@ -207,6 +207,9 @@ func parseAnthropicAnnouncementIndex(source string, url string, html string) (mo
 	var items []model.WatchIndexItem
 	if isClaudeReleaseNotesOverviewURL(url) {
 		items = parseClaudeReleaseNotesOverview(doc, url)
+		if len(items) == 0 {
+			return model.WatchIndexSnapshot{}, fmt.Errorf("release notes date anchors not found")
+		}
 	} else {
 		items = parseAnnouncementLinkIndex(doc, url)
 	}
@@ -294,47 +297,11 @@ func parseClaudeReleaseNotesOverview(doc *goquery.Document, pageURL string) []mo
 			ItemHash: hashWatchFields(title, entryURL, snippet),
 		})
 	})
-	if len(items) > 0 {
-		return items
-	}
-	return parseClaudeReleaseNotesOverviewLegacy(doc, pageURL)
+	return items
 }
 
 func isClaudeReleaseNotesDateFragment(fragment string) bool {
 	return claudeReleaseNotesDateFragmentPattern.MatchString(strings.TrimSpace(fragment))
-}
-
-func parseClaudeReleaseNotesOverviewLegacy(doc *goquery.Document, pageURL string) []model.WatchIndexItem {
-	items := make([]model.WatchIndexItem, 0)
-	seen := make(map[string]struct{})
-	doc.Find("a[href]").Each(func(i int, anchor *goquery.Selection) {
-		href := strings.TrimSpace(anchor.AttrOr("href", ""))
-		entryURL := releaseNotesOverviewEntryURL(pageURL, href)
-		if entryURL == "" {
-			return
-		}
-		if _, ok := seen[entryURL]; ok {
-			return
-		}
-		if anchor.ParentsFiltered("nav").Length() > 0 {
-			return
-		}
-		title := normalizeWatchText(anchor.Text())
-		if title == "" {
-			return
-		}
-		container := anchor.Parent()
-		snippet := normalizeWatchText(container.Find("p, li").First().Text())
-		seen[entryURL] = struct{}{}
-		items = append(items, model.WatchIndexItem{
-			Title:    title,
-			URL:      entryURL,
-			Position: len(items) + 1,
-			Snippet:  snippet,
-			ItemHash: hashWatchFields(title, entryURL, snippet),
-		})
-	})
-	return items
 }
 
 func isClaudeReleaseNotesOverviewURL(rawURL string) bool {
@@ -343,46 +310,6 @@ func isClaudeReleaseNotesOverviewURL(rawURL string) bool {
 		return false
 	}
 	return parsed.Host == "platform.claude.com" && parsed.Path == "/docs/en/release-notes/overview"
-}
-
-func releaseNotesOverviewEntryURL(pageURL string, href string) string {
-	if href == "" {
-		return ""
-	}
-	base, err := url.Parse(pageURL)
-	if err != nil {
-		return ""
-	}
-	reference, err := url.Parse(href)
-	if err != nil {
-		return ""
-	}
-	resolved := base.ResolveReference(reference)
-	if resolved.Host != "platform.claude.com" {
-		return ""
-	}
-
-	fragment := strings.TrimSpace(resolved.Fragment)
-	if fragment == "" {
-		slug := strings.TrimPrefix(resolved.Path, "/docs/en/release-notes/")
-		if slug != resolved.Path {
-			fragment = strings.Trim(slug, "/")
-		}
-	}
-	if fragment == "" {
-		fragment = strings.Trim(strings.TrimPrefix(strings.TrimSpace(href), "#"), "/")
-	}
-	if fragment == "" {
-		fragment = strings.Trim(strings.TrimPrefix(strings.TrimSpace(reference.Path), "/"), "/")
-	}
-	if fragment == "" || strings.Contains(fragment, "/") || fragment == "api" || fragment == "overview" {
-		return ""
-	}
-
-	resolved.RawQuery = ""
-	resolved.Path = "/docs/en/release-notes/overview"
-	resolved.Fragment = fragment
-	return resolved.String()
 }
 
 func parseAnnouncementArticleFromURL(rawURL string, html string) (title string, summary string, body string, err error) {

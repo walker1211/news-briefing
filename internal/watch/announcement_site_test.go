@@ -79,6 +79,18 @@ func TestParseClaudeReleaseNotesIndexIgnoresNonReleaseFragments(t *testing.T) {
 	}
 }
 
+func TestParseClaudeReleaseNotesIndexRequiresDateAnchors(t *testing.T) {
+	html := `<html><body><main>
+		<nav><a href="claude-for-chrome">Claude for Chrome</a></nav>
+		<a href="/docs/en/release-notes/claude-for-chrome">Claude for Chrome</a>
+	</main></body></html>`
+
+	_, err := parseAnthropicAnnouncementIndex("Claude Platform Release Notes", "https://platform.claude.com/docs/en/release-notes/overview", html)
+	if err == nil {
+		t.Fatal("parseAnthropicAnnouncementIndex() error = nil, want date anchor error")
+	}
+}
+
 func TestParseAnthropicAnnouncementArticleExtractsSummaryAndBody(t *testing.T) {
 	html := mustReadAnnouncementFixture(t, "anthropic_news_opus47.html")
 
@@ -140,83 +152,6 @@ func TestParseAnthropicAnnouncementIndexIgnoresOutsideAnnouncementLinks(t *testi
 	}
 	if snapshot.Items[0].URL != "https://www.anthropic.com/news/claude-opus-4-7" {
 		t.Fatalf("snapshot.Items[0].URL = %q", snapshot.Items[0].URL)
-	}
-}
-
-func TestParseClaudeReleaseNotesIndexResolvesRelativeAnnouncementLinks(t *testing.T) {
-	html := `<html><body><main><section><ul><li><a href="claude-opus-4-7">We've launched Claude Opus 4.7</a></li></ul></section></main></body></html>`
-
-	snapshot, err := parseAnthropicAnnouncementIndex("Claude Platform Release Notes", "https://platform.claude.com/docs/en/release-notes/overview", html)
-	if err != nil {
-		t.Fatalf("parseAnthropicAnnouncementIndex() error = %v", err)
-	}
-	if len(snapshot.Items) != 1 {
-		t.Fatalf("len(snapshot.Items) = %d, want 1; items=%#v", len(snapshot.Items), snapshot.Items)
-	}
-	if snapshot.Items[0].URL != "https://platform.claude.com/docs/en/release-notes/overview#claude-opus-4-7" {
-		t.Fatalf("snapshot.Items[0].URL = %q", snapshot.Items[0].URL)
-	}
-}
-
-func TestParseClaudeReleaseNotesIndexIgnoresAnthropicNewsLinks(t *testing.T) {
-	html := `<html><body><main><section><ul>
-		<li><a href="https://www.anthropic.com/news/claude-opus-4-7">We've launched Claude Opus 4.7</a></li>
-		<li><a href="claude-sonnet-4-6">We've launched Claude Sonnet 4.6</a></li>
-	</ul></section></main></body></html>`
-
-	snapshot, err := parseAnthropicAnnouncementIndex("Claude Platform Release Notes", "https://platform.claude.com/docs/en/release-notes/overview", html)
-	if err != nil {
-		t.Fatalf("parseAnthropicAnnouncementIndex() error = %v", err)
-	}
-	if len(snapshot.Items) != 1 {
-		t.Fatalf("len(snapshot.Items) = %d, want 1; items=%#v", len(snapshot.Items), snapshot.Items)
-	}
-	if snapshot.Items[0].URL != "https://platform.claude.com/docs/en/release-notes/overview#claude-sonnet-4-6" {
-		t.Fatalf("snapshot.Items[0].URL = %q", snapshot.Items[0].URL)
-	}
-}
-
-func TestParseClaudeReleaseNotesIndexIgnoresIndexPages(t *testing.T) {
-	html := `<html><body><main><section><ul>
-		<li><a href="/docs/en/release-notes/api">API Release Notes</a></li>
-		<li><a href="/docs/en/release-notes/">Release Notes Home</a></li>
-		<li><a href="/docs/en/release-notes/overview">Release Notes Overview</a></li>
-		<li><a href="claude-sonnet-4-6">We've launched Claude Sonnet 4.6</a></li>
-	</ul></section></main></body></html>`
-
-	snapshot, err := parseAnthropicAnnouncementIndex("Claude Platform Release Notes", "https://platform.claude.com/docs/en/release-notes/overview", html)
-	if err != nil {
-		t.Fatalf("parseAnthropicAnnouncementIndex() error = %v", err)
-	}
-	if len(snapshot.Items) != 1 {
-		t.Fatalf("len(snapshot.Items) = %d, want 1; items=%#v", len(snapshot.Items), snapshot.Items)
-	}
-	if snapshot.Items[0].URL != "https://platform.claude.com/docs/en/release-notes/overview#claude-sonnet-4-6" {
-		t.Fatalf("snapshot.Items[0].URL = %q", snapshot.Items[0].URL)
-	}
-}
-
-func TestParseClaudeReleaseNotesIndexIgnoresOverviewNoiseLinks(t *testing.T) {
-	html := `<html><body><main>
-		<nav>
-			<a href="claude-opus-4-7">Sidebar Opus Link</a>
-		</nav>
-		<section id="claude-opus-4-7">
-			<h3>April 16, 2026</h3>
-			<a href="claude-opus-4-7">We've launched Claude Opus 4.7</a>
-			<p>Claude Opus 4.7 is now available in the Anthropic API.</p>
-		</section>
-	</main></body></html>`
-
-	snapshot, err := parseAnthropicAnnouncementIndex("Claude Platform Release Notes", "https://platform.claude.com/docs/en/release-notes/overview", html)
-	if err != nil {
-		t.Fatalf("parseAnthropicAnnouncementIndex() error = %v", err)
-	}
-	if len(snapshot.Items) != 1 {
-		t.Fatalf("len(snapshot.Items) = %d, want 1; items=%#v", len(snapshot.Items), snapshot.Items)
-	}
-	if snapshot.Items[0].Title != "We've launched Claude Opus 4.7" {
-		t.Fatalf("snapshot.Items[0].Title = %q", snapshot.Items[0].Title)
 	}
 }
 
