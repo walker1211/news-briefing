@@ -705,7 +705,7 @@ func xVisibleCoverageWarning(item xVisibleArticle, from, to time.Time) *FailedSo
 	if item.TargetType == "account" && reason == "stable" {
 		return nil
 	}
-	if item.TargetType == "search" && reason == "max-scrolls" {
+	if item.TargetType == "search" && (reason == "max-scrolls" || reason == "stable") {
 		return nil
 	}
 	if strings.TrimSpace(item.WindowFrom) != "" || strings.TrimSpace(item.WindowTo) != "" {
