@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"net/url"
 	"os"
 	"os/exec"
 	"strconv"
@@ -157,15 +156,6 @@ func watchHTTPClientForProxy(cfg *config.Config, proxyURL string) *http.Client {
 	return fetcher.NewHTTPClient(config.Proxy{HTTP: proxyURL}, cfg.Fetch.Timeout)
 }
 
-func shouldBypassBrowseboxProxy(rawURL string) bool {
-	parsed, err := url.Parse(rawURL)
-	if err != nil {
-		return false
-	}
-	switch parsed.Host {
-	case "docs.claude.com", "docs.anthropic.com":
-		return parsed.Path == "/en/release-notes/overview"
-	default:
-		return false
-	}
+func shouldRetryWatchProxyWithDirectFetch(rawURL string, html string) bool {
+	return isClaudeReleaseNotesOverviewURL(rawURL) && isClaudeAppUnavailableHTML(html)
 }

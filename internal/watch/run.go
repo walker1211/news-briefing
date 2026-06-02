@@ -3,6 +3,7 @@ package watch
 import (
 	"context"
 	"crypto/sha1"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -40,6 +41,14 @@ type watchFetchRetrySettings struct {
 	times int
 	wait  time.Duration
 }
+
+type nonRetryableWatchFetchError struct {
+	err error
+}
+
+func (e nonRetryableWatchFetchError) Error() string { return e.err.Error() }
+
+func (e nonRetryableWatchFetchError) Unwrap() error { return e.err }
 
 func fetchWatchHTMLWith(ctx context.Context, client *http.Client, url string) (string, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
@@ -82,6 +91,10 @@ func retryingFetchHTML(fetchHTML fetchHTMLFunc, settings watchFetchRetrySettings
 			html, err := fetchHTML(ctx, url)
 			if err == nil {
 				return html, nil
+			}
+			var nonRetryable nonRetryableWatchFetchError
+			if errors.As(err, &nonRetryable) {
+				return "", nonRetryable.err
 			}
 			if ctxErr := ctx.Err(); ctxErr != nil {
 				return "", ctxErr
@@ -147,10 +160,21 @@ func runContext(ctx context.Context, cfg *config.Config, now time.Time, fetchHTM
 			return fetchWatchHTMLWith(ctx, client, url)
 		}
 		fetchHTML = func(ctx context.Context, url string) (string, error) {
-			if shouldBypassBrowseboxProxy(url) {
-				return directFetchHTML(ctx, url)
+			html, err := proxyFetchHTML(ctx, url)
+			if err != nil {
+				return "", err
 			}
-			return proxyFetchHTML(ctx, url)
+			if !shouldRetryWatchProxyWithDirectFetch(url, html) {
+				return html, nil
+			}
+			fallbackHTML, err := directFetchHTML(ctx, url)
+			if err != nil {
+				return "", fmt.Errorf("release notes page unavailable via browsebox proxy; fallback fetch failed: %w", err)
+			}
+			if shouldRetryWatchProxyWithDirectFetch(url, fallbackHTML) {
+				return "", nonRetryableWatchFetchError{err: fmt.Errorf("release notes page unavailable: browsebox and fallback proxy both redirected to Claude app unavailable in region page")}
+			}
+			return fallbackHTML, nil
 		}
 	}
 	fetchHTML = retryingFetchHTML(fetchHTML, watchFetchRetrySettingsFromConfig(cfg))
