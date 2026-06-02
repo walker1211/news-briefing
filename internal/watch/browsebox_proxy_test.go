@@ -11,6 +11,7 @@ import (
 	"reflect"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"testing"
 	"time"
@@ -203,10 +204,22 @@ func TestBrowseboxProxySignalHelper(t *testing.T) {
 	os.Exit(0)
 }
 
-func TestRunContextBypassesBrowseboxProxyForClaudeReleaseNotesDocs(t *testing.T) {
-	proxyHits := 0
+func TestRunContextRetriesDirectFetchWhenBrowseboxReturnsClaudeRegionUnavailable(t *testing.T) {
+	const releaseNotesURL = "http://docs.claude.com/en/release-notes/overview"
+	var callsMu sync.Mutex
+	var calls []string
+	recordCall := func(call string) {
+		callsMu.Lock()
+		defer callsMu.Unlock()
+		calls = append(calls, call)
+	}
+	snapshotCalls := func() []string {
+		callsMu.Lock()
+		defer callsMu.Unlock()
+		return append([]string(nil), calls...)
+	}
 	proxy := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		proxyHits++
+		recordCall("browsebox")
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		_, _ = w.Write([]byte(`<html><head><title>App unavailable in region | Claude</title></head><body><h1>App unavailable in region</h1></body></html>`))
 	}))
@@ -220,11 +233,10 @@ func TestRunContextBypassesBrowseboxProxyForClaudeReleaseNotesDocs(t *testing.T)
 		return &browseboxProxySession{proxyURL: proxy.URL, cancel: func() {}, done: done}, nil
 	}
 
-	directFetches := 0
 	fixture := mustReadAnnouncementFixture(t, "claude_release_notes_home.html")
 	fetchHTML := func(ctx context.Context, url string) (string, error) {
-		directFetches++
-		if !strings.HasPrefix(url, "https://docs.claude.com/en/release-notes/overview") {
+		recordCall("direct:" + url)
+		if !strings.HasPrefix(url, releaseNotesURL) {
 			t.Fatalf("direct fetch URL = %s, want Claude docs release notes URL", url)
 		}
 		return fixture, nil
@@ -234,7 +246,7 @@ func TestRunContextBypassesBrowseboxProxyForClaudeReleaseNotesDocs(t *testing.T)
 		Fetch:  config.FetchConfig{RetryTimes: 1, Timeout: 2 * time.Second},
 		Watch: config.WatchConfig{
 			Sites: []config.WatchSite{
-				{Name: "Claude Platform Release Notes", Type: config.WatchTypeAnnouncementPage, HomeURL: "https://docs.claude.com/en/release-notes/overview", BriefingCategory: "AI/科技"},
+				{Name: "Claude Platform Release Notes", Type: config.WatchTypeAnnouncementPage, HomeURL: releaseNotesURL, BriefingCategory: "AI/科技"},
 			},
 			ProxyProvider: config.WatchProxyProvider{Enabled: true, Type: config.WatchProxyProviderTypeBrowsebox},
 		},
@@ -247,11 +259,144 @@ func TestRunContextBypassesBrowseboxProxyForClaudeReleaseNotesDocs(t *testing.T)
 	if len(report.Events) != 0 {
 		t.Fatalf("report.Events = %#v, want none", report.Events)
 	}
-	if proxyHits != 0 {
-		t.Fatalf("proxyHits = %d, want 0", proxyHits)
+	gotCalls := snapshotCalls()
+	wantCalls := []string{"browsebox", "direct:" + releaseNotesURL}
+	if len(gotCalls) < len(wantCalls) || gotCalls[0] != wantCalls[0] || gotCalls[1] != wantCalls[1] {
+		t.Fatalf("call order = %#v, want first two calls %#v", gotCalls, wantCalls)
 	}
-	if directFetches == 0 {
-		t.Fatal("direct fetcher was not used")
+}
+
+func TestRunContextReportsClearErrorWhenBrowseboxAndDirectReleaseNotesUnavailable(t *testing.T) {
+	const releaseNotesURL = "http://docs.claude.com/en/release-notes/overview"
+	unavailableHTML := `<html><head><title>App unavailable in region | Claude</title></head><body><h1>App unavailable in region</h1></body></html>`
+	var callsMu sync.Mutex
+	var calls []string
+	recordCall := func(call string) {
+		callsMu.Lock()
+		defer callsMu.Unlock()
+		calls = append(calls, call)
+	}
+	snapshotCalls := func() []string {
+		callsMu.Lock()
+		defer callsMu.Unlock()
+		return append([]string(nil), calls...)
+	}
+	proxy := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		recordCall("browsebox")
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		_, _ = w.Write([]byte(unavailableHTML))
+	}))
+	t.Cleanup(proxy.Close)
+
+	oldStart := startBrowseboxProxy
+	t.Cleanup(func() { startBrowseboxProxy = oldStart })
+	startBrowseboxProxy = func(ctx context.Context, cfg *config.Config) (*browseboxProxySession, error) {
+		done := make(chan error, 1)
+		done <- nil
+		return &browseboxProxySession{proxyURL: proxy.URL, cancel: func() {}, done: done}, nil
+	}
+
+	fetchHTML := func(ctx context.Context, url string) (string, error) {
+		recordCall("direct:" + url)
+		return unavailableHTML, nil
+	}
+	cfg := &config.Config{
+		Output: config.OutputCfg{Dir: t.TempDir(), Mode: model.OutputModeOriginalOnly},
+		Fetch:  config.FetchConfig{RetryTimes: 1, Timeout: 2 * time.Second},
+		Watch: config.WatchConfig{
+			Sites: []config.WatchSite{
+				{Name: "Claude Platform Release Notes", Type: config.WatchTypeAnnouncementPage, HomeURL: releaseNotesURL, BriefingCategory: "AI/科技"},
+			},
+			ProxyProvider: config.WatchProxyProvider{Enabled: true, Type: config.WatchProxyProviderTypeBrowsebox},
+		},
+	}
+
+	_, report, err := runContext(context.Background(), cfg, time.Date(2026, 5, 31, 18, 0, 0, 0, time.UTC), fetchHTML)
+	if err != nil {
+		t.Fatalf("runContext() error = %v", err)
+	}
+	gotCalls := snapshotCalls()
+	wantCalls := []string{"browsebox", "direct:" + releaseNotesURL}
+	if len(gotCalls) < len(wantCalls) || gotCalls[0] != wantCalls[0] || gotCalls[1] != wantCalls[1] {
+		t.Fatalf("call order = %#v, want first two calls %#v", gotCalls, wantCalls)
+	}
+	if len(report.Events) != 1 {
+		t.Fatalf("len(report.Events) = %d, want 1; events=%#v", len(report.Events), report.Events)
+	}
+	want := "抓取失败：release notes page unavailable: browsebox and fallback proxy both redirected to Claude app unavailable in region page"
+	if report.Events[0].Reason != want {
+		t.Fatalf("report.Events[0].Reason = %q, want %q", report.Events[0].Reason, want)
+	}
+}
+
+func TestRunContextDoesNotRepeatDirectFallbackWhenReleaseNotesUnavailable(t *testing.T) {
+	const releaseNotesURL = "http://docs.claude.com/en/release-notes/overview"
+	unavailableHTML := `<html><head><title>App unavailable in region | Claude</title></head><body><h1>App unavailable in region</h1></body></html>`
+	var callsMu sync.Mutex
+	var calls []string
+	var directFetchCount int
+	recordCall := func(call string) {
+		callsMu.Lock()
+		defer callsMu.Unlock()
+		calls = append(calls, call)
+	}
+	snapshotCalls := func() []string {
+		callsMu.Lock()
+		defer callsMu.Unlock()
+		return append([]string(nil), calls...)
+	}
+	proxy := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		recordCall("browsebox")
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		_, _ = w.Write([]byte(unavailableHTML))
+	}))
+	t.Cleanup(proxy.Close)
+
+	oldStart := startBrowseboxProxy
+	t.Cleanup(func() { startBrowseboxProxy = oldStart })
+	startBrowseboxProxy = func(ctx context.Context, cfg *config.Config) (*browseboxProxySession, error) {
+		done := make(chan error, 1)
+		done <- nil
+		return &browseboxProxySession{proxyURL: proxy.URL, cancel: func() {}, done: done}, nil
+	}
+
+	fetchHTML := func(ctx context.Context, url string) (string, error) {
+		recordCall("direct:" + url)
+		if !strings.HasPrefix(url, releaseNotesURL) {
+			t.Fatalf("direct fetch URL = %s, want Claude docs release notes URL", url)
+		}
+		directFetchCount++
+		return unavailableHTML, nil
+	}
+	cfg := &config.Config{
+		Output: config.OutputCfg{Dir: t.TempDir(), Mode: model.OutputModeOriginalOnly},
+		Fetch:  config.FetchConfig{RetryTimes: 3, Timeout: 2 * time.Second},
+		Watch: config.WatchConfig{
+			Sites: []config.WatchSite{
+				{Name: "Claude Platform Release Notes", Type: config.WatchTypeAnnouncementPage, HomeURL: releaseNotesURL, BriefingCategory: "AI/科技"},
+			},
+			ProxyProvider: config.WatchProxyProvider{Enabled: true, Type: config.WatchProxyProviderTypeBrowsebox},
+		},
+	}
+
+	_, report, err := runContext(context.Background(), cfg, time.Date(2026, 5, 31, 18, 0, 0, 0, time.UTC), fetchHTML)
+	if err != nil {
+		t.Fatalf("runContext() error = %v", err)
+	}
+	if len(report.Events) != 1 {
+		t.Fatalf("len(report.Events) = %d, want 1; events=%#v", len(report.Events), report.Events)
+	}
+	want := "抓取失败：release notes page unavailable: browsebox and fallback proxy both redirected to Claude app unavailable in region page"
+	if report.Events[0].Reason != want {
+		t.Fatalf("report.Events[0].Reason = %q, want %q", report.Events[0].Reason, want)
+	}
+	if directFetchCount != 1 {
+		t.Fatalf("direct fallback fetch count = %d, want 1", directFetchCount)
+	}
+	gotCalls := snapshotCalls()
+	wantCalls := []string{"browsebox", "direct:" + releaseNotesURL}
+	if len(gotCalls) < len(wantCalls) || gotCalls[0] != wantCalls[0] || gotCalls[1] != wantCalls[1] {
+		t.Fatalf("call order = %#v, want first two calls %#v", gotCalls, wantCalls)
 	}
 }
 

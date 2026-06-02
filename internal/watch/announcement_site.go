@@ -372,6 +372,14 @@ func isClaudeReleaseNotesOverview(parsed *url.URL) bool {
 	}
 }
 
+func isClaudeAppUnavailableHTML(html string) bool {
+	doc, err := goquery.NewDocumentFromReader(strings.NewReader(html))
+	if err != nil {
+		return false
+	}
+	return isClaudeAppUnavailablePage(doc)
+}
+
 func isClaudeAppUnavailablePage(doc *goquery.Document) bool {
 	text := strings.ToLower(normalizeWatchText(doc.Find("title, h1").Text()))
 	return strings.Contains(text, "app unavailable in region")
