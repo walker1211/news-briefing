@@ -101,7 +101,10 @@ func startBrowseboxProxyProcess(ctx context.Context, cfg *config.Config) (*brows
 	}
 
 	done := make(chan error, 1)
-	go func() { done <- cmd.Wait() }()
+	go func() {
+		done <- cmd.Wait()
+		close(done)
+	}()
 	go io.Copy(io.Discard, stderr)
 
 	startupTimeout := provider.StartupTimeout

@@ -135,6 +135,42 @@ sleep 5
 	}
 }
 
+func TestStartBrowseboxProxyProcessReturnsWhenChildExitsBeforeReady(t *testing.T) {
+	dir := t.TempDir()
+	commandPath := filepath.Join(dir, "browsebox")
+	command := `#!/bin/sh
+exit 7
+`
+	if err := os.WriteFile(commandPath, []byte(command), 0o755); err != nil {
+		t.Fatalf("write fake browsebox: %v", err)
+	}
+	cfg := &config.Config{Watch: config.WatchConfig{ProxyProvider: config.WatchProxyProvider{
+		Command:        commandPath,
+		ProxyPort:      17997,
+		ControllerPort: 17998,
+	}}}
+	errs := make(chan error, 1)
+	go func() {
+		session, err := startBrowseboxProxyProcess(context.Background(), cfg)
+		if session != nil {
+			_ = session.Close()
+		}
+		errs <- err
+	}()
+
+	select {
+	case err := <-errs:
+		if err == nil {
+			t.Fatal("startBrowseboxProxyProcess() error = nil, want child exit error")
+		}
+		if !strings.Contains(err.Error(), "browsebox proxy exited before ready") {
+			t.Fatalf("startBrowseboxProxyProcess() error = %v, want child exit before ready", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("startBrowseboxProxyProcess() did not return after child exited before ready")
+	}
+}
+
 func TestStartBrowseboxProxyProcessTerminatesChildGracefullyOnContextCancel(t *testing.T) {
 	dir := t.TempDir()
 	startedPath := filepath.Join(dir, "started")
