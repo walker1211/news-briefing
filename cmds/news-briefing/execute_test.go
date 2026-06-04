@@ -53,6 +53,7 @@ func TestNewAppWiresInstanceDependencies(t *testing.T) {
 		"email.sendEmail":                         app.email.sendEmail,
 		"email.sendDeepEmail":                     app.email.sendDeepEmail,
 		"email.resendMarkdownEmail":               app.email.resendMarkdownEmail,
+		"publishHook":                             app.publishHook,
 	}
 	for name, fn := range funcs {
 		if reflect.ValueOf(fn).IsNil() {
@@ -74,6 +75,99 @@ func TestNewAppMarkSeenUsesConfiguredOutputDir(t *testing.T) {
 	}
 	if !strings.Contains(string(data), "https://example.com/news") {
 		t.Fatalf("seen.json = %s", data)
+	}
+}
+
+func TestRenderBriefingRunsPublishHookAfterMarkdownWrite(t *testing.T) {
+	cfg := executeTestConfigWithEmail(t, model.OutputModeOriginalOnly)
+	cfg.PublishHook = config.PublishHookConfig{
+		Enabled: true,
+		Command: "content-publisher",
+		Args: []string{
+			"publish-all",
+			"--file", "{markdown_file}",
+			"--source", "{source_app}",
+			"--date", "{date}",
+			"--period", "{period}",
+			"--channels", "wechat,xhs",
+			"--mode", "submit",
+		},
+	}
+	markdownPath := filepath.Join(cfg.Output.Dir, "briefing.md")
+	var hook publishHookRequest
+	var emailCalled bool
+	app := &app{
+		cfg: cfg,
+		output: outputDeps{
+			printFailed:   func([]fetcher.FailedSource) {},
+			printArticles: func([]model.Article) {},
+			printCLI:      func(*model.Briefing) {},
+			composeBody: func(string, model.OutputMode, model.OutputContent) (string, error) {
+				return "body", nil
+			},
+			writeMarkdown: func(*model.Briefing, string) (string, error) {
+				return markdownPath, nil
+			},
+		},
+		email: emailDeps{
+			sendEmail: func(*model.Briefing, *config.Config, []fetcher.FailedSource) error {
+				emailCalled = true
+				return nil
+			},
+		},
+		publishHook: func(ctx context.Context, cfg config.PublishHookConfig, req publishHookRequest) error {
+			hook = req
+			return nil
+		},
+	}
+
+	if err := app.renderBriefingContext(context.Background(), "run", "26.06.04", "0800", sampleExecuteArticles(), nil, nil, nil, false, true); err != nil {
+		t.Fatalf("renderBriefingContext() error = %v", err)
+	}
+	if !emailCalled {
+		t.Fatal("sendEmail() was not called")
+	}
+	if hook.MarkdownFile != markdownPath {
+		t.Fatalf("MarkdownFile = %q, want %q", hook.MarkdownFile, markdownPath)
+	}
+	if hook.SourceApp != "news-briefing" {
+		t.Fatalf("SourceApp = %q, want news-briefing", hook.SourceApp)
+	}
+	if hook.Date != "26.06.04" {
+		t.Fatalf("Date = %q, want 26.06.04", hook.Date)
+	}
+	if hook.Period != "0800" {
+		t.Fatalf("Period = %q, want 0800", hook.Period)
+	}
+}
+
+func TestRenderBriefingLogsPublishHookFailureWithoutFailing(t *testing.T) {
+	cfg := executeTestConfig(t, model.OutputModeOriginalOnly)
+	cfg.PublishHook = config.PublishHookConfig{
+		Enabled: true,
+		Command: "content-publisher",
+		Args:    []string{"publish-all", "--file", "{markdown_file}"},
+	}
+	app := &app{
+		cfg: cfg,
+		output: outputDeps{
+			printFailed:   func([]fetcher.FailedSource) {},
+			printArticles: func([]model.Article) {},
+			printCLI:      func(*model.Briefing) {},
+			composeBody: func(string, model.OutputMode, model.OutputContent) (string, error) {
+				return "body", nil
+			},
+			writeMarkdown: func(*model.Briefing, string) (string, error) {
+				return filepath.Join(cfg.Output.Dir, "briefing.md"), nil
+			},
+		},
+		publishHook: func(context.Context, config.PublishHookConfig, publishHookRequest) error {
+			return errors.New("hook boom")
+		},
+	}
+
+	if err := app.renderBriefingContext(context.Background(), "run", "26.06.04", "0800", sampleExecuteArticles(), nil, nil, nil, false, false); err != nil {
+		t.Fatalf("renderBriefingContext() error = %v", err)
 	}
 }
 

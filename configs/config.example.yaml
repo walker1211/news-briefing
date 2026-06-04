@@ -251,6 +251,24 @@ output:
   mode: translated_only
   include_filtered_articles: false
 
+publish_hook:
+  enabled: false
+  command: ./content-publisher
+  args:
+    - publish-all
+    - --file
+    - "{markdown_file}"
+    - --source
+    - "{source_app}"
+    - --date
+    - "{date}"
+    - --period
+    - "{period}"
+    - --channels
+    - wechat,xhs
+    - --mode
+    - submit
+
 proxy:
   http: http://127.0.0.1:7897
   socks5: socks5://127.0.0.1:7897
