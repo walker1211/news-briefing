@@ -18,14 +18,15 @@ import (
 )
 
 type app struct {
-	cfg       *config.Config
-	now       func() time.Time
-	scheduler schedulerDeps
-	fetch     fetchDeps
-	watch     watchDeps
-	ai        aiDeps
-	output    outputDeps
-	email     emailDeps
+	cfg         *config.Config
+	now         func() time.Time
+	scheduler   schedulerDeps
+	fetch       fetchDeps
+	watch       watchDeps
+	ai          aiDeps
+	output      outputDeps
+	email       emailDeps
+	publishHook func(context.Context, config.PublishHookConfig, publishHookRequest) error
 }
 
 type schedulerDeps struct {
@@ -143,6 +144,7 @@ func newApp(cfg *config.Config) *app {
 			sendDeepEmail:       emailSender.SendDeepEmail,
 			resendMarkdownEmail: emailSender.SendMarkdownFile,
 		},
+		publishHook: runPublishHook,
 	}
 }
 
@@ -721,21 +723,47 @@ func (app *app) renderBriefingContext(ctx context.Context, commandPath string, d
 		}
 	}
 
+	return app.runPostMarkdownActions(ctx, briefing, path, sendEmail, failed)
+}
+
+func (app *app) runPostMarkdownActions(ctx context.Context, briefing *model.Briefing, markdownPath string, sendEmail bool, _ []fetcher.FailedSource) error {
+	hookDone := make(chan error, 1)
+	if app.cfg != nil && app.cfg.PublishHook.Enabled {
+		runHook := app.publishHook
+		if runHook == nil {
+			runHook = runPublishHook
+		}
+		go func() {
+			hookDone <- runHook(ctx, app.cfg.PublishHook, publishHookRequest{
+				MarkdownFile: markdownPath,
+				SourceApp:    "news-briefing",
+				Date:         briefing.Date,
+				Period:       briefing.Period,
+			})
+		}()
+	} else {
+		hookDone <- nil
+	}
+
+	var emailErr error
 	if !sendEmail {
 		logutil.Println("Skipping email")
-		return nil
-	}
-	if err := runIfActive(ctx, func() error {
+	} else if err := runIfActive(ctx, func() error {
 		return app.email.sendEmail(briefing, app.cfg, nil)
 	}); err != nil {
 		if ctxErr := ctx.Err(); ctxErr != nil {
-			return ctxErr
+			emailErr = ctxErr
+		} else {
+			logutil.Errorf("Error sending email: %v", err)
 		}
-		logutil.Errorf("Error sending email: %v", err)
 	} else {
 		logutil.Printf("Email sent to %s", app.cfg.Email.To)
 	}
-	return nil
+
+	if err := <-hookDone; err != nil {
+		logutil.Errorf("publish hook failed: %v", err)
+	}
+	return emailErr
 }
 
 func (app *app) runDeepDive(cmd deepCommand) error {

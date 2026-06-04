@@ -15,20 +15,21 @@ import (
 )
 
 type Config struct {
-	Sources          []Source        `yaml:"sources"`
-	Keywords         []string        `yaml:"keywords"`
-	Fetch            FetchConfig     `yaml:"fetch"`
-	Watch            WatchConfig     `yaml:"watch"`
-	XAccounts        XAccountsConfig `yaml:"x_accounts"`
-	Email            Email           `yaml:"email"`
-	Schedule         Schedule        `yaml:"schedule"`
-	ScheduleDelayRaw string          `yaml:"schedule_delay"`
-	ScheduleDelay    time.Duration   `yaml:"-"`
-	ScheduleTimezone string          `yaml:"schedule_timezone"`
-	ScheduleLocation *time.Location  `yaml:"-"`
-	Output           OutputCfg       `yaml:"output"`
-	Proxy            Proxy           `yaml:"proxy"`
-	AI               AICfg           `yaml:"ai"`
+	Sources          []Source          `yaml:"sources"`
+	Keywords         []string          `yaml:"keywords"`
+	Fetch            FetchConfig       `yaml:"fetch"`
+	Watch            WatchConfig       `yaml:"watch"`
+	XAccounts        XAccountsConfig   `yaml:"x_accounts"`
+	Email            Email             `yaml:"email"`
+	Schedule         Schedule          `yaml:"schedule"`
+	ScheduleDelayRaw string            `yaml:"schedule_delay"`
+	ScheduleDelay    time.Duration     `yaml:"-"`
+	ScheduleTimezone string            `yaml:"schedule_timezone"`
+	ScheduleLocation *time.Location    `yaml:"-"`
+	Output           OutputCfg         `yaml:"output"`
+	PublishHook      PublishHookConfig `yaml:"publish_hook"`
+	Proxy            Proxy             `yaml:"proxy"`
+	AI               AICfg             `yaml:"ai"`
 }
 
 const (
@@ -155,6 +156,12 @@ type OutputCfg struct {
 	Dir                     string           `yaml:"dir"`
 	Mode                    model.OutputMode `yaml:"mode"`
 	IncludeFilteredArticles bool             `yaml:"include_filtered_articles"`
+}
+
+type PublishHookConfig struct {
+	Enabled bool     `yaml:"enabled"`
+	Command string   `yaml:"command"`
+	Args    []string `yaml:"args"`
 }
 
 type Proxy struct {
