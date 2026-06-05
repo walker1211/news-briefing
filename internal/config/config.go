@@ -222,6 +222,10 @@ var supportedWatchTypes = map[string]struct{}{
 	WatchTypeAnnouncementPage: {},
 }
 
+func ExpandHomePath(path string) string {
+	return expandHomePath(path)
+}
+
 func expandHomePath(path string) string {
 	if path == "~" {
 		home, err := os.UserHomeDir()
