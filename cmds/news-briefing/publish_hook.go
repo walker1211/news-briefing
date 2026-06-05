@@ -20,7 +20,7 @@ func runPublishHook(ctx context.Context, cfg config.PublishHookConfig, req publi
 	if !cfg.Enabled {
 		return nil
 	}
-	command := strings.TrimSpace(cfg.Command)
+	command := config.ExpandHomePath(strings.TrimSpace(cfg.Command))
 	if command == "" {
 		return fmt.Errorf("publish_hook.command is empty")
 	}
