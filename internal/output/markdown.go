@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/walker1211/news-briefing/internal/logutil"
 	"github.com/walker1211/news-briefing/internal/model"
 	"github.com/walker1211/news-briefing/internal/statefile"
 )
@@ -20,6 +21,8 @@ import (
 type markdownImageDownloader func(rawURL string, path string) error
 
 const maxMarkdownImageBytes = 10 * 1024 * 1024
+const markdownImageDownloadAttempts = 3
+const markdownImageRetryDelay = 200 * time.Millisecond
 
 func WriteMarkdown(briefing *model.Briefing, outputDir string) (string, error) {
 	return writeMarkdownWithImageDownloader(briefing, outputDir, downloadMarkdownImage)
@@ -59,6 +62,7 @@ func localizeMarkdownImages(rawContent string, outputDir string, date string, pe
 			continue
 		}
 		if err := download(imageURL, localPath); err != nil {
+			logutil.Warnf("Markdown image download failed: host=%s error=%v", markdownImageHost(imageURL), err)
 			continue
 		}
 		lines[i] = fmt.Sprintf("![%s](%s)", alt, filepath.ToSlash(filepath.Join(assetRelDir, filename)))
@@ -97,17 +101,79 @@ func isRemoteMarkdownImage(raw string) bool {
 	return parsed.Scheme == "http" || parsed.Scheme == "https"
 }
 
+func markdownImageHost(raw string) string {
+	parsed, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil {
+		return ""
+	}
+	return parsed.Hostname()
+}
+
+func embeddedMarkdownImageURL(raw string) string {
+	parsed, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil {
+		return ""
+	}
+	candidate := html.UnescapeString(strings.TrimSpace(parsed.Query().Get("url")))
+	if !isRemoteMarkdownImage(candidate) || !hasKnownMarkdownImageExtension(candidate) {
+		return ""
+	}
+	return candidate
+}
+
+func hasKnownMarkdownImageExtension(raw string) bool {
+	parsed, err := url.Parse(raw)
+	if err != nil {
+		return false
+	}
+	switch strings.ToLower(filepath.Ext(parsed.Path)) {
+	case ".jpg", ".jpeg", ".png", ".webp", ".gif", ".avif":
+		return true
+	default:
+		return false
+	}
+}
+
 func downloadMarkdownImage(rawURL string, path string) error {
 	rawURL = html.UnescapeString(strings.TrimSpace(rawURL))
 	if !isRemoteMarkdownImage(rawURL) {
 		return fmt.Errorf("unsupported image URL: %s", rawURL)
 	}
 	client := http.Client{Timeout: 15 * time.Second}
+	if err := downloadMarkdownImageWithAttempts(client, rawURL, path); err != nil {
+		fallbackURL := embeddedMarkdownImageURL(rawURL)
+		if fallbackURL == "" || fallbackURL == rawURL {
+			return err
+		}
+		if fallbackErr := downloadMarkdownImageWithAttempts(client, fallbackURL, path); fallbackErr != nil {
+			return fmt.Errorf("%w; fallback host=%s error=%v", err, markdownImageHost(fallbackURL), fallbackErr)
+		}
+	}
+	return nil
+}
+
+func downloadMarkdownImageWithAttempts(client http.Client, rawURL string, path string) error {
+	var lastErr error
+	for attempt := 1; attempt <= markdownImageDownloadAttempts; attempt++ {
+		if err := downloadMarkdownImageOnce(client, rawURL, path); err != nil {
+			lastErr = err
+			if attempt < markdownImageDownloadAttempts {
+				time.Sleep(markdownImageRetryDelay)
+			}
+			continue
+		}
+		return nil
+	}
+	return lastErr
+}
+
+func downloadMarkdownImageOnce(client http.Client, rawURL string, path string) error {
 	req, err := http.NewRequest(http.MethodGet, rawURL, nil)
 	if err != nil {
 		return err
 	}
 	req.Header.Set("User-Agent", "Mozilla/5.0")
+	req.Header.Set("Accept", "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8")
 	resp, err := client.Do(req)
 	if err != nil {
 		return err
@@ -117,7 +183,7 @@ func downloadMarkdownImage(rawURL string, path string) error {
 		return fmt.Errorf("download image: %s", resp.Status)
 	}
 	contentType := strings.ToLower(strings.TrimSpace(resp.Header.Get("Content-Type")))
-	if contentType != "" && !strings.HasPrefix(contentType, "image/") {
+	if contentType != "" && !strings.HasPrefix(contentType, "image/") && !isImageLikeOctetStream(contentType, rawURL) {
 		return fmt.Errorf("download image: content type %s", contentType)
 	}
 	data, err := io.ReadAll(io.LimitReader(resp.Body, maxMarkdownImageBytes+1))
@@ -128,6 +194,18 @@ func downloadMarkdownImage(rawURL string, path string) error {
 		return fmt.Errorf("download image: file too large")
 	}
 	return statefile.WriteAtomicReplaceOnly(path, data, 0o644)
+}
+
+func isImageLikeOctetStream(contentType string, rawURL string) bool {
+	if !strings.HasPrefix(strings.ToLower(strings.TrimSpace(contentType)), "application/octet-stream") {
+		return false
+	}
+	switch markdownImageExtension(rawURL) {
+	case ".jpg", ".jpeg", ".png", ".webp", ".gif", ".avif":
+		return true
+	default:
+		return false
+	}
 }
 
 func WriteDeepDive(topic, content, outputDir string, date string) (string, error) {
