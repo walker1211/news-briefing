@@ -393,7 +393,9 @@ func (app *app) startWatchFetch(ctx context.Context, watchTime time.Time) func()
 
 func (app *app) mergeWatchFetchResult(ctx context.Context, articles []model.Article, result watchFetchResult, sidecarDate string, period string) ([]model.Article, []string, error) {
 	if result.err != nil {
-		return nil, nil, result.err
+		notices := []string{fmt.Sprintf("Watch 抓取失败：%v", result.err)}
+		app.printWatchSiteErrorNotices(notices)
+		return articles, notices, nil
 	}
 	articles = append(articles, result.articles...)
 	notices := watchSiteErrorNotices(result.report)

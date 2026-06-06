@@ -139,6 +139,8 @@ func TestStartBrowseboxProxyProcessReturnsWhenChildExitsBeforeReady(t *testing.T
 	dir := t.TempDir()
 	commandPath := filepath.Join(dir, "browsebox")
 	command := `#!/bin/sh
+printf 'probing nodes\n'
+printf 'health check failed\n' >&2
 exit 7
 `
 	if err := os.WriteFile(commandPath, []byte(command), 0o755); err != nil {
@@ -163,8 +165,10 @@ exit 7
 		if err == nil {
 			t.Fatal("startBrowseboxProxyProcess() error = nil, want child exit error")
 		}
-		if !strings.Contains(err.Error(), "browsebox proxy exited before ready") {
-			t.Fatalf("startBrowseboxProxyProcess() error = %v, want child exit before ready", err)
+		for _, want := range []string{"browsebox proxy exited before ready", "stdout: probing nodes", "stderr: health check failed"} {
+			if !strings.Contains(err.Error(), want) {
+				t.Fatalf("startBrowseboxProxyProcess() error = %v, want %q", err, want)
+			}
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("startBrowseboxProxyProcess() did not return after child exited before ready")
