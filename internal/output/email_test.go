@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"net"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -29,6 +31,24 @@ func TestBuildEmailBodyPreservesBodyOrderAndSingleTitle(t *testing.T) {
 	}
 	if !strings.Contains(got, "TRANSLATED\n\n---\n\nORIGINAL") {
 		t.Fatalf("buildEmailBody() body = %q", got)
+	}
+}
+
+func TestBuildEmailBodyKeepsDefaultHeaderAndOmitsTopHeroImage(t *testing.T) {
+	briefing := &model.Briefing{
+		Date:       "26.06.06",
+		Period:     "0800",
+		Articles:   []model.Article{{ImageURL: "https://example.com/hero.jpg"}},
+		RawContent: "## AI/科技\n\n### Claude 服务异常\n**摘要：** ...",
+	}
+
+	got := buildEmailBody(briefing, nil)
+	wantPrefix := "# 国际资讯简报 26.06.06 早间 08:00\n\n## AI/科技"
+	if !strings.HasPrefix(got, wantPrefix) {
+		t.Fatalf("buildEmailBody() = %q, want prefix %q", got, wantPrefix)
+	}
+	if strings.Contains(got, "![封面图]") {
+		t.Fatalf("buildEmailBody() injected top hero image: %q", got)
 	}
 }
 
@@ -168,6 +188,80 @@ func TestBuildHTMLBodyRendersBriefingMarkdownHeadings(t *testing.T) {
 	}
 	if strings.Contains(got, "# 国际资讯") || strings.Contains(got, "**摘要：**") || strings.Contains(got, "&gt; 来源") {
 		t.Fatalf("buildHTMLBody() leaked markdown syntax: %q", got)
+	}
+}
+
+func TestBuildHTMLBodyRendersGroupedOverviewCategoryHeadings(t *testing.T) {
+	body := strings.Join([]string{
+		"# 国际资讯简报 26.05.26 晚间 18:00",
+		"",
+		"## 今日速览",
+		"",
+		"### AI/科技",
+		"- Claude 服务异常。",
+		"",
+		"### 国际政治",
+		"- 中东局势升温。",
+		"",
+		"## AI/科技",
+		"",
+		"### Claude 服务异常",
+		"**摘要：** 服务出现异常。",
+	}, "\n")
+
+	got := buildHTMLBody(body)
+	wantParts := []string{
+		`<section class="briefing-section section-overview"><h2>今日速览</h2>`,
+		`<h3 class="overview-category">AI/科技</h3>`,
+		`<p class="overview-item">Claude 服务异常。</p>`,
+		`<h3 class="overview-category">国际政治</h3>`,
+		`<p class="overview-item">中东局势升温。</p>`,
+		`<article class="news-item"><h3>Claude 服务异常</h3>`,
+	}
+	for _, want := range wantParts {
+		if !strings.Contains(got, want) {
+			t.Fatalf("buildHTMLBody() = %q, want substring %q", got, want)
+		}
+	}
+	if strings.Contains(got, `<article class="news-item"><h3>AI/科技</h3>`) || strings.Contains(got, `<article class="news-item"><h3>国际政治</h3>`) {
+		t.Fatalf("buildHTMLBody() rendered overview category as article: %q", got)
+	}
+}
+
+func TestBuildHTMLBodyRendersMarkdownImages(t *testing.T) {
+	body := strings.Join([]string{
+		"# Claude 服务异常",
+		"",
+		"![封面图](https://example.com/hero.jpg)",
+		"",
+		"## AI/科技",
+		"",
+		"### Claude <服务> 异常",
+		"![Claude <cover>](https://example.com/story.jpg?x=1&y=2)",
+		"**摘要：** 服务出现异常。",
+		"",
+	}, "\n")
+
+	got := buildHTMLBody(body)
+	wantParts := []string{
+		`<figure class="briefing-image hero-image"><img src="https://example.com/hero.jpg" alt="封面图" loading="lazy"></figure>`,
+		`<figure class="briefing-image"><img src="https://example.com/story.jpg?x=1&amp;y=2" alt="Claude &lt;cover&gt;" loading="lazy"></figure>`,
+		`.briefing-image`,
+	}
+	for _, want := range wantParts {
+		if !strings.Contains(got, want) {
+			t.Fatalf("buildHTMLBody() = %q, want substring %q", got, want)
+		}
+	}
+	if strings.Contains(got, "![封面图]") || strings.Contains(got, "![Claude") {
+		t.Fatalf("buildHTMLBody() leaked markdown image syntax: %q", got)
+	}
+
+	articleStart := strings.Index(got, `<article class="news-item"><h3>Claude &lt;服务&gt; 异常</h3>`)
+	storyImage := strings.Index(got, `alt="Claude &lt;cover&gt;"`)
+	articleEnd := strings.Index(got[articleStart:], "</article>")
+	if articleStart < 0 || storyImage < articleStart || articleEnd < 0 || storyImage > articleStart+articleEnd {
+		t.Fatalf("story image is not inside article flow: %q", got)
 	}
 }
 
@@ -347,7 +441,7 @@ func TestSendMarkdownFileUsesHTMLMailPathWithPlainFallback(t *testing.T) {
 	var gotSubject string
 	var gotText string
 	var gotHTML string
-	sender.smtpHTMLSend = func(cfg *config.Config, subject, textBody, htmlBody, password string) error {
+	sender.smtpHTMLSend = func(cfg *config.Config, subject, textBody, htmlBody string, inlineImages []emailInlineImage, password string) error {
 		gotSubject = subject
 		gotText = textBody
 		gotHTML = htmlBody
@@ -369,6 +463,118 @@ func TestSendMarkdownFileUsesHTMLMailPathWithPlainFallback(t *testing.T) {
 	}
 	if strings.Contains(gotHTML, ">https://example.com/articles/very-long-path") {
 		t.Fatalf("html body exposes long URL as visible text: %q", gotHTML)
+	}
+}
+
+func TestSendMarkdownFileEmbedsLocalImagesInline(t *testing.T) {
+	dir := t.TempDir()
+	outputDir := filepath.Join(dir, "output")
+	assetDir := filepath.Join(outputDir, "assets", "26.04.13-1800")
+	if err := os.MkdirAll(assetDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+	imagePath := filepath.Join(assetDir, "story.jpg")
+	if err := os.WriteFile(imagePath, []byte("image data"), 0o644); err != nil {
+		t.Fatalf("WriteFile() image error = %v", err)
+	}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.RawQuery != "width=640&crop=smart" {
+			http.Error(w, "bad query", http.StatusForbidden)
+			return
+		}
+		w.Header().Set("Content-Type", "image/jpeg")
+		_, _ = w.Write([]byte("remote image"))
+	}))
+	defer server.Close()
+
+	path := filepath.Join(outputDir, "26.04.13-晚间-1800.md")
+	body := strings.Join([]string{
+		"# 国际资讯简报 26.04.13 晚间 18:00",
+		"",
+		"## AI/科技",
+		"",
+		"### Claude 服务异常",
+		"![Claude 服务异常](assets/26.04.13-1800/story.jpg)",
+		"![远程图](" + server.URL + "/remote.jpg?width=640&amp;crop=smart)",
+		"**摘要：** 服务异常。",
+	}, "\n")
+	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+		t.Fatalf("WriteFile() markdown error = %v", err)
+	}
+
+	cfg := &config.Config{Output: config.OutputCfg{Dir: outputDir}, Email: config.Email{RetryTimes: 1}}
+	sender := NewEmailSender()
+	var gotHTML string
+	var gotInline []emailInlineImage
+	var gotRemoteData []byte
+	sender.smtpHTMLSend = func(cfg *config.Config, subject, textBody, htmlBody string, inlineImages []emailInlineImage, password string) error {
+		gotHTML = htmlBody
+		gotInline = inlineImages
+		if len(inlineImages) > 1 {
+			data, err := os.ReadFile(inlineImages[1].Path)
+			if err != nil {
+				return err
+			}
+			gotRemoteData = data
+		}
+		return nil
+	}
+	t.Setenv("EMAIL_SMTP_AUTH_CODE", "secret")
+
+	if err := sender.SendMarkdownFile(path, cfg); err != nil {
+		t.Fatalf("SendMarkdownFile() error = %v", err)
+	}
+	if !strings.Contains(gotHTML, `src="cid:news-briefing-image-1@news-briefing"`) {
+		t.Fatalf("html body = %q, want local image CID", gotHTML)
+	}
+	if strings.Contains(gotHTML, `src="assets/26.04.13-1800/story.jpg"`) {
+		t.Fatalf("html body leaked local relative image path: %q", gotHTML)
+	}
+	if !strings.Contains(gotHTML, `src="cid:news-briefing-image-2@news-briefing"`) {
+		t.Fatalf("html body = %q, want remote image CID", gotHTML)
+	}
+	if strings.Contains(gotHTML, server.URL) {
+		t.Fatalf("html body leaked remote image URL after inline download: %q", gotHTML)
+	}
+	if len(gotInline) != 2 {
+		t.Fatalf("inline images = %v, want 2", gotInline)
+	}
+	if gotInline[0].Path != imagePath {
+		t.Fatalf("local inline image path = %q, want %q", gotInline[0].Path, imagePath)
+	}
+	if gotInline[0].CID != "news-briefing-image-1@news-briefing" {
+		t.Fatalf("local inline image CID = %q", gotInline[0].CID)
+	}
+	if gotInline[1].CID != "news-briefing-image-2@news-briefing" {
+		t.Fatalf("remote inline image CID = %q", gotInline[1].CID)
+	}
+	if string(gotRemoteData) != "remote image" {
+		t.Fatalf("remote inline image data = %q", gotRemoteData)
+	}
+}
+
+func TestNewHTMLMessageEmbedsInlineImages(t *testing.T) {
+	imagePath := filepath.Join(t.TempDir(), "story.jpg")
+	if err := os.WriteFile(imagePath, []byte("image data"), 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+	cfg := &config.Config{Email: config.Email{From: "from@example.com", To: "to@example.com"}}
+
+	message := newHTMLMessage(cfg, "Subject", "plain", `<img src="cid:news-briefing-image-1@news-briefing">`, []emailInlineImage{{Path: imagePath, CID: "news-briefing-image-1@news-briefing"}})
+	var rendered strings.Builder
+	if _, err := message.WriteTo(&rendered); err != nil {
+		t.Fatalf("WriteTo() error = %v", err)
+	}
+	got := rendered.String()
+	wantParts := []string{
+		"Content-ID: <news-briefing-image-1@news-briefing>",
+		"Content-Disposition: inline; filename=\"story.jpg\"",
+		"Content-Type: image/jpeg; name=\"story.jpg\"",
+	}
+	for _, want := range wantParts {
+		if !strings.Contains(got, want) {
+			t.Fatalf("message = %q, want substring %q", got, want)
+		}
 	}
 }
 

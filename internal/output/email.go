@@ -26,8 +26,13 @@ var briefingMarkdownPattern = regexp.MustCompile(`^(\d{2}\.\d{2}\.\d{2})-(凌晨
 var htmlURLPattern = regexp.MustCompile(`https?://[A-Za-z0-9._~:/?#\[\]@!$&'()*+,;=%-]+`)
 
 type smtpSendFunc func(*config.Config, string, string, string) error
-type smtpHTMLSendFunc func(*config.Config, string, string, string, string) error
+type smtpHTMLSendFunc func(*config.Config, string, string, string, []emailInlineImage, string) error
 type directEmailDialContextFactory func(time.Duration) func(context.Context, string, string) (net.Conn, error)
+
+type emailInlineImage struct {
+	Path string
+	CID  string
+}
 type socks5EmailDialContextFactory func(string, time.Duration) (func(context.Context, string, string) (net.Conn, error), error)
 
 type EmailSender struct {
@@ -201,7 +206,11 @@ func (s *EmailSender) SendMarkdownFile(path string, cfg *config.Config) error {
 	if err != nil {
 		return fmt.Errorf("read markdown file: %w", err)
 	}
-	return s.sendHTMLEmailWithContent(cfg, subject, string(data))
+	body := string(data)
+	resolver := newEmailInlineImageResolver(filepath.Dir(absPath), outputDir, realOutputDir)
+	defer resolver.cleanup()
+	htmlBody := buildHTMLBodyWithImageResolver(body, resolver.resolve)
+	return s.sendHTMLEmailWithRenderedContent(cfg, subject, body, htmlBody, resolver.images)
 }
 
 func briefingSubjectFromMarkdownFilename(path string) (string, error) {
@@ -244,6 +253,10 @@ func (s *EmailSender) sendEmailWithContent(cfg *config.Config, subject string, b
 }
 
 func (s *EmailSender) sendHTMLEmailWithContent(cfg *config.Config, subject string, body string) error {
+	return s.sendHTMLEmailWithRenderedContent(cfg, subject, body, buildHTMLBody(body), nil)
+}
+
+func (s *EmailSender) sendHTMLEmailWithRenderedContent(cfg *config.Config, subject string, body string, htmlBody string, inlineImages []emailInlineImage) error {
 	password := os.Getenv("EMAIL_SMTP_AUTH_CODE")
 	if password == "" {
 		return fmt.Errorf("EMAIL_SMTP_AUTH_CODE not set in .env")
@@ -256,11 +269,10 @@ func (s *EmailSender) sendHTMLEmailWithContent(cfg *config.Config, subject strin
 	if sleep == nil {
 		sleep = time.Sleep
 	}
-	htmlBody := buildHTMLBody(body)
 
 	var lastErr error
 	for attempt := 1; attempt <= cfg.Email.RetryTimes; attempt++ {
-		if err := send(cfg, subject, body, htmlBody, password); err != nil {
+		if err := send(cfg, subject, body, htmlBody, inlineImages, password); err != nil {
 			lastErr = err
 			if attempt < cfg.Email.RetryTimes {
 				sleep(cfg.Email.RetryWaitTime)
@@ -283,14 +295,21 @@ func (s *EmailSender) deliverSMTPMessage(cfg *config.Config, subject string, bod
 	return s.deliverMessage(cfg, m, password)
 }
 
-func (s *EmailSender) deliverSMTPHTMLMessage(cfg *config.Config, subject string, textBody string, htmlBody string, password string) error {
+func (s *EmailSender) deliverSMTPHTMLMessage(cfg *config.Config, subject string, textBody string, htmlBody string, inlineImages []emailInlineImage, password string) error {
+	return s.deliverMessage(cfg, newHTMLMessage(cfg, subject, textBody, htmlBody, inlineImages), password)
+}
+
+func newHTMLMessage(cfg *config.Config, subject string, textBody string, htmlBody string, inlineImages []emailInlineImage) *gomail.Message {
 	m := gomail.NewMessage()
 	m.SetHeader("From", cfg.Email.From)
 	m.SetHeader("To", cfg.Email.To)
 	m.SetHeader("Subject", subject)
 	m.SetBody("text/plain", textBody)
 	m.AddAlternative("text/html", htmlBody)
-	return s.deliverMessage(cfg, m, password)
+	for _, image := range inlineImages {
+		m.Embed(image.Path, gomail.SetHeader(map[string][]string{"Content-ID": {"<" + image.CID + ">"}}))
+	}
+	return m
 }
 
 func (s *EmailSender) deliverMessage(cfg *config.Config, m *gomail.Message, password string) error {
@@ -358,7 +377,99 @@ func (s *EmailSender) deliverMessage(cfg *config.Config, m *gomail.Message, pass
 	return nil
 }
 
+type emailInlineImageResolver struct {
+	markdownDir   string
+	outputDir     string
+	realOutputDir string
+	byPath        map[string]emailInlineImage
+	images        []emailInlineImage
+	tempDir       string
+}
+
+func newEmailInlineImageResolver(markdownDir string, outputDir string, realOutputDir string) *emailInlineImageResolver {
+	return &emailInlineImageResolver{
+		markdownDir:   markdownDir,
+		outputDir:     outputDir,
+		realOutputDir: realOutputDir,
+		byPath:        map[string]emailInlineImage{},
+	}
+}
+
+func (r *emailInlineImageResolver) resolve(raw string) string {
+	raw = strings.TrimSpace(html.UnescapeString(raw))
+	path, ok := r.resolvePath(raw)
+	if !ok && isRemoteMarkdownImage(raw) {
+		path, ok = r.downloadRemote(raw)
+	}
+	if !ok {
+		return raw
+	}
+	if image, ok := r.byPath[path]; ok {
+		return "cid:" + image.CID
+	}
+	image := emailInlineImage{Path: path, CID: fmt.Sprintf("news-briefing-image-%d@news-briefing", len(r.images)+1)}
+	r.byPath[path] = image
+	r.images = append(r.images, image)
+	return "cid:" + image.CID
+}
+
+func (r *emailInlineImageResolver) resolvePath(raw string) (string, bool) {
+	if raw == "" || isRemoteMarkdownImage(raw) || strings.HasPrefix(raw, "data:") || strings.HasPrefix(raw, "cid:") {
+		return "", false
+	}
+	path := raw
+	if !filepath.IsAbs(path) {
+		path = filepath.Join(r.markdownDir, filepath.FromSlash(path))
+	}
+	path = filepath.Clean(path)
+	if !pathWithinDir(path, r.outputDir) {
+		return "", false
+	}
+	info, err := os.Stat(path)
+	if err != nil || info.IsDir() {
+		return "", false
+	}
+	realPath, err := filepath.EvalSymlinks(path)
+	if err != nil {
+		return "", false
+	}
+	if !pathWithinDir(realPath, r.realOutputDir) {
+		return "", false
+	}
+	return path, true
+}
+
+func (r *emailInlineImageResolver) downloadRemote(raw string) (string, bool) {
+	if r.tempDir == "" {
+		dir, err := os.MkdirTemp("", "news-briefing-email-images-*")
+		if err != nil {
+			return "", false
+		}
+		r.tempDir = dir
+	}
+	path := filepath.Join(r.tempDir, markdownImageFileName(raw))
+	if err := downloadMarkdownImage(raw, path); err != nil {
+		return "", false
+	}
+	return path, true
+}
+
+func (r *emailInlineImageResolver) cleanup() {
+	if r.tempDir != "" {
+		_ = os.RemoveAll(r.tempDir)
+	}
+}
+
+func pathWithinDir(path string, dir string) bool {
+	rel, err := filepath.Rel(dir, path)
+	return err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(os.PathSeparator))
+}
+
 func buildHTMLBody(body string) string {
+	return buildHTMLBodyWithImageResolver(body, nil)
+}
+
+func buildHTMLBodyWithImageResolver(body string, resolveImageURL func(string) string) string {
 	return `<!doctype html>
 <html>
 <head>
@@ -369,8 +480,10 @@ body{margin:0;padding:0;background:#f6f7f9;color:#172033;font-family:-apple-syst
 .newsletter-shell{max-width:720px;margin:0 auto;padding:24px 14px;}
 .newsletter-card{background:#fff;border:1px solid #e6e8ee;border-radius:18px;padding:28px 30px;box-shadow:0 10px 30px rgba(23,32,51,.06);}
 h1{margin:0 0 24px;font-size:24px;line-height:1.3;color:#111827;letter-spacing:-.02em;}
+.briefing-image{margin:12px 0 16px;}.briefing-image img{display:block;width:100%;height:auto;border-radius:14px;border:1px solid #eef2f7;}.hero-image{margin:-4px 0 24px;}
 .briefing-section{margin:28px 0 0;padding:0;}.briefing-section:first-of-type{margin-top:0}.briefing-section h2{margin:0 0 14px;padding-top:18px;border-top:1px solid #edf0f5;font-size:17px;color:#1f2937;}.briefing-section:first-of-type h2{padding-top:0;border-top:0}.briefing-section h2 span{margin-left:8px;font-size:13px;font-weight:500;color:#6b7280;}
 .section-news h2{padding-top:0;border-top:0;color:#2563eb;border-left:4px solid #60a5fa;padding-left:10px;}
+.section-overview{padding:16px 18px;border:1px solid #dbeafe;border-radius:14px;background:#eff6ff;}.section-overview h2{padding-top:0;border-top:0;color:#1d4ed8;}.overview-category{margin:12px 0 6px;font-size:15px;color:#1f2937;}.overview-item{margin:0 0 7px;color:#374151;}
 .section-status,.section-follow{padding:16px 18px;border:1px solid #eef2f7;border-radius:14px;background:#f8fafc;}.section-status h2,.section-follow h2{padding-top:0;border-top:0;color:#0f766e;}.section-candidates{padding:0;border:0;background:transparent;}.section-candidates h2{padding-top:0;border-top:0;color:#7c3aed;border-left:4px solid #a78bfa;padding-left:10px;}
 .warning-block{padding:16px 18px;border:1px solid #fed7aa;border-radius:14px;background:#fff7ed;}.warning-block h2{margin:0 0 10px;padding-top:0;border-top:0;color:#c2410c;}.warning-item{margin:8px 0;color:#7c2d12;}
 .news-item{padding:14px 0 18px;border-bottom:1px solid #f0f2f6;}.news-item:last-child{border-bottom:0;padding-bottom:0;}
@@ -379,16 +492,21 @@ h3{margin:0 0 8px;font-size:16px;line-height:1.45;color:#111827;}.summary,.impac
 @media(max-width:640px){.newsletter-shell{padding:0}.newsletter-card{border-radius:0;border-left:0;border-right:0;padding:20px 18px}h1{font-size:21px}}
 </style>
 </head>
-<body><main class="newsletter-shell"><section class="newsletter-card">` + renderNewsletterHTML(body) + `</section></main></body>
+<body><main class="newsletter-shell"><section class="newsletter-card">` + renderNewsletterHTMLWithImageResolver(body, resolveImageURL) + `</section></main></body>
 </html>`
 }
 
 func renderNewsletterHTML(body string) string {
+	return renderNewsletterHTMLWithImageResolver(body, nil)
+}
+
+func renderNewsletterHTMLWithImageResolver(body string, resolveImageURL func(string) string) string {
 	var out strings.Builder
 	lines := strings.Split(body, "\n")
 	inArticle := false
 	inSection := false
 	inWarningSection := false
+	inOverviewSection := false
 
 	closeArticle := func() {
 		if inArticle {
@@ -402,12 +520,14 @@ func renderNewsletterHTML(body string) string {
 			out.WriteString("</section>")
 			inSection = false
 			inWarningSection = false
+			inOverviewSection = false
 		}
 	}
 	openSection := func(title, count string) {
 		closeSection()
 		sectionClass := htmlSectionClass(title)
 		inWarningSection = strings.Contains(sectionClass, "warning-block")
+		inOverviewSection = sectionClass == "section-overview"
 		out.WriteString(`<section class="briefing-section `)
 		out.WriteString(sectionClass)
 		out.WriteString(`"><h2>`)
@@ -440,6 +560,13 @@ func renderNewsletterHTML(body string) string {
 			out.WriteString("</h1>")
 			continue
 		}
+		if alt, imageURL, ok := parseMarkdownImage(line); ok {
+			if resolveImageURL != nil {
+				imageURL = resolveImageURL(imageURL)
+			}
+			out.WriteString(renderMarkdownImageHTML(alt, imageURL))
+			continue
+		}
 		if category, count, ok := parseHTMLCategoryLine(line); ok {
 			openSection(category, count)
 			continue
@@ -454,6 +581,21 @@ func renderNewsletterHTML(body string) string {
 		if inWarningSection {
 			if item, ok := strings.CutPrefix(line, "- "); ok {
 				out.WriteString(`<p class="warning-item">`)
+				out.WriteString(linkifyHTML(cleanMarkdownLine(item), "链接"))
+				out.WriteString("</p>")
+				continue
+			}
+		}
+		if inOverviewSection {
+			if title, ok := strings.CutPrefix(line, "### "); ok {
+				closeArticle()
+				out.WriteString(`<h3 class="overview-category">`)
+				out.WriteString(html.EscapeString(strings.TrimSpace(title)))
+				out.WriteString("</h3>")
+				continue
+			}
+			if item, ok := strings.CutPrefix(line, "- "); ok {
+				out.WriteString(`<p class="overview-item">`)
 				out.WriteString(linkifyHTML(cleanMarkdownLine(item), "链接"))
 				out.WriteString("</p>")
 				continue
@@ -513,8 +655,36 @@ func renderNewsletterHTML(body string) string {
 	return out.String()
 }
 
+func parseMarkdownImage(line string) (string, string, bool) {
+	line = strings.TrimSpace(line)
+	if !strings.HasPrefix(line, "![") || !strings.HasSuffix(line, ")") {
+		return "", "", false
+	}
+	closeAlt := strings.Index(line, "](")
+	if closeAlt < 2 {
+		return "", "", false
+	}
+	alt := strings.TrimSpace(line[2:closeAlt])
+	imageURL := strings.TrimSpace(line[closeAlt+2 : len(line)-1])
+	if imageURL == "" {
+		return "", "", false
+	}
+	return alt, imageURL, true
+}
+
+func renderMarkdownImageHTML(alt string, imageURL string) string {
+	imageURL = html.UnescapeString(imageURL)
+	className := "briefing-image"
+	if strings.TrimSpace(alt) == "封面图" {
+		className += " hero-image"
+	}
+	return `<figure class="` + className + `"><img src="` + html.EscapeString(imageURL) + `" alt="` + html.EscapeString(alt) + `" loading="lazy"></figure>`
+}
+
 func htmlSectionClass(title string) string {
 	switch strings.TrimSpace(title) {
+	case "今日速览":
+		return "section-overview"
 	case "今日态势":
 		return "section-status"
 	case "今日最值得追的方向":
@@ -638,8 +808,7 @@ func linkifyHTML(body string, label string) string {
 }
 
 func buildEmailBody(briefing *model.Briefing, failed []fetcher.FailedSource) string {
-	header := briefingTitle(briefing.Date, briefing.Period) + "\n\n"
-	return AppendFailedSection(header+briefing.RawContent, failed)
+	return AppendFailedSection(briefingHeaderBlock(briefing)+briefing.RawContent, failed)
 }
 
 func buildDeepEmailBody(topic string, briefing *model.Briefing, failed []fetcher.FailedSource) string {

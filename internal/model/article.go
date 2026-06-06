@@ -6,6 +6,7 @@ type Article struct {
 	Title     string    `json:"title"`
 	Link      string    `json:"link"`
 	Summary   string    `json:"summary"`
+	ImageURL  string    `json:"image_url,omitempty"`
 	Source    string    `json:"source"`
 	Category  string    `json:"category"`
 	Published time.Time `json:"published"`

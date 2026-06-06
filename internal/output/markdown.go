@@ -1,25 +1,133 @@
 package output
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
+	"html"
+	"io"
+	"net/http"
+	"net/url"
+	"os"
 	"path/filepath"
+	"strings"
+	"time"
 
 	"github.com/walker1211/news-briefing/internal/model"
 	"github.com/walker1211/news-briefing/internal/statefile"
 )
 
+type markdownImageDownloader func(rawURL string, path string) error
+
+const maxMarkdownImageBytes = 10 * 1024 * 1024
+
 func WriteMarkdown(briefing *model.Briefing, outputDir string) (string, error) {
+	return writeMarkdownWithImageDownloader(briefing, outputDir, downloadMarkdownImage)
+}
+
+func writeMarkdownWithImageDownloader(briefing *model.Briefing, outputDir string, download markdownImageDownloader) (string, error) {
 	filename := briefingFileName(briefing.Date, briefing.Period)
 	path := filepath.Join(outputDir, filename)
 
-	header := briefingMarkdownHeader(briefing.Date, briefing.Period) + "\n\n"
-	content := header + briefing.RawContent
+	rawContent := briefing.RawContent
+	if download != nil {
+		rawContent = localizeMarkdownImages(rawContent, outputDir, briefing.Date, briefing.Period, download)
+	}
+	content := briefingHeaderBlock(briefing) + rawContent
 
 	if err := statefile.WriteAtomicReplaceOnly(path, []byte(content), 0644); err != nil {
 		return "", fmt.Errorf("write markdown: %w", err)
 	}
 
 	return path, nil
+}
+
+func localizeMarkdownImages(rawContent string, outputDir string, date string, period string, download markdownImageDownloader) string {
+	assetDirName := briefingAssetDirName(date, period)
+	assetDir := filepath.Join(outputDir, "assets", assetDirName)
+	assetRelDir := filepath.ToSlash(filepath.Join("assets", assetDirName))
+	lines := strings.Split(rawContent, "\n")
+	for i, line := range lines {
+		alt, imageURL, ok := parseMarkdownImage(line)
+		imageURL = html.UnescapeString(imageURL)
+		if !ok || !isRemoteMarkdownImage(imageURL) {
+			continue
+		}
+		filename := markdownImageFileName(imageURL)
+		localPath := filepath.Join(assetDir, filename)
+		if err := os.MkdirAll(assetDir, 0o755); err != nil {
+			continue
+		}
+		if err := download(imageURL, localPath); err != nil {
+			continue
+		}
+		lines[i] = fmt.Sprintf("![%s](%s)", alt, filepath.ToSlash(filepath.Join(assetRelDir, filename)))
+	}
+	return strings.Join(lines, "\n")
+}
+
+func briefingAssetDirName(date string, period string) string {
+	return fmt.Sprintf("%s-%s", date, period)
+}
+
+func markdownImageFileName(rawURL string) string {
+	sum := sha256.Sum256([]byte(rawURL))
+	hash := hex.EncodeToString(sum[:])[:16]
+	return hash + markdownImageExtension(rawURL)
+}
+
+func markdownImageExtension(rawURL string) string {
+	parsed, err := url.Parse(rawURL)
+	if err != nil {
+		return ".jpg"
+	}
+	switch ext := strings.ToLower(filepath.Ext(parsed.Path)); ext {
+	case ".jpg", ".jpeg", ".png", ".webp", ".gif", ".avif":
+		return ext
+	default:
+		return ".jpg"
+	}
+}
+
+func isRemoteMarkdownImage(raw string) bool {
+	parsed, err := url.Parse(raw)
+	if err != nil {
+		return false
+	}
+	return parsed.Scheme == "http" || parsed.Scheme == "https"
+}
+
+func downloadMarkdownImage(rawURL string, path string) error {
+	rawURL = html.UnescapeString(strings.TrimSpace(rawURL))
+	if !isRemoteMarkdownImage(rawURL) {
+		return fmt.Errorf("unsupported image URL: %s", rawURL)
+	}
+	client := http.Client{Timeout: 15 * time.Second}
+	req, err := http.NewRequest(http.MethodGet, rawURL, nil)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("User-Agent", "Mozilla/5.0")
+	resp, err := client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return fmt.Errorf("download image: %s", resp.Status)
+	}
+	contentType := strings.ToLower(strings.TrimSpace(resp.Header.Get("Content-Type")))
+	if contentType != "" && !strings.HasPrefix(contentType, "image/") {
+		return fmt.Errorf("download image: content type %s", contentType)
+	}
+	data, err := io.ReadAll(io.LimitReader(resp.Body, maxMarkdownImageBytes+1))
+	if err != nil {
+		return err
+	}
+	if len(data) > maxMarkdownImageBytes {
+		return fmt.Errorf("download image: file too large")
+	}
+	return statefile.WriteAtomicReplaceOnly(path, data, 0o644)
 }
 
 func WriteDeepDive(topic, content, outputDir string, date string) (string, error) {

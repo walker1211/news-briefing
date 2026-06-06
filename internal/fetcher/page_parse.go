@@ -2,6 +2,7 @@ package fetcher
 
 import (
 	"fmt"
+	"net/url"
 	"strings"
 	"time"
 
@@ -35,6 +36,7 @@ func parsePageSource(src config.Source, html string) (fetchedCandidate, bool, er
 			Title:     title,
 			Link:      src.URL,
 			Summary:   summary,
+			ImageURL:  extractPageImage(doc, src.URL),
 			Source:    src.Name,
 			Category:  src.Category,
 			Published: published,
@@ -64,6 +66,42 @@ func extractPageSummary(doc *goquery.Document) string {
 		return summary
 	}
 	return strings.TrimSpace(doc.Find("p").First().Text())
+}
+
+func extractPageImage(doc *goquery.Document, baseURL string) string {
+	selectors := []string{
+		"meta[property='og:image']",
+		"meta[property='og:image:secure_url']",
+		"meta[name='twitter:image']",
+		"meta[property='twitter:image']",
+		"meta[name='twitter:image:src']",
+		"meta[property='twitter:image:src']",
+	}
+	for _, selector := range selectors {
+		if imageURL := normalizeImageURL(doc.Find(selector).AttrOr("content", ""), baseURL); imageURL != "" {
+			return imageURL
+		}
+	}
+	return ""
+}
+
+func normalizeImageURL(raw string, baseURL string) string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return ""
+	}
+	parsed, err := url.Parse(raw)
+	if err != nil {
+		return ""
+	}
+	if parsed.IsAbs() {
+		return parsed.String()
+	}
+	base, err := url.Parse(baseURL)
+	if err != nil {
+		return ""
+	}
+	return base.ResolveReference(parsed).String()
 }
 
 func selectPublishedTime(doc *goquery.Document, timeHint string, allowUpdated bool) (time.Time, bool) {

@@ -1,6 +1,10 @@
 package output
 
-import "fmt"
+import (
+	"fmt"
+
+	"github.com/walker1211/news-briefing/internal/model"
+)
 
 func briefingClock(period string) string {
 	if len(period) != 4 {
@@ -19,6 +23,13 @@ func briefingMarkdownHeader(date, period string) string {
 
 func briefingEmailSubject(date, period string) string {
 	return fmt.Sprintf("[资讯简报] %s %s %s", date, periodPrefix(period), briefingClock(period))
+}
+
+func briefingHeaderBlock(briefing *model.Briefing) string {
+	if briefing == nil {
+		return ""
+	}
+	return briefingMarkdownHeader(briefing.Date, briefing.Period) + "\n\n"
 }
 
 func briefingFileName(date, period string) string {
