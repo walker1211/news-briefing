@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/url"
 	"os/exec"
+	"regexp"
 	"strings"
 	"time"
 
@@ -13,6 +14,8 @@ import (
 	"github.com/walker1211/news-briefing/internal/config"
 	"github.com/walker1211/news-briefing/internal/model"
 )
+
+var rssImageSourcePattern = regexp.MustCompile(`(?i)<img[^>]+src=["']([^"']+)["']`)
 
 var fetchFeedWithCurlContext = func(ctx context.Context, url string) ([]byte, error) {
 	cmd := exec.CommandContext(ctx, "curl",
@@ -86,6 +89,7 @@ func (c *Client) FetchRSSContext(ctx context.Context, source config.Source, keyw
 				Title:     item.Title,
 				Link:      item.Link,
 				Summary:   summary,
+				ImageURL:  extractRSSItemImage(item),
 				Source:    source.Name,
 				Category:  source.Category,
 				Published: pub,
@@ -95,6 +99,35 @@ func (c *Client) FetchRSSContext(ctx context.Context, source config.Source, keyw
 	}
 
 	return result, nil
+}
+
+func extractRSSItemImage(item *gofeed.Item) string {
+	if item == nil {
+		return ""
+	}
+	if item.Image != nil {
+		if imageURL := normalizeImageURL(item.Image.URL, item.Link); imageURL != "" {
+			return imageURL
+		}
+	}
+	for _, enclosure := range item.Enclosures {
+		if enclosure == nil || !strings.HasPrefix(strings.ToLower(strings.TrimSpace(enclosure.Type)), "image/") {
+			continue
+		}
+		if imageURL := normalizeImageURL(enclosure.URL, item.Link); imageURL != "" {
+			return imageURL
+		}
+	}
+	for _, html := range []string{item.Content, item.Description} {
+		match := rssImageSourcePattern.FindStringSubmatch(html)
+		if len(match) < 2 {
+			continue
+		}
+		if imageURL := normalizeImageURL(match[1], item.Link); imageURL != "" {
+			return imageURL
+		}
+	}
+	return ""
 }
 
 func shouldFallbackToCurl(source config.Source, err error) bool {

@@ -1,6 +1,7 @@
 package output
 
 import (
+	"strings"
 	"testing"
 	"time"
 
@@ -35,6 +36,55 @@ func TestArticleListViewUsesProvidedLocation(t *testing.T) {
 	want := "1. [AI/科技] OpenAI ships feature\n   Feature summary\n   Source: Example | 2026-03-18 07:00\n   Link: https://example.com/openai\n\n2. [国际政治] Policy update\n   Policy summary\n   Source: Example Politics | 2026-03-18 08:30\n   Link: https://example.com/policy\n\n"
 	if got := ArticleListView(articles, loc); got != want {
 		t.Fatalf("ArticleListView() = %q, want %q", got, want)
+	}
+}
+
+func TestArticleListViewIncludesImageOnlyWhenPresent(t *testing.T) {
+	articles := []model.Article{
+		{
+			Title:     "OpenAI ships feature",
+			Summary:   "Feature summary",
+			ImageURL:  "https://example.com/cover.jpg",
+			Source:    "Example",
+			Link:      "https://example.com/openai",
+			Category:  "AI/科技",
+			Published: time.Date(2026, 3, 18, 14, 0, 0, 0, time.UTC),
+		},
+		{
+			Title:     "Policy update",
+			Summary:   "Policy summary",
+			Source:    "Example Politics",
+			Link:      "https://example.com/policy",
+			Category:  "国际政治",
+			Published: time.Date(2026, 3, 18, 15, 30, 0, 0, time.UTC),
+		},
+	}
+
+	got := ArticleListView(articles, time.UTC)
+	if !strings.Contains(got, "   Image: https://example.com/cover.jpg\n") {
+		t.Fatalf("ArticleListView() = %q, want image line", got)
+	}
+	if strings.Contains(got, "Policy update\n   Policy summary\n   Source: Example Politics | 2026-03-18 15:30\n   Link: https://example.com/policy\n   Image:") {
+		t.Fatalf("ArticleListView() = %q, should not include empty image line", got)
+	}
+}
+
+func TestGroupedArticleListViewIncludesImageOnlyWhenPresent(t *testing.T) {
+	articles := []model.Article{
+		{
+			Title:     "OpenAI ships feature",
+			Summary:   "Feature summary",
+			ImageURL:  "https://example.com/cover.jpg",
+			Source:    "Example",
+			Link:      "https://example.com/openai",
+			Category:  "AI/科技",
+			Published: time.Date(2026, 3, 18, 14, 0, 0, 0, time.UTC),
+		},
+	}
+
+	got := GroupedArticleListView(articles, []string{"AI/科技"}, time.UTC)
+	if !strings.Contains(got, "   Image: https://example.com/cover.jpg\n") {
+		t.Fatalf("GroupedArticleListView() = %q, want image line", got)
 	}
 }
 

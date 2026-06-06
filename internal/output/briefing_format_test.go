@@ -1,6 +1,10 @@
 package output
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/walker1211/news-briefing/internal/model"
+)
 
 func TestBriefingFormatTitle(t *testing.T) {
 	if got := briefingTitle("26.03.22", "0800"); got != "国际资讯简报 26.03.22 早间 08:00" {
@@ -11,6 +15,19 @@ func TestBriefingFormatTitle(t *testing.T) {
 func TestBriefingFormatMarkdownHeader(t *testing.T) {
 	if got := briefingMarkdownHeader("26.03.22", "0800"); got != "# 国际资讯简报 26.03.22 早间 08:00" {
 		t.Fatalf("briefingMarkdownHeader() = %q", got)
+	}
+}
+
+func TestBriefingHeaderBlockUsesDefaultTitleWithoutHeroImage(t *testing.T) {
+	briefing := &model.Briefing{
+		Date:       "26.06.06",
+		Period:     "0800",
+		Articles:   []model.Article{{ImageURL: "https://example.com/hero.jpg"}},
+		RawContent: "## AI/科技\n\n### Claude 服务异常\n**摘要：** ...",
+	}
+	want := "# 国际资讯简报 26.06.06 早间 08:00\n\n"
+	if got := briefingHeaderBlock(briefing); got != want {
+		t.Fatalf("briefingHeaderBlock() = %q, want %q", got, want)
 	}
 }
 

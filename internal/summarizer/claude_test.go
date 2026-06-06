@@ -19,6 +19,36 @@ import (
 
 const argSep = "\x1f"
 
+func TestBriefingPromptRequiresGroupedOverviewAndImageRules(t *testing.T) {
+	for _, want := range []string{
+		"## 今日速览",
+		"在 今日速览 下按分类分组",
+		"### 分类名",
+		"每个分类只列该分类新闻",
+		"![故事标题](图片URL)",
+		"AI/科技 分类下的重要新闻应尽量使用可用 Image URL",
+		"不要编造图片 URL",
+		"如果没有相关 Image URL，省略图片行",
+	} {
+		if !strings.Contains(briefingPrompt, want) {
+			t.Fatalf("briefingPrompt missing %q", want)
+		}
+	}
+}
+
+func TestBriefingPromptRequiresOverviewEmojisAndDetailedStorySections(t *testing.T) {
+	for _, want := range []string{
+		"今日速览 的每条项目符号开头使用一个贴切 emoji",
+		"保持 - emoji 空格 新闻要点 的 Markdown bullet 结构",
+		"**摘要：** 用2-4句话说明关键事实、背景、数字、参与方和最新进展",
+		"**影响：** 用2-3句话说明为什么重要、影响哪些人或机构、后续观察变量",
+	} {
+		if !strings.Contains(briefingPrompt, want) {
+			t.Fatalf("briefingPrompt missing detail rule %q", want)
+		}
+	}
+}
+
 func TestBriefingPromptUsesFollowupDirectionsInsteadOfTopicSuggestions(t *testing.T) {
 	if !strings.Contains(briefingPrompt, "## 今日最值得追的方向") {
 		t.Fatalf("briefingPrompt missing new section title")

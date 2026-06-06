@@ -86,6 +86,72 @@ func TestParseRepoPagePrefersReleasePublishedTime(t *testing.T) {
 	}
 }
 
+func TestParsePageSourceExtractsOpenGraphImage(t *testing.T) {
+	src := config.Source{
+		Name:     "Example Page",
+		URL:      "https://example.com/news/story",
+		Type:     config.SourceTypeDocsPage,
+		Category: "AI/科技",
+		Keywords: []string{"OpenAI"},
+		PageKind: "announcement",
+		TimeHint: "published",
+	}
+	html := `<!doctype html>
+<html>
+<head>
+  <meta property="og:title" content="OpenAI announced product">
+  <meta name="description" content="OpenAI announced a product update">
+  <meta property="og:image" content="/images/cover.png">
+  <meta property="article:published_time" content="2026-04-07T03:30:00Z">
+</head>
+<body><article><p>OpenAI announced a product update.</p></article></body>
+</html>`
+
+	candidate, accepted, err := parsePageSource(src, html)
+	if err != nil {
+		t.Fatalf("parsePageSource() error = %v", err)
+	}
+	if !accepted {
+		t.Fatal("accepted = false, want true")
+	}
+	if got := candidate.Article.ImageURL; got != "https://example.com/images/cover.png" {
+		t.Fatalf("Article.ImageURL = %q, want resolved og:image", got)
+	}
+}
+
+func TestParsePageSourceFallsBackToTwitterImage(t *testing.T) {
+	src := config.Source{
+		Name:     "Example Page",
+		URL:      "https://example.com/news/story",
+		Type:     config.SourceTypeDocsPage,
+		Category: "AI/科技",
+		Keywords: []string{"OpenAI"},
+		PageKind: "announcement",
+		TimeHint: "published",
+	}
+	html := `<!doctype html>
+<html>
+<head>
+  <meta property="og:title" content="OpenAI announced product">
+  <meta name="description" content="OpenAI announced a product update">
+  <meta name="twitter:image" content="https://cdn.example.com/twitter.jpg">
+  <meta property="article:published_time" content="2026-04-07T03:30:00Z">
+</head>
+<body><article><p>OpenAI announced a product update.</p></article></body>
+</html>`
+
+	candidate, accepted, err := parsePageSource(src, html)
+	if err != nil {
+		t.Fatalf("parsePageSource() error = %v", err)
+	}
+	if !accepted {
+		t.Fatal("accepted = false, want true")
+	}
+	if got := candidate.Article.ImageURL; got != "https://cdn.example.com/twitter.jpg" {
+		t.Fatalf("Article.ImageURL = %q, want twitter:image", got)
+	}
+}
+
 func TestParsePageRejectsMissingAcceptableTime(t *testing.T) {
 	src := config.Source{
 		Name:     "No Time",

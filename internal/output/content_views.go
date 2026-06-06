@@ -18,11 +18,23 @@ func formatArticlePublishedAt(published time.Time, loc *time.Location) string {
 func ArticleListView(articles []model.Article, loc *time.Location) string {
 	var sb strings.Builder
 	for i, a := range articles {
-		sb.WriteString(fmt.Sprintf("%d. [%s] %s\n   %s\n   Source: %s | %s\n   Link: %s\n\n",
-			i+1, a.Category, a.Title, a.Summary, a.Source,
-			formatArticlePublishedAt(a.Published, loc), a.Link))
+		writeArticleListItem(&sb, i+1, a, loc, true)
 	}
 	return sb.String()
+}
+
+func writeArticleListItem(sb *strings.Builder, number int, article model.Article, loc *time.Location, includeCategory bool) {
+	if includeCategory {
+		sb.WriteString(fmt.Sprintf("%d. [%s] %s\n", number, article.Category, article.Title))
+	} else {
+		sb.WriteString(fmt.Sprintf("%d. %s\n", number, article.Title))
+	}
+	sb.WriteString(fmt.Sprintf("   %s\n   Source: %s | %s\n   Link: %s\n",
+		article.Summary, article.Source, formatArticlePublishedAt(article.Published, loc), article.Link))
+	if strings.TrimSpace(article.ImageURL) != "" {
+		sb.WriteString("   Image: " + strings.TrimSpace(article.ImageURL) + "\n")
+	}
+	sb.WriteString("\n")
 }
 
 func OrderedCategories(articles []model.Article, categoryOrder []string) []string {
@@ -62,9 +74,7 @@ func GroupedArticleListView(articles []model.Article, categoryOrder []string, lo
 		}
 		sb.WriteString(fmt.Sprintf("== %s (%d篇) ==\n\n", cat, len(items)))
 		for _, a := range items {
-			sb.WriteString(fmt.Sprintf("%d. %s\n   %s\n   Source: %s | %s\n   Link: %s\n\n",
-				n, a.Title, a.Summary, a.Source,
-				formatArticlePublishedAt(a.Published, loc), a.Link))
+			writeArticleListItem(&sb, n, a, loc, false)
 			n++
 		}
 	}

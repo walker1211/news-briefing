@@ -62,6 +62,85 @@ func TestFetchRSSFallsBackToCurlForReddit403(t *testing.T) {
 
 }
 
+func TestFetchRSSExtractsImageFromEnclosure(t *testing.T) {
+	client := NewClient(&http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Status:     "200 OK",
+			Body: io.NopCloser(strings.NewReader(`<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0">
+  <channel>
+    <title>Example Feed</title>
+    <item>
+      <title>OpenAI announced product</title>
+      <link>https://example.com/openai</link>
+      <description>OpenAI announced a product update</description>
+      <enclosure url="https://example.com/cover.jpg" type="image/jpeg" length="123" />
+      <pubDate>Wed, 18 Mar 2026 10:00:00 GMT</pubDate>
+    </item>
+  </channel>
+</rss>`)),
+			Header:  make(http.Header),
+			Request: req,
+		}, nil
+	})})
+
+	result, err := client.FetchRSS(config.Source{
+		Name:     "Example",
+		URL:      "https://example.com/feed.xml",
+		Type:     config.SourceTypeRSS,
+		Category: "AI/科技",
+	}, []string{"OpenAI"}, time.Date(2026, 3, 18, 8, 0, 0, 0, time.UTC))
+	if err != nil {
+		t.Fatalf("FetchRSS() error = %v", err)
+	}
+	if len(result.Candidates) != 1 {
+		t.Fatalf("len(result.Candidates) = %d, want 1", len(result.Candidates))
+	}
+	if got := result.Candidates[0].Article.ImageURL; got != "https://example.com/cover.jpg" {
+		t.Fatalf("Article.ImageURL = %q, want enclosure image", got)
+	}
+}
+
+func TestFetchRSSLeavesImageURLEmptyWhenNoImageExists(t *testing.T) {
+	client := NewClient(&http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Status:     "200 OK",
+			Body: io.NopCloser(strings.NewReader(`<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0">
+  <channel>
+    <title>Example Feed</title>
+    <item>
+      <title>OpenAI announced product</title>
+      <link>https://example.com/openai</link>
+      <description>OpenAI announced a product update</description>
+      <pubDate>Wed, 18 Mar 2026 10:00:00 GMT</pubDate>
+    </item>
+  </channel>
+</rss>`)),
+			Header:  make(http.Header),
+			Request: req,
+		}, nil
+	})})
+
+	result, err := client.FetchRSS(config.Source{
+		Name:     "Example",
+		URL:      "https://example.com/feed.xml",
+		Type:     config.SourceTypeRSS,
+		Category: "AI/科技",
+	}, []string{"OpenAI"}, time.Date(2026, 3, 18, 8, 0, 0, 0, time.UTC))
+	if err != nil {
+		t.Fatalf("FetchRSS() error = %v", err)
+	}
+	if len(result.Candidates) != 1 {
+		t.Fatalf("len(result.Candidates) = %d, want 1", len(result.Candidates))
+	}
+	if got := result.Candidates[0].Article.ImageURL; got != "" {
+		t.Fatalf("Article.ImageURL = %q, want empty", got)
+	}
+}
+
 func TestFetchRSSReturnsCurlFallbackError(t *testing.T) {
 	client := NewClient(&http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
 		return &http.Response{
