@@ -3,6 +3,8 @@ package main
 import (
 	"context"
 	"errors"
+	"path/filepath"
+
 	"github.com/walker1211/news-briefing/internal/config"
 	"github.com/walker1211/news-briefing/internal/fetcher"
 	"github.com/walker1211/news-briefing/internal/model"
@@ -329,9 +331,9 @@ func TestRunBriefingMainFetchErrorReturnsWithoutWaitingForWatch(t *testing.T) {
 	}
 }
 
-func TestRunBriefingWatchErrorSkipsRender(t *testing.T) {
+func TestRunBriefingWatchErrorAddsNoticeAndStillRenders(t *testing.T) {
 	now := time.Date(2026, 4, 15, 16, 0, 0, 0, time.UTC)
-	rendered := false
+	var rendered *model.Briefing
 
 	app := &app{
 		cfg: &config.Config{Output: config.OutputCfg{Dir: t.TempDir(), Mode: model.OutputModeOriginalOnly}},
@@ -347,16 +349,25 @@ func TestRunBriefingWatchErrorSkipsRender(t *testing.T) {
 			},
 		},
 		output: outputDeps{
-			printCLI: func(*model.Briefing) { rendered = true },
+			printFailed: func([]fetcher.FailedSource) {},
+			printCLI:    func(briefing *model.Briefing) { rendered = briefing },
+			composeBody: func(string, model.OutputMode, model.OutputContent) (string, error) {
+				return "body", nil
+			},
+			writeMarkdown: func(*model.Briefing, string) (string, error) {
+				return filepath.Join(t.TempDir(), "briefing.md"), nil
+			},
 		},
 	}
 
-	err := app.runBriefingContext(context.Background(), "run", "1600", false, false)
-	if err == nil || !strings.Contains(err.Error(), "watch failed") {
-		t.Fatalf("runBriefingContext() error = %v, want watch failed", err)
+	if err := app.runBriefingContext(context.Background(), "run", "1600", false, false); err != nil {
+		t.Fatalf("runBriefingContext() error = %v, want nil", err)
 	}
-	if rendered {
-		t.Fatal("printCLI() should not run after watch fetch failure")
+	if rendered == nil {
+		t.Fatal("printCLI() was not called")
+	}
+	if !strings.Contains(rendered.RawContent, "Watch 抓取失败") || !strings.Contains(rendered.RawContent, "watch failed") {
+		t.Fatalf("RawContent = %q, want watch failure notice", rendered.RawContent)
 	}
 }
 

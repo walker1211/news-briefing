@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/walker1211/news-briefing/internal/config"
@@ -23,7 +24,83 @@ type browseboxProxySession struct {
 	done     chan error
 }
 
+type browseboxProcessOutput struct {
+	mu     sync.Mutex
+	stdout []string
+	stderr []string
+}
+
+const browseboxProcessOutputLimit = 20
+
 var startBrowseboxProxy = startBrowseboxProxyProcess
+
+func (o *browseboxProcessOutput) addStdout(line string) {
+	o.add(&o.stdout, line)
+}
+
+func (o *browseboxProcessOutput) addStderr(line string) {
+	o.add(&o.stderr, line)
+}
+
+func (o *browseboxProcessOutput) add(lines *[]string, line string) {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	*lines = append(*lines, line)
+	if len(*lines) > browseboxProcessOutputLimit {
+		*lines = append([]string(nil), (*lines)[len(*lines)-browseboxProcessOutputLimit:]...)
+	}
+}
+
+func (o *browseboxProcessOutput) summary() string {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	parts := make([]string, 0, 2)
+	if len(o.stdout) > 0 {
+		parts = append(parts, "stdout: "+strings.Join(o.stdout, "\nstdout: "))
+	}
+	if len(o.stderr) > 0 {
+		parts = append(parts, "stderr: "+strings.Join(o.stderr, "\nstderr: "))
+	}
+	return strings.Join(parts, "\n")
+}
+
+func appendBrowseboxProcessOutput(err error, output *browseboxProcessOutput) error {
+	if err == nil || output == nil {
+		return err
+	}
+	if summary := output.summary(); summary != "" {
+		return fmt.Errorf("%w\n%s", err, summary)
+	}
+	return err
+}
+
+func recordBrowseboxLines(reader io.Reader, record func(string)) {
+	scanner := bufio.NewScanner(reader)
+	for scanner.Scan() {
+		record(scanner.Text())
+	}
+}
+
+func scanBrowseboxStdout(reader io.Reader, output *browseboxProcessOutput, lines chan<- string) {
+	defer close(lines)
+	scanner := bufio.NewScanner(reader)
+	for scanner.Scan() {
+		line := scanner.Text()
+		if output != nil {
+			output.addStdout(line)
+		}
+		select {
+		case lines <- line:
+		default:
+		}
+	}
+}
+
+func waitBrowseboxRecorders(done ...<-chan struct{}) {
+	for _, ch := range done {
+		<-ch
+	}
+}
 
 func watchProxyProviderEnabled(cfg *config.Config) bool {
 	return cfg != nil && cfg.Watch.ProxyProvider.Enabled && cfg.Watch.ProxyProvider.Type == config.WatchProxyProviderTypeBrowsebox
@@ -105,30 +182,35 @@ func startBrowseboxProxyProcess(ctx context.Context, cfg *config.Config) (*brows
 		done <- cmd.Wait()
 		close(done)
 	}()
-	go io.Copy(io.Discard, stderr)
+	processOutput := &browseboxProcessOutput{}
+	stdoutLines := make(chan string, 64)
+	stdoutDone := make(chan struct{})
+	stderrDone := make(chan struct{})
+	go func() {
+		defer close(stdoutDone)
+		scanBrowseboxStdout(stdout, processOutput, stdoutLines)
+	}()
+	go func() {
+		defer close(stderrDone)
+		recordBrowseboxLines(stderr, processOutput.addStderr)
+	}()
 
 	startupTimeout := provider.StartupTimeout
 	if startupTimeout <= 0 {
 		startupTimeout = config.DefaultWatchBrowseboxStartupTimeout
 	}
-	proxyURL, err := waitBrowseboxProxyReady(ctx, stdout, provider.ProxyPort, done, startupTimeout)
+	proxyURL, err := waitBrowseboxProxyReady(ctx, stdoutLines, provider.ProxyPort, done, startupTimeout)
 	if err != nil {
 		cancel()
 		<-done
-		return nil, err
+		waitBrowseboxRecorders(stdoutDone, stderrDone)
+		return nil, appendBrowseboxProcessOutput(err, processOutput)
 	}
 	return &browseboxProxySession{proxyURL: proxyURL, cancel: cancel, done: done}, nil
 }
 
-func waitBrowseboxProxyReady(ctx context.Context, stdout io.Reader, port int, done <-chan error, timeout time.Duration) (string, error) {
+func waitBrowseboxProxyReady(ctx context.Context, lines <-chan string, port int, done <-chan error, timeout time.Duration) (string, error) {
 	ready := fmt.Sprintf("Proxy: http://127.0.0.1:%d", port)
-	lines := make(chan string, 1)
-	go func() {
-		scanner := bufio.NewScanner(stdout)
-		for scanner.Scan() {
-			lines <- scanner.Text()
-		}
-	}()
 	timer := time.NewTimer(timeout)
 	defer timer.Stop()
 	for {
@@ -139,7 +221,11 @@ func waitBrowseboxProxyReady(ctx context.Context, stdout io.Reader, port int, do
 			return "", fmt.Errorf("wait for browsebox proxy ready: timeout")
 		case err := <-done:
 			return "", fmt.Errorf("browsebox proxy exited before ready: %w", err)
-		case line := <-lines:
+		case line, ok := <-lines:
+			if !ok {
+				lines = nil
+				continue
+			}
 			if strings.TrimSpace(line) == ready {
 				return "http://127.0.0.1:" + strconv.Itoa(port), nil
 			}
