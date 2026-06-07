@@ -2,7 +2,9 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"os"
 	"os/exec"
 	"strings"
 
@@ -27,9 +29,35 @@ func runPublishHook(ctx context.Context, cfg config.PublishHookConfig, req publi
 	args := expandPublishHookArgs(cfg.Args, req)
 	cmd := exec.CommandContext(ctx, command, args...)
 	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("publish hook failed: %w", err)
+		return fmt.Errorf("publish hook failed: %s", describePublishHookRunError(ctx, err))
 	}
 	return nil
+}
+
+func describePublishHookRunError(ctx context.Context, err error) string {
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return ctxErr.Error()
+	}
+
+	var exitErr *exec.ExitError
+	if errors.As(err, &exitErr) {
+		if code := exitErr.ExitCode(); code >= 0 {
+			return fmt.Sprintf("exit code %d", code)
+		}
+		return "command terminated"
+	}
+
+	var execErr *exec.Error
+	if errors.As(err, &execErr) {
+		return "command unavailable"
+	}
+
+	var pathErr *os.PathError
+	if errors.As(err, &pathErr) {
+		return "command unavailable"
+	}
+
+	return "command failed"
 }
 
 func expandPublishHookArgs(args []string, req publishHookRequest) []string {

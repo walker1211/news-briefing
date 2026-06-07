@@ -61,71 +61,92 @@ func parseArgs(args []string) (command, error) {
 	if normalizedCmdName == "x" {
 		return parseXCommand(args[1:])
 	}
-	if err := preValidateCommandArgs(normalizedCmdName, args[1:]); err != nil {
+	cmdArgs := args[1:]
+	if err := preValidateCommandArgs(normalizedCmdName, cmdArgs); err != nil {
 		return nil, err
 	}
 
 	switch normalizedCmdName {
 	case "run":
-		return runCommand{raw: hasFlagIn(args[1:], "--raw"), noEmail: hasFlagIn(args[1:], "--no-email")}, nil
+		return parseRunCommand(cmdArgs)
 	case "regen":
-		fromRaw, ok := readStringFlag(args[1:], "--from")
-		if !ok {
-			return nil, fmt.Errorf("--from is required")
-		}
-		toRaw, ok := readStringFlag(args[1:], "--to")
-		if !ok {
-			return nil, fmt.Errorf("--to is required")
-		}
-		period, ok := readStringFlag(args[1:], "--period")
-		if !ok || period == "" {
-			if rawPeriod, exists := nextTokenAfterFlag(args[1:], "--period"); exists && strings.HasPrefix(rawPeriod, "-") {
-				period = rawPeriod
-			} else {
-				period = defaultPeriodFromRaw(toRaw)
-			}
-		}
-		if err := validatePeriod(period); err != nil {
-			return nil, err
-		}
-		historyDays := 0
-		if rawHistoryDays, ok := readStringFlag(args[1:], "--x-visible-history-days"); ok {
-			parsed, err := parsePositiveIntFlag(rawHistoryDays, "--x-visible-history-days")
-			if err != nil {
-				return nil, err
-			}
-			historyDays = parsed
-		}
-		historyDir, _ := readStringFlag(args[1:], "--x-visible-history-dir")
-		return regenCommand{fromRaw: fromRaw, toRaw: toRaw, period: period, ignoreSeen: hasFlagIn(args[1:], "--ignore-seen"), sendEmail: hasFlagIn(args[1:], "--send-email"), raw: hasFlagIn(args[1:], "--raw"), xVisibleHistoryDays: historyDays, xVisibleHistoryDir: historyDir}, nil
+		return parseRegenCommand(cmdArgs)
 	case "fetch":
-		return fetchCommand{zh: hasFlagIn(args[1:], "--zh")}, nil
+		return parseFetchCommand(cmdArgs)
 	case "alerts":
 		return alertsCommand{}, nil
 	case "serve":
 		return serveCommand{}, nil
 	case "deep":
-		fromRaw, fromSet := readStringFlag(args[1:], "--from")
-		toRaw, toSet := readStringFlag(args[1:], "--to")
-		if fromSet != toSet {
-			return nil, fmt.Errorf("--from and --to must be provided together")
-		}
-		topic := collectDeepTopicArgs(args[1:])
-		if topic == "" {
-			return nil, fmt.Errorf("missing deep topic")
-		}
-		return deepCommand{topic: topic, fromRaw: fromRaw, toRaw: toRaw, ignoreSeen: hasFlagIn(args[1:], "--ignore-seen"), sendEmail: hasFlagIn(args[1:], "--send-email")}, nil
+		return parseDeepCommand(cmdArgs)
 	case "resend-md":
-		file, ok := readStringFlag(args[1:], "--file")
-		if !ok || file == "" {
-			return nil, fmt.Errorf("--file is required")
-		}
-		return resendMDCommand{file: file}, nil
+		return parseResendMDCommand(cmdArgs)
 	case "help":
 		return helpCommand{}, nil
 	default:
 		return nil, fmt.Errorf("unknown command: %s", args[0])
 	}
+}
+
+func parseRunCommand(args []string) (command, error) {
+	return runCommand{raw: hasFlagIn(args, "--raw"), noEmail: hasFlagIn(args, "--no-email")}, nil
+}
+
+func parseRegenCommand(args []string) (command, error) {
+	fromRaw, ok := readStringFlag(args, "--from")
+	if !ok {
+		return nil, fmt.Errorf("--from is required")
+	}
+	toRaw, ok := readStringFlag(args, "--to")
+	if !ok {
+		return nil, fmt.Errorf("--to is required")
+	}
+	period, ok := readStringFlag(args, "--period")
+	if !ok || period == "" {
+		if rawPeriod, exists := nextTokenAfterFlag(args, "--period"); exists && strings.HasPrefix(rawPeriod, "-") {
+			period = rawPeriod
+		} else {
+			period = defaultPeriodFromRaw(toRaw)
+		}
+	}
+	if err := validatePeriod(period); err != nil {
+		return nil, err
+	}
+	historyDays := 0
+	if rawHistoryDays, ok := readStringFlag(args, "--x-visible-history-days"); ok {
+		parsed, err := parsePositiveIntFlag(rawHistoryDays, "--x-visible-history-days")
+		if err != nil {
+			return nil, err
+		}
+		historyDays = parsed
+	}
+	historyDir, _ := readStringFlag(args, "--x-visible-history-dir")
+	return regenCommand{fromRaw: fromRaw, toRaw: toRaw, period: period, ignoreSeen: hasFlagIn(args, "--ignore-seen"), sendEmail: hasFlagIn(args, "--send-email"), raw: hasFlagIn(args, "--raw"), xVisibleHistoryDays: historyDays, xVisibleHistoryDir: historyDir}, nil
+}
+
+func parseFetchCommand(args []string) (command, error) {
+	return fetchCommand{zh: hasFlagIn(args, "--zh")}, nil
+}
+
+func parseDeepCommand(args []string) (command, error) {
+	fromRaw, fromSet := readStringFlag(args, "--from")
+	toRaw, toSet := readStringFlag(args, "--to")
+	if fromSet != toSet {
+		return nil, fmt.Errorf("--from and --to must be provided together")
+	}
+	topic := collectDeepTopicArgs(args)
+	if topic == "" {
+		return nil, fmt.Errorf("missing deep topic")
+	}
+	return deepCommand{topic: topic, fromRaw: fromRaw, toRaw: toRaw, ignoreSeen: hasFlagIn(args, "--ignore-seen"), sendEmail: hasFlagIn(args, "--send-email")}, nil
+}
+
+func parseResendMDCommand(args []string) (command, error) {
+	file, ok := readStringFlag(args, "--file")
+	if !ok || file == "" {
+		return nil, fmt.Errorf("--file is required")
+	}
+	return resendMDCommand{file: file}, nil
 }
 
 func parseXCommand(args []string) (command, error) {
