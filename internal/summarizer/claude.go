@@ -3,6 +3,7 @@ package summarizer
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
@@ -19,47 +20,56 @@ import (
 
 const briefingPrompt = `你是一个国际新闻编辑。
 
-请将以下英文新闻条目整理成中文简报。开头先输出 ## 今日速览，在 今日速览 下按分类分组，每个分类用 ### 分类名，然后用项目符号列出该分类最重要新闻；每个分类只列该分类新闻。今日速览 的每条项目符号开头使用一个贴切 emoji，保持 - emoji 空格 新闻要点 的 Markdown bullet 结构，不要堆叠多个 emoji。然后按下面新闻条目里出现的分类顺序输出，每个分类使用 ## 分类名 作为标题。
+请将以下英文新闻条目整理成中文结构化简报。只输出合法 JSON，不要输出 Markdown，不要用代码块包裹，不要输出过程说明、自我说明或额外备注。
 
-每条新闻格式：
-### 标题（中文翻译）
-如果该话题有相关 Image URL，在标题下方输出一行：![故事标题](图片URL)。AI/科技 分类下的重要新闻应尽量使用可用 Image URL，其他分类只在图片明显相关时使用。不要编造图片 URL；如果没有相关 Image URL，省略图片行。
-**摘要：** 用2-4句话说明关键事实、背景、数字、参与方和最新进展，不要只做一句话标题复述；如果多条相关新闻合并为同一话题，要交代各条新闻之间的关系。
-**影响：** 用2-3句话说明为什么重要、影响哪些人或机构、后续观察变量，避免空泛地写“值得关注后续进展”。
-> 来源: [来源名] | [时间]
+JSON 顶层结构必须是：
+{
+  "overview_groups": [
+    {"category": "分类名", "items": ["emoji 新闻要点"]}
+  ],
+  "stories": [
+    {
+      "category": "分类名",
+      "title": "中文标题",
+      "image_url": "输入 Image 字段原值或空字符串",
+      "summary": "2-4句话摘要",
+      "impact": "2-3句话影响分析",
+      "source_article_ids": [1],
+      "source_line": "来源: 来源名 | 时间"
+    }
+  ],
+  "situation": "3句话今日整体态势",
+  "directions": [
+    {
+      "title": "方向标题",
+      "why": "1-2句话说明为什么值得追",
+      "next": "1句话说明后续观察变量或节点",
+      "deep_command": "./news-briefing deep \"关键词\" --ignore-seen"
+    }
+  ]
+}
 
-按重要程度排序，相关联的新闻合并为同一话题。
+overview_groups 是今日速览：按分类分组，每个分类只列该分类新闻；每条 items 开头使用一个贴切 emoji，不要堆叠多个 emoji。
+stories 按下面新闻条目里出现的分类顺序输出；每个分类内部按重要程度排序，相关联的新闻合并为同一 story。
+summary 用2-4句话说明关键事实、背景、数字、参与方和最新进展，不要只做一句话标题复述；如果多条相关新闻合并为同一 story，要交代各条新闻之间的关系。
+impact 用2-3句话说明为什么重要、影响哪些人或机构、后续观察变量，避免空泛地写“值得关注后续进展”。
+source_article_ids 必须使用输入新闻条目的 1-based 编号；合并多条新闻时列出所有来源编号。
+image_url 只能使用输入新闻条目中的 Image 字段原值；没有可用图片时使用空字符串。不要编造、改写或重新托管图片 URL。AI/科技 分类下的重要 story 如果 source_article_ids 对应新闻有 Image 字段，应优先使用其中最相关的一张。
 
-然后输出：
-
----
-## 今日态势
-用3句话总结今日整体态势。
-
----
-## 今日最值得追的方向
-
-输出 2-4 个最值得普通用户继续关注的新闻方向，每个包含：
-### 方向N：[方向标题]
-**为什么值得追：** 用1-2句话说明这个话题为什么重要，为什么值得继续跟踪
-**接下来关注什么：** 用1句话说明后续最值得观察的变量或节点
-**深挖命令：** 提供一条可直接复制执行的命令，格式为 ./news-briefing deep "关键词" --ignore-seen
-
-不要少于 2 个，也不要多于 4 个。
+directions 输出 2-4 个最值得普通用户继续关注的新闻方向，不要少于 2 个，也不要多于 4 个。
 如果高质量独立方向不足，允许合并相近新闻形成更上位但仍然具体的方向；不要为了凑数输出重复方向。
 如果两个候选方向需要使用同一个 deep 关键词，默认应优先考虑合并，而不是拆成两个方向。
+deep_command 格式为 ./news-briefing deep "关键词" --ignore-seen。
 深挖命令里的关键词默认优先使用英文实体或英文新闻短语，而不是中文概括题目。
 长度控制在 2-6 个词，优先包含公司名、产品名、人物名、法案/政策名、机构名等明确锚点。
 避免使用纯中文概括题目，也避免只用过泛词，例如不要只写 AI、美国科技、数据中心新闻。
 优先参考这种风格：Sanders AOC AI data center bill、ICE data brokers surveillance。
-关键词应尽量具体且可直接用于 deep 命令。
-
-这是单轮直接生成任务，不是对话。不要提出问题，不要请求确认口径或风格，不要输出过程说明、自我说明或额外备注，只输出最终简报正文。`
+关键词应尽量具体且可直接用于 deep 命令。`
 
 const nonInteractiveBriefingSystemPrompt = `这是一次无人值守的单轮批处理任务，不是对话。
 你不能向用户提问，不能请求确认口径、风格或范围，不能给出 A/B 选项，不能输出“如果你愿意我可以……”之类的引导语。
-如有风格歧义，默认按可直接发送给读者的中文成稿简报输出，语言自然，偏自然、可直接阅读的中文研究简报风格。
-只输出最终简报正文，不要输出任何过程说明、任务说明、自我介绍或额外备注。`
+如有风格歧义，默认按提示词要求的结构化中文简报数据输出，语言自然，偏自然、可直接阅读的中文研究简报风格。
+只输出提示词要求的最终 JSON，不要输出任何过程说明、任务说明、自我介绍或额外备注。`
 
 const nonInteractiveDeepDiveSystemPrompt = `这是一次无人值守的单轮批处理任务，不是对话。
 你不能向用户提问，不能请求确认口径、风格或范围，不能给出 A/B 选项，不能输出“如果你愿意我可以……”之类的引导语。
@@ -444,7 +454,84 @@ func (r *Runner) SummarizeContext(ctx context.Context, articles []model.Article,
 	input := output.GroupedArticleListView(articles, categoryOrder, loc)
 	prompt := briefingPrompt + "\n\n---\n以下是今日新闻条目：\n\n" + input
 
-	return r.callClaudeContext(ctx, prompt, r.summarizeExtraFlags()...)
+	raw, err := r.callClaudeContext(ctx, prompt, r.summarizeExtraFlags()...)
+	if err != nil {
+		return "", err
+	}
+	structured, err := parseBriefingSummaryJSON(raw)
+	if err != nil {
+		return "", fmt.Errorf("parse structured briefing: %w", err)
+	}
+	structured = validateBriefingSummaryImages(structured, articles)
+	return output.StructuredBriefingMarkdown(structured, categoryOrder), nil
+}
+
+func parseBriefingSummaryJSON(raw string) (model.BriefingSummary, error) {
+	var summary model.BriefingSummary
+	body := stripJSONCodeFence(strings.TrimSpace(raw))
+	if body == "" {
+		return summary, fmt.Errorf("empty response")
+	}
+	if err := json.Unmarshal([]byte(body), &summary); err != nil {
+		return summary, err
+	}
+	return summary, nil
+}
+
+func stripJSONCodeFence(value string) string {
+	value = strings.TrimSpace(value)
+	if !strings.HasPrefix(value, "```") {
+		return value
+	}
+	lines := strings.Split(value, "\n")
+	if len(lines) < 2 {
+		return value
+	}
+	first := strings.TrimSpace(lines[0])
+	last := strings.TrimSpace(lines[len(lines)-1])
+	if first != "```" && first != "```json" && first != "```JSON" {
+		return value
+	}
+	if last != "```" {
+		return value
+	}
+	return strings.TrimSpace(strings.Join(lines[1:len(lines)-1], "\n"))
+}
+
+func validateBriefingSummaryImages(summary model.BriefingSummary, articles []model.Article) model.BriefingSummary {
+	allowed := make(map[string]struct{})
+	for _, article := range articles {
+		if image := strings.TrimSpace(article.ImageURL); image != "" {
+			allowed[image] = struct{}{}
+		}
+	}
+	for i := range summary.Stories {
+		image := strings.TrimSpace(summary.Stories[i].ImageURL)
+		if image != "" {
+			if _, ok := allowed[image]; ok {
+				summary.Stories[i].ImageURL = image
+				continue
+			}
+			summary.Stories[i].ImageURL = ""
+		}
+		if summary.Stories[i].ImageURL == "" {
+			summary.Stories[i].ImageURL = firstSourceArticleImage(summary.Stories[i].SourceArticleIDs, articles)
+		}
+	}
+	return summary
+}
+
+func firstSourceArticleImage(ids []int, articles []model.Article) string {
+	for _, id := range ids {
+		idx := id - 1
+		if idx < 0 || idx >= len(articles) {
+			continue
+		}
+		if image := strings.TrimSpace(articles[idx].ImageURL); image != "" {
+			return image
+		}
+	}
+	return ""
 }
 
 func (r *Runner) summarizeExtraFlags() []string {

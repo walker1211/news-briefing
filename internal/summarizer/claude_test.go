@@ -19,16 +19,17 @@ import (
 
 const argSep = "\x1f"
 
-func TestBriefingPromptRequiresGroupedOverviewAndImageRules(t *testing.T) {
+func TestBriefingPromptRequiresStructuredJSONAndImageRules(t *testing.T) {
 	for _, want := range []string{
-		"## 今日速览",
-		"在 今日速览 下按分类分组",
-		"### 分类名",
+		"只输出合法 JSON",
+		"不要输出 Markdown",
+		"overview_groups",
+		"stories",
+		"image_url",
+		"source_article_ids",
 		"每个分类只列该分类新闻",
-		"![故事标题](图片URL)",
-		"AI/科技 分类下的重要新闻应尽量使用可用 Image URL",
-		"不要编造图片 URL",
-		"如果没有相关 Image URL，省略图片行",
+		"Image 字段原值",
+		"不要编造、改写或重新托管图片 URL",
 	} {
 		if !strings.Contains(briefingPrompt, want) {
 			t.Fatalf("briefingPrompt missing %q", want)
@@ -36,12 +37,12 @@ func TestBriefingPromptRequiresGroupedOverviewAndImageRules(t *testing.T) {
 	}
 }
 
-func TestBriefingPromptRequiresOverviewEmojisAndDetailedStorySections(t *testing.T) {
+func TestBriefingPromptRequiresOverviewEmojisAndDetailedStoryFields(t *testing.T) {
 	for _, want := range []string{
-		"今日速览 的每条项目符号开头使用一个贴切 emoji",
-		"保持 - emoji 空格 新闻要点 的 Markdown bullet 结构",
-		"**摘要：** 用2-4句话说明关键事实、背景、数字、参与方和最新进展",
-		"**影响：** 用2-3句话说明为什么重要、影响哪些人或机构、后续观察变量",
+		"每条 items 开头使用一个贴切 emoji",
+		"summary 用2-4句话说明关键事实、背景、数字、参与方和最新进展",
+		"impact 用2-3句话说明为什么重要、影响哪些人或机构、后续观察变量",
+		"source_article_ids 必须使用输入新闻条目的 1-based 编号",
 	} {
 		if !strings.Contains(briefingPrompt, want) {
 			t.Fatalf("briefingPrompt missing detail rule %q", want)
@@ -50,14 +51,11 @@ func TestBriefingPromptRequiresOverviewEmojisAndDetailedStorySections(t *testing
 }
 
 func TestBriefingPromptUsesFollowupDirectionsInsteadOfTopicSuggestions(t *testing.T) {
-	if !strings.Contains(briefingPrompt, "## 今日最值得追的方向") {
-		t.Fatalf("briefingPrompt missing new section title")
-	}
-
 	for _, want := range []string{
-		"**为什么值得追：**",
-		"**接下来关注什么：**",
-		"**深挖命令：**",
+		"directions",
+		"why",
+		"next",
+		"deep_command",
 		"./news-briefing deep \"关键词\" --ignore-seen",
 	} {
 		if !strings.Contains(briefingPrompt, want) {
@@ -119,6 +117,51 @@ func TestBriefingPromptRequiresEnglishEntityStyleDeepCommands(t *testing.T) {
 		if !strings.Contains(briefingPrompt, want) {
 			t.Fatalf("briefingPrompt missing deep command rule %q", want)
 		}
+	}
+}
+
+func TestParseBriefingSummaryJSONStripsCodeFence(t *testing.T) {
+	raw := "```json\n{\"stories\":[{\"category\":\"AI/科技\",\"title\":\"OpenAI 发布\"}]}\n```"
+
+	got, err := parseBriefingSummaryJSON(raw)
+	if err != nil {
+		t.Fatalf("parseBriefingSummaryJSON() error = %v", err)
+	}
+	if len(got.Stories) != 1 || got.Stories[0].Title != "OpenAI 发布" {
+		t.Fatalf("parseBriefingSummaryJSON() = %#v", got)
+	}
+}
+
+func TestValidateBriefingSummaryImagesKeepsAllowedImageURL(t *testing.T) {
+	articles := []model.Article{{ImageURL: "https://example.com/openai.jpg"}}
+	summary := model.BriefingSummary{Stories: []model.BriefingStory{{ImageURL: "https://example.com/openai.jpg"}}}
+
+	got := validateBriefingSummaryImages(summary, articles)
+	if got.Stories[0].ImageURL != "https://example.com/openai.jpg" {
+		t.Fatalf("ImageURL = %q, want allowed URL", got.Stories[0].ImageURL)
+	}
+}
+
+func TestValidateBriefingSummaryImagesClearsInventedImageURL(t *testing.T) {
+	articles := []model.Article{{ImageURL: "https://example.com/openai.jpg"}}
+	summary := model.BriefingSummary{Stories: []model.BriefingStory{{ImageURL: "https://evil.example.com/fake.jpg"}}}
+
+	got := validateBriefingSummaryImages(summary, articles)
+	if got.Stories[0].ImageURL != "" {
+		t.Fatalf("ImageURL = %q, want empty for invented URL", got.Stories[0].ImageURL)
+	}
+}
+
+func TestValidateBriefingSummaryImagesBackfillsFromSourceArticleIDs(t *testing.T) {
+	articles := []model.Article{
+		{ImageURL: ""},
+		{ImageURL: "https://example.com/source.jpg"},
+	}
+	summary := model.BriefingSummary{Stories: []model.BriefingStory{{SourceArticleIDs: []int{1, 2}}}}
+
+	got := validateBriefingSummaryImages(summary, articles)
+	if got.Stories[0].ImageURL != "https://example.com/source.jpg" {
+		t.Fatalf("ImageURL = %q, want source article image", got.Stories[0].ImageURL)
 	}
 }
 
@@ -678,12 +721,11 @@ func TestDeepDiveWritesFailureLogWhenSanitizedOutputStaysEmpty(t *testing.T) {
 }
 
 func TestRunnerUsesConfiguredExtraFlagsForSummarize(t *testing.T) {
-	setupFakeCLI(t, "claude")
+	argsPath := setupFakeCLIOutput(t, "claude", validBriefingJSON())
 	runner := NewRunner("claude", []string{"--model", "claude-opus-4-6"}, []string{"--bare", "--disable-slash-commands"}, true, "", "")
 
 	articles := sampleArticles()
-	got, err := runner.Summarize(articles, []string{"AI/科技", "国际政治"}, time.Local)
-	if err != nil {
+	if _, err := runner.Summarize(articles, []string{"AI/科技", "国际政治"}, time.Local); err != nil {
 		t.Fatalf("Summarize() error = %v", err)
 	}
 
@@ -697,7 +739,7 @@ func TestRunnerUsesConfiguredExtraFlagsForSummarize(t *testing.T) {
 		"-p",
 		briefingPrompt + "\n\n---\n以下是今日新闻条目：\n\n" + output.GroupedArticleListView(articles, []string{"AI/科技", "国际政治"}, time.Local),
 	}
-	if args := splitArgs(got); !reflect.DeepEqual(args, want) {
+	if args := readFakeCLIArgs(t, argsPath); !reflect.DeepEqual(args, want) {
 		t.Fatalf("Summarize() args = %#v, want %#v", args, want)
 	}
 }
@@ -728,24 +770,22 @@ func TestRunnerUsesConfiguredExtraFlagsForTranslate(t *testing.T) {
 }
 
 func TestRunnerInstancesDoNotShareCommandOrProxyState(t *testing.T) {
-	setupFakeCLI(t, "ccs")
-	setupFakeCLI(t, "my-ai")
+	ccsArgsPath := setupFakeCLIOutput(t, "ccs", validBriefingJSON())
+	otherArgsPath := setupFakeCLIOutput(t, "my-ai", validBriefingJSON())
 
 	ccsRunner := NewRunner("ccs", []string{"codex"}, []string{"--bare"}, true, "http://127.0.0.1:7897", "")
 	otherRunner := NewRunner("my-ai", []string{"foo"}, nil, false, "", "")
 
 	articles := sampleArticles()
-	first, err := ccsRunner.Summarize(articles, []string{"AI/科技", "国际政治"}, time.Local)
-	if err != nil {
+	if _, err := ccsRunner.Summarize(articles, []string{"AI/科技", "国际政治"}, time.Local); err != nil {
 		t.Fatalf("ccsRunner.Summarize() error = %v", err)
 	}
-	second, err := otherRunner.Summarize(articles, []string{"AI/科技", "国际政治"}, time.Local)
-	if err != nil {
+	if _, err := otherRunner.Summarize(articles, []string{"AI/科技", "国际政治"}, time.Local); err != nil {
 		t.Fatalf("otherRunner.Summarize() error = %v", err)
 	}
 
-	firstArgs := splitArgs(first)
-	secondArgs := splitArgs(second)
+	firstArgs := readFakeCLIArgs(t, ccsArgsPath)
+	secondArgs := readFakeCLIArgs(t, otherArgsPath)
 	if firstArgs[0] != "codex" {
 		t.Fatalf("first runner args = %#v", firstArgs)
 	}
@@ -798,17 +838,16 @@ func TestLegacyShouldSanitizeCLIOutputUsesDefaultConfig(t *testing.T) {
 func TestSetProxyPreservesConfiguredCommand(t *testing.T) {
 	ResetCommandForTest()
 	t.Cleanup(ResetCommandForTest)
-	setupFakeCLI(t, "my-ai")
+	argsPath := setupFakeCLIOutput(t, "my-ai", validBriefingJSON())
 	SetCommand("my-ai", []string{"foo"})
 	SetProxy("http://127.0.0.1:7897", "socks5://127.0.0.1:7898")
 
-	got, err := Summarize(sampleArticles(), []string{"AI/科技", "国际政治"}, time.Local)
-	if err != nil {
+	if _, err := Summarize(sampleArticles(), []string{"AI/科技", "国际政治"}, time.Local); err != nil {
 		t.Fatalf("Summarize() error = %v", err)
 	}
 
 	want := []string{"foo", "--append-system-prompt", nonInteractiveBriefingSystemPrompt, "-p", briefingPrompt + "\n\n---\n以下是今日新闻条目：\n\n" + output.GroupedArticleListView(sampleArticles(), []string{"AI/科技", "国际政治"}, time.Local)}
-	if args := splitArgs(got); !reflect.DeepEqual(args, want) {
+	if args := readFakeCLIArgs(t, argsPath); !reflect.DeepEqual(args, want) {
 		t.Fatalf("Summarize() args = %#v, want %#v", args, want)
 	}
 }
@@ -847,6 +886,52 @@ func TestDefaultRunnerConcurrentMutationDoesNotRace(t *testing.T) {
 		})
 	}
 	wg.Wait()
+}
+
+func validBriefingJSON() string {
+	return `{"overview_groups":[{"category":"AI/科技","items":["🤖 OpenAI 发布新功能"]}],"stories":[{"category":"AI/科技","title":"OpenAI 发布新功能","summary":"功能摘要。","impact":"影响分析。","source_article_ids":[1],"source_line":"来源: Example | 2026-03-18 14:00"}],"situation":"今日态势。","directions":[{"title":"OpenAI roadmap","why":"值得继续追。","next":"观察发布节奏。","deep_command":"./news-briefing deep \"OpenAI roadmap\" --ignore-seen"}]}`
+}
+
+func setupFakeCLIOutput(t *testing.T, baseName string, output string) string {
+	t.Helper()
+
+	dir := t.TempDir()
+	oldPath := os.Getenv("PATH")
+	t.Cleanup(func() {
+		_ = os.Setenv("PATH", oldPath)
+		ResetCommandForTest()
+	})
+
+	commandName := baseName
+	if runtime.GOOS == "windows" {
+		commandName += ".bat"
+	}
+	argsPath := filepath.Join(dir, "args.txt")
+	outputPath := filepath.Join(dir, "output.txt")
+	if err := os.WriteFile(outputPath, []byte(output), 0o644); err != nil {
+		t.Fatalf("write fake cli output: %v", err)
+	}
+	commandPath := filepath.Join(dir, commandName)
+	script := "#!/bin/sh\n" +
+		"for arg do printf '%s\037' \"$arg\" >> \"" + argsPath + "\"; done\n" +
+		"printf '\n' >> \"" + argsPath + "\"\n" +
+		"cat \"" + outputPath + "\"\n"
+	if err := os.WriteFile(commandPath, []byte(script), 0o755); err != nil {
+		t.Fatalf("write fake cli: %v", err)
+	}
+	if err := os.Setenv("PATH", dir+string(os.PathListSeparator)+oldPath); err != nil {
+		t.Fatalf("set PATH: %v", err)
+	}
+	return argsPath
+}
+
+func readFakeCLIArgs(t *testing.T, argsPath string) []string {
+	t.Helper()
+	data, err := os.ReadFile(argsPath)
+	if err != nil {
+		t.Fatalf("read fake cli args: %v", err)
+	}
+	return splitArgs(strings.TrimSuffix(string(data), "\n"))
 }
 
 func setupFakeCLI(t *testing.T, baseName string) {
