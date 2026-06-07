@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"path/filepath"
 	"strings"
 	"time"
 	"unicode"
@@ -731,13 +732,17 @@ func (app *app) renderBriefingContext(ctx context.Context, commandPath string, d
 func (app *app) runPostMarkdownActions(ctx context.Context, briefing *model.Briefing, markdownPath string, sendEmail bool, _ []fetcher.FailedSource) error {
 	hookDone := make(chan error, 1)
 	if app.cfg != nil && app.cfg.PublishHook.Enabled {
+		publishMarkdownPath := markdownPath
+		if absPath, err := filepath.Abs(markdownPath); err == nil {
+			publishMarkdownPath = absPath
+		}
 		runHook := app.publishHook
 		if runHook == nil {
 			runHook = runPublishHook
 		}
 		go func() {
 			hookDone <- runHook(ctx, app.cfg.PublishHook, publishHookRequest{
-				MarkdownFile: markdownPath,
+				MarkdownFile: publishMarkdownPath,
 				SourceApp:    "news-briefing",
 				Date:         briefing.Date,
 				Period:       briefing.Period,
@@ -750,16 +755,23 @@ func (app *app) runPostMarkdownActions(ctx context.Context, briefing *model.Brie
 	var emailErr error
 	if !sendEmail {
 		logutil.Println("Skipping email")
-	} else if err := runIfActive(ctx, func() error {
-		return app.email.sendEmail(briefing, app.cfg, nil)
-	}); err != nil {
-		if ctxErr := ctx.Err(); ctxErr != nil {
-			emailErr = ctxErr
-		} else {
-			logutil.Errorf("Error sending email: %v", err)
-		}
 	} else {
-		logutil.Printf("Email sent to %s", app.cfg.Email.To)
+		sendMarkdownEmail := app.email.resendMarkdownEmail
+		err := runIfActive(ctx, func() error {
+			if sendMarkdownEmail != nil {
+				return sendMarkdownEmail(markdownPath, app.cfg)
+			}
+			return app.email.sendEmail(briefing, app.cfg, nil)
+		})
+		if err != nil {
+			if ctxErr := ctx.Err(); ctxErr != nil {
+				emailErr = ctxErr
+			} else {
+				logutil.Errorf("Error sending email: %v", err)
+			}
+		} else {
+			logutil.Printf("Email sent to %s", app.cfg.Email.To)
+		}
 	}
 
 	if err := <-hookDone; err != nil {

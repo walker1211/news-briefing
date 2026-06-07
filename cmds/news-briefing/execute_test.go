@@ -141,6 +141,90 @@ func TestRenderBriefingRunsPublishHookAfterMarkdownWrite(t *testing.T) {
 	}
 }
 
+func TestRenderBriefingPassesAbsoluteMarkdownPathToPublishHook(t *testing.T) {
+	cfg := executeTestConfig(t, model.OutputModeOriginalOnly)
+	cfg.PublishHook = config.PublishHookConfig{
+		Enabled: true,
+		Command: "content-publisher",
+		Args:    []string{"publish-all", "--file", "{markdown_file}"},
+	}
+	relativeMarkdownPath := filepath.Join("output", "26.06.07-早间-0800.md")
+	var hook publishHookRequest
+	app := &app{
+		cfg: cfg,
+		output: outputDeps{
+			printFailed:   func([]fetcher.FailedSource) {},
+			printArticles: func([]model.Article) {},
+			printCLI:      func(*model.Briefing) {},
+			composeBody: func(string, model.OutputMode, model.OutputContent) (string, error) {
+				return "body", nil
+			},
+			writeMarkdown: func(*model.Briefing, string) (string, error) {
+				return relativeMarkdownPath, nil
+			},
+		},
+		publishHook: func(ctx context.Context, cfg config.PublishHookConfig, req publishHookRequest) error {
+			hook = req
+			return nil
+		},
+	}
+
+	if err := app.renderBriefingContext(context.Background(), "run", "26.06.07", "0800", sampleExecuteArticles(), nil, nil, nil, false, false); err != nil {
+		t.Fatalf("renderBriefingContext() error = %v", err)
+	}
+	want, err := filepath.Abs(relativeMarkdownPath)
+	if err != nil {
+		t.Fatalf("Abs() error = %v", err)
+	}
+	if hook.MarkdownFile != want {
+		t.Fatalf("MarkdownFile = %q, want absolute path %q", hook.MarkdownFile, want)
+	}
+}
+
+func TestRenderBriefingEmailsSavedMarkdownFile(t *testing.T) {
+	cfg := executeTestConfigWithEmail(t, model.OutputModeOriginalOnly)
+	markdownPath := filepath.Join(cfg.Output.Dir, "26.06.07-早间-0800.md")
+	var sentPath string
+	var sendEmailCalled bool
+	app := &app{
+		cfg: cfg,
+		output: outputDeps{
+			printFailed:   func([]fetcher.FailedSource) {},
+			printArticles: func([]model.Article) {},
+			printCLI:      func(*model.Briefing) {},
+			composeBody: func(string, model.OutputMode, model.OutputContent) (string, error) {
+				return "![NPR](https://npr.brightspotcdn.com/dims3/default/resize/1!/?url=http%3A%2F%2Fnpr-brightspot.s3.amazonaws.com%2Fimage.jpg)", nil
+			},
+			writeMarkdown: func(*model.Briefing, string) (string, error) {
+				if err := os.WriteFile(markdownPath, []byte("# 国际资讯简报 26.06.07 早间 08:00\n\n![NPR](assets/26.06.07-0800/image.jpg)\n"), 0o644); err != nil {
+					return "", err
+				}
+				return markdownPath, nil
+			},
+		},
+		email: emailDeps{
+			sendEmail: func(*model.Briefing, *config.Config, []fetcher.FailedSource) error {
+				sendEmailCalled = true
+				return nil
+			},
+			resendMarkdownEmail: func(path string, cfg *config.Config) error {
+				sentPath = path
+				return nil
+			},
+		},
+	}
+
+	if err := app.renderBriefingContext(context.Background(), "run", "26.06.07", "0800", sampleExecuteArticles(), nil, nil, nil, false, true); err != nil {
+		t.Fatalf("renderBriefingContext() error = %v", err)
+	}
+	if sendEmailCalled {
+		t.Fatal("sendEmail() used original briefing content; want saved markdown file email")
+	}
+	if sentPath != markdownPath {
+		t.Fatalf("resendMarkdownEmail() path = %q, want %q", sentPath, markdownPath)
+	}
+}
+
 func TestRenderBriefingLogsPublishHookFailureWithoutFailing(t *testing.T) {
 	cfg := executeTestConfig(t, model.OutputModeOriginalOnly)
 	cfg.PublishHook = config.PublishHookConfig{
