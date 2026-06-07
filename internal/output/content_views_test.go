@@ -159,3 +159,55 @@ func TestGroupedArticleListViewAppendsUnknownCategoriesAfterConfiguredOnes(t *te
 		t.Fatalf("GroupedArticleListView() = %q, want %q", got, want)
 	}
 }
+
+func TestStructuredBriefingMarkdownRendersStoryImageBelowTitle(t *testing.T) {
+	summary := model.BriefingSummary{
+		OverviewGroups: []model.BriefingOverviewGroup{{Category: "AI/科技", Items: []string{"🤖 OpenAI 发布新功能"}}},
+		Stories: []model.BriefingStory{{
+			Category:   "AI/科技",
+			Title:      "OpenAI 发布新功能",
+			ImageURL:   "https://example.com/openai.jpg",
+			Summary:    "功能摘要。",
+			Impact:     "影响分析。",
+			SourceLine: "来源: Example | 2026-03-18 14:00",
+		}},
+		Situation: "今日态势。",
+		Directions: []model.BriefingDirection{{
+			Title:       "OpenAI roadmap",
+			Why:         "值得继续追。",
+			Next:        "观察发布节奏。",
+			DeepCommand: "./news-briefing deep \"OpenAI roadmap\" --ignore-seen",
+		}},
+	}
+
+	got := StructuredBriefingMarkdown(summary, []string{"AI/科技"})
+	want := "### OpenAI 发布新功能\n![OpenAI 发布新功能](https://example.com/openai.jpg)\n**摘要：** 功能摘要。"
+	if !strings.Contains(got, want) {
+		t.Fatalf("StructuredBriefingMarkdown() = %q, want story image under title", got)
+	}
+}
+
+func TestStructuredBriefingMarkdownOmitsEmptyStoryImage(t *testing.T) {
+	summary := model.BriefingSummary{Stories: []model.BriefingStory{{Category: "AI/科技", Title: "OpenAI 发布新功能", Summary: "功能摘要。"}}}
+
+	got := StructuredBriefingMarkdown(summary, []string{"AI/科技"})
+	if strings.Contains(got, "![") {
+		t.Fatalf("StructuredBriefingMarkdown() = %q, should not render empty image", got)
+	}
+}
+
+func TestStructuredBriefingMarkdownUsesCategoryOrder(t *testing.T) {
+	summary := model.BriefingSummary{Stories: []model.BriefingStory{
+		{Category: "国际政治", Title: "Policy update", Summary: "Policy summary."},
+		{Category: "AI/科技", Title: "OpenAI ships", Summary: "AI summary."},
+		{Category: "开源工具", Title: "Tooling launch", Summary: "Tool summary."},
+	}}
+
+	got := StructuredBriefingMarkdown(summary, []string{"AI/科技", "国际政治"})
+	ai := strings.Index(got, "## AI/科技")
+	politics := strings.Index(got, "## 国际政治")
+	tools := strings.Index(got, "## 开源工具")
+	if ai < 0 || politics < 0 || tools < 0 || !(ai < politics && politics < tools) {
+		t.Fatalf("StructuredBriefingMarkdown() order = %q", got)
+	}
+}
