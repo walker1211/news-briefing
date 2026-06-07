@@ -16,11 +16,6 @@ import (
 var claudeReleaseNotesDateFragmentPattern = regexp.MustCompile(`(?i)^(january|february|march|april|may|june|july|august|september|october|november|december)-[0-9]{1,2}-[0-9]{4}$`)
 
 func runAnnouncementSite(ctx context.Context, site config.WatchSite, now time.Time, indexState IndexState, articleState ArticleState, fetchHTML fetchHTMLFunc) ([]model.Article, []model.WatchSeenArticle, []model.WatchEvent, error) {
-	type seenPayload struct {
-		summary string
-		body    string
-	}
-
 	homeHTML, err := fetchHTML(ctx, site.HomeURL)
 	if err != nil {
 		return nil, nil, nil, err
@@ -36,170 +31,31 @@ func runAnnouncementSite(ctx context.Context, site config.WatchSite, now time.Ti
 	stateKey := watchCategoryStateKey(site.Name, site.Name)
 	prevSnapshot, hasPrev := indexState.Categories[stateKey]
 	if hasPrev && isClaudeReleaseNotesOverviewURL(site.HomeURL) {
-		prevSnapshot = normalizeClaudeReleaseNotesSnapshotURLs(prevSnapshot, site.HomeURL)
+		indexState.Categories[stateKey] = normalizeClaudeReleaseNotesSnapshotURLs(prevSnapshot, site.HomeURL)
 		migrateClaudeReleaseNotesArticleState(articleState, site.HomeURL)
 	}
-	if !hasPrev {
-		for _, item := range current.Items {
-			articleHTML, err := fetchHTML(ctx, item.URL)
-			if err != nil {
-				return nil, nil, nil, err
-			}
-			title, summary, body, err := parseAnnouncementArticleFromURL(item.URL, articleHTML)
-			if err != nil {
-				return nil, nil, nil, err
-			}
-			articleState[item.URL] = model.WatchArticleState{
-				URL:           item.URL,
-				Title:         title,
-				SummaryHash:   hashWatchContent(summary),
-				BodyHash:      hashWatchContent(body),
-				LastCheckedAt: now,
-				LastChangedAt: now,
-			}
-		}
-		indexState.Categories[stateKey] = current
-		return nil, nil, nil, nil
-	}
 
-	prev := &prevSnapshot
-	categoryEvents, changedURLs := diffCategorySnapshots(prev, current)
-	for i := range categoryEvents {
-		categoryEvents[i].Source = site.Name
-		categoryEvents[i].DetectedAt = now
-		if categoryEvents[i].Reason == "" {
-			categoryEvents[i].Reason = defaultWatchReason(categoryEvents[i].EventType, categoryEvents[i].ArticleTitle)
-		}
-		if containsString(changedURLs, categoryEvents[i].ArticleURL) {
-			continue
-		}
-		applyWatchEventPriority(&categoryEvents[i])
-	}
-
-	seenPayloads := make(map[string]seenPayload)
-	for _, item := range current.Items {
-		if containsString(changedURLs, item.URL) {
-			continue
-		}
-		state, ok := articleState[item.URL]
-		articleHTML, err := fetchHTML(ctx, item.URL)
-		if err != nil {
-			return nil, nil, nil, err
-		}
-		title, summary, body, err := parseAnnouncementArticleFromURL(item.URL, articleHTML)
-		if err != nil {
-			return nil, nil, nil, err
-		}
-		summaryHash := hashWatchContent(summary)
-		bodyHash := hashWatchContent(body)
-		if !ok {
-			articleState[item.URL] = model.WatchArticleState{
-				URL:           item.URL,
-				Title:         title,
-				SummaryHash:   summaryHash,
-				BodyHash:      bodyHash,
-				LastCheckedAt: now,
-				LastChangedAt: now,
-			}
-			continue
-		}
-		if state.Title != title || state.SummaryHash != summaryHash || state.BodyHash != bodyHash {
-			event := model.WatchEvent{
-				EventType:       "content_changed",
-				Source:          site.Name,
-				Category:        site.Name,
-				ArticleURL:      item.URL,
-				ArticleTitle:    title,
-				DetectedAt:      now,
-				BodyFetched:     true,
-				ContentChanged:  true,
-				Reason:          "正文发生变化",
-				MatchedKeywords: matchedWatchKeywords(title+" "+summary+" "+body, site.HighValueKeywords),
-			}
-			applyWatchEventPriority(&event)
-			categoryEvents = append(categoryEvents, event)
-			seenPayloads[item.URL] = seenPayload{summary: summary, body: body}
-			articleState[item.URL] = model.WatchArticleState{
-				URL:           item.URL,
-				Title:         title,
-				SummaryHash:   summaryHash,
-				BodyHash:      bodyHash,
-				LastCheckedAt: now,
-				LastChangedAt: now,
-			}
-			continue
-		}
-		state.LastCheckedAt = now
-		articleState[item.URL] = state
-	}
-
-	for _, url := range changedURLs {
-		matchedIndex := -1
-		for i := range categoryEvents {
-			if categoryEvents[i].ArticleURL == url {
-				matchedIndex = i
-				break
-			}
-		}
-		if matchedIndex == -1 || categoryEvents[matchedIndex].EventType == "removed_article" {
-			continue
-		}
-
+	fetchContent := func(ctx context.Context, url string) (watchArticleContent, error) {
 		articleHTML, err := fetchHTML(ctx, url)
 		if err != nil {
-			return nil, nil, nil, err
+			return watchArticleContent{}, err
 		}
 		title, summary, body, err := parseAnnouncementArticleFromURL(url, articleHTML)
 		if err != nil {
-			return nil, nil, nil, err
+			return watchArticleContent{}, err
 		}
-		articleState[url] = model.WatchArticleState{
-			URL:           url,
-			Title:         title,
-			SummaryHash:   hashWatchContent(summary),
-			BodyHash:      hashWatchContent(body),
-			LastCheckedAt: now,
-			LastChangedAt: now,
-		}
-		if title != "" {
-			categoryEvents[matchedIndex].ArticleTitle = title
-		}
-		categoryEvents[matchedIndex].BodyFetched = true
-		categoryEvents[matchedIndex].MatchedKeywords = matchedWatchKeywords(title+" "+summary+" "+body, site.HighValueKeywords)
-		if categoryEvents[matchedIndex].Reason == "" {
-			categoryEvents[matchedIndex].Reason = defaultWatchReason(categoryEvents[matchedIndex].EventType, categoryEvents[matchedIndex].ArticleTitle)
-		}
-		applyWatchEventPriority(&categoryEvents[matchedIndex])
-		seenPayloads[url] = seenPayload{summary: summary, body: body}
+		return watchArticleContent{title: title, summary: summary, body: body}, nil
 	}
 
-	indexState.Categories[stateKey] = current
-	articles := make([]model.Article, 0)
-	seenItems := make([]model.WatchSeenArticle, 0)
-	for _, event := range categoryEvents {
-		if event.EventType == "removed_article" && event.ArticleURL != "" {
-			delete(articleState, event.ArticleURL)
-		}
-		if !event.IncludeInBriefing {
-			continue
-		}
-		articles = append(articles, watchEventToArticle(site, event))
-		payload, ok := seenPayloads[event.ArticleURL]
-		if !ok {
-			articleHTML, err := fetchHTML(ctx, event.ArticleURL)
-			if err != nil {
-				return nil, nil, nil, err
-			}
-			_, summary, body, err := parseAnnouncementArticleFromURL(event.ArticleURL, articleHTML)
-			if err != nil {
-				return nil, nil, nil, err
-			}
-			payload = seenPayload{summary: summary, body: body}
-		}
-		seenItems = append(seenItems, watchEventToSeenArticle(site, event, payload.summary, payload.body))
-	}
-
-	return articles, seenItems, categoryEvents, nil
+	return runWatchCategory(ctx, watchCategoryRun{
+		site:         site,
+		now:          now,
+		stateKey:     stateKey,
+		current:      current,
+		indexState:   indexState,
+		articleState: articleState,
+		fetchContent: fetchContent,
+	})
 }
 
 func parseAnthropicAnnouncementIndex(source string, url string, html string) (model.WatchIndexSnapshot, error) {
@@ -588,13 +444,4 @@ func absoluteAnnouncementURL(baseURL string, href string) string {
 	resolved.RawQuery = ""
 	resolved.Fragment = ""
 	return resolved.String()
-}
-
-func containsString(items []string, target string) bool {
-	for _, item := range items {
-		if item == target {
-			return true
-		}
-	}
-	return false
 }

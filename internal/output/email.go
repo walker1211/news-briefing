@@ -501,158 +501,268 @@ func renderNewsletterHTML(body string) string {
 }
 
 func renderNewsletterHTMLWithImageResolver(body string, resolveImageURL func(string) string) string {
-	var out strings.Builder
+	renderer := newsletterHTMLRenderer{resolveImageURL: resolveImageURL}
+	return renderer.render(body)
+}
+
+type newsletterHTMLRenderer struct {
+	out               strings.Builder
+	resolveImageURL   func(string) string
+	inArticle         bool
+	inSection         bool
+	inWarningSection  bool
+	inOverviewSection bool
+}
+
+func (r *newsletterHTMLRenderer) render(body string) string {
 	lines := strings.Split(body, "\n")
-	inArticle := false
-	inSection := false
-	inWarningSection := false
-	inOverviewSection := false
-
-	closeArticle := func() {
-		if inArticle {
-			out.WriteString("</article>")
-			inArticle = false
-		}
-	}
-	closeSection := func() {
-		closeArticle()
-		if inSection {
-			out.WriteString("</section>")
-			inSection = false
-			inWarningSection = false
-			inOverviewSection = false
-		}
-	}
-	openSection := func(title, count string) {
-		closeSection()
-		sectionClass := htmlSectionClass(title)
-		inWarningSection = strings.Contains(sectionClass, "warning-block")
-		inOverviewSection = sectionClass == "section-overview"
-		out.WriteString(`<section class="briefing-section `)
-		out.WriteString(sectionClass)
-		out.WriteString(`"><h2>`)
-		out.WriteString(html.EscapeString(title))
-		if count != "" {
-			out.WriteString(" <span>")
-			out.WriteString(html.EscapeString(count))
-			out.WriteString("</span>")
-		}
-		out.WriteString("</h2>")
-		inSection = true
-	}
-
 	for i := 0; i < len(lines); i++ {
 		line := strings.TrimSpace(lines[i])
 		if line == "" || line == "---" {
 			continue
 		}
-		if title, ok := strings.CutPrefix(line, "# "); ok {
-			closeSection()
-			out.WriteString("<h1>")
-			out.WriteString(html.EscapeString(strings.TrimSpace(title)))
-			out.WriteString("</h1>")
+		if r.renderDocumentTitle(line, i) {
 			continue
 		}
-		if i == 0 {
-			closeSection()
-			out.WriteString("<h1>")
-			out.WriteString(html.EscapeString(line))
-			out.WriteString("</h1>")
+		if r.renderMarkdownImage(line) {
 			continue
 		}
-		if alt, imageURL, ok := parseMarkdownImage(line); ok {
-			if resolveImageURL != nil {
-				imageURL = resolveImageURL(imageURL)
-			}
-			out.WriteString(renderMarkdownImageHTML(alt, imageURL))
+		if r.renderCategoryLine(line) {
 			continue
 		}
-		if category, count, ok := parseHTMLCategoryLine(line); ok {
-			openSection(category, count)
+		if r.renderFetchWarningHeader(line, lines, i) {
 			continue
 		}
-		if line == "抓取异常" {
-			if !hasRenderableHTMLWarningItems(lines, i+1) {
-				continue
-			}
-			openSection(line, "")
+		if r.renderWarningItem(line) {
 			continue
 		}
-		if inWarningSection {
-			if item, ok := strings.CutPrefix(line, "- "); ok {
-				out.WriteString(`<p class="warning-item">`)
-				out.WriteString(linkifyHTML(cleanMarkdownLine(item), "链接"))
-				out.WriteString("</p>")
-				continue
-			}
-		}
-		if inOverviewSection {
-			if title, ok := strings.CutPrefix(line, "### "); ok {
-				closeArticle()
-				out.WriteString(`<h3 class="overview-category">`)
-				out.WriteString(html.EscapeString(strings.TrimSpace(title)))
-				out.WriteString("</h3>")
-				continue
-			}
-			if item, ok := strings.CutPrefix(line, "- "); ok {
-				out.WriteString(`<p class="overview-item">`)
-				out.WriteString(linkifyHTML(cleanMarkdownLine(item), "链接"))
-				out.WriteString("</p>")
-				continue
-			}
-		}
-		if title, ok := parseHTMLArticleTitle(line); ok {
-			closeArticle()
-			out.WriteString(`<article class="news-item"><h3>`)
-			out.WriteString(html.EscapeString(title))
-			out.WriteString("</h3>")
-			inArticle = true
+		if r.renderOverviewItem(line) {
 			continue
 		}
-		if summary, ok := strings.CutPrefix(line, "**摘要：**"); ok {
-			out.WriteString(`<p class="summary"><strong>摘要：</strong>`)
-			out.WriteString(linkifyHTML(cleanMarkdownLine(summary), "链接"))
-			out.WriteString("</p>")
+		if r.renderArticleTitle(line) {
 			continue
 		}
-		if impact, ok := strings.CutPrefix(line, "**影响：**"); ok {
-			out.WriteString(`<p class="impact"><strong>影响：</strong>`)
-			out.WriteString(linkifyHTML(cleanMarkdownLine(impact), "链接"))
-			out.WriteString("</p>")
+		if r.renderSummary(line) {
 			continue
 		}
-		if label, content, ok := parseHTMLStrongLabelLine(line); ok {
-			out.WriteString(`<p class="markdown-label"><strong>`)
-			out.WriteString(html.EscapeString(label))
-			out.WriteString(`</strong>`)
-			out.WriteString(renderInlineMarkdownHTML(cleanMarkdownLine(content), "链接"))
-			out.WriteString("</p>")
+		if r.renderImpact(line) {
 			continue
 		}
-		if source, ok := strings.CutPrefix(line, "> 来源: "); ok {
-			out.WriteString(`<p class="meta">`)
-			out.WriteString(html.EscapeString(strings.ReplaceAll(cleanMarkdownLine(source), " | ", " · ")))
-			out.WriteString("</p>")
+		if r.renderStrongLabel(line) {
 			continue
 		}
-		if source, ok := strings.CutPrefix(line, "Source: "); ok {
-			out.WriteString(`<p class="meta">`)
-			out.WriteString(html.EscapeString(strings.ReplaceAll(cleanMarkdownLine(source), " | ", " · ")))
-			out.WriteString("</p>")
+		if r.renderSourceMeta(line) {
 			continue
 		}
-		if rawURL, ok := strings.CutPrefix(line, "Link: "); ok {
-			out.WriteString(`<a class="source-link" href="`)
-			out.WriteString(html.EscapeString(strings.TrimSpace(rawURL)))
-			out.WriteString(`">原文链接</a>`)
+		if r.renderSourceLink(line) {
 			continue
 		}
-		out.WriteString(`<p class="paragraph">`)
-		out.WriteString(linkifyHTML(line, "链接"))
-		out.WriteString("</p>")
+		r.renderParagraph(line)
 	}
-	closeSection()
-	return out.String()
+	r.closeSection()
+	return r.out.String()
+}
+
+func (r *newsletterHTMLRenderer) closeArticle() {
+	if r.inArticle {
+		r.out.WriteString("</article>")
+		r.inArticle = false
+	}
+}
+
+func (r *newsletterHTMLRenderer) closeSection() {
+	r.closeArticle()
+	if r.inSection {
+		r.out.WriteString("</section>")
+		r.inSection = false
+		r.inWarningSection = false
+		r.inOverviewSection = false
+	}
+}
+
+func (r *newsletterHTMLRenderer) openSection(title, count string) {
+	r.closeSection()
+	sectionClass := htmlSectionClass(title)
+	r.inWarningSection = strings.Contains(sectionClass, "warning-block")
+	r.inOverviewSection = sectionClass == "section-overview"
+	r.out.WriteString(`<section class="briefing-section `)
+	r.out.WriteString(sectionClass)
+	r.out.WriteString(`"><h2>`)
+	r.out.WriteString(html.EscapeString(title))
+	if count != "" {
+		r.out.WriteString(" <span>")
+		r.out.WriteString(html.EscapeString(count))
+		r.out.WriteString("</span>")
+	}
+	r.out.WriteString("</h2>")
+	r.inSection = true
+}
+
+func (r *newsletterHTMLRenderer) renderDocumentTitle(line string, index int) bool {
+	if title, ok := strings.CutPrefix(line, "# "); ok {
+		r.closeSection()
+		r.out.WriteString("<h1>")
+		r.out.WriteString(html.EscapeString(strings.TrimSpace(title)))
+		r.out.WriteString("</h1>")
+		return true
+	}
+	if index == 0 {
+		r.closeSection()
+		r.out.WriteString("<h1>")
+		r.out.WriteString(html.EscapeString(line))
+		r.out.WriteString("</h1>")
+		return true
+	}
+	return false
+}
+
+func (r *newsletterHTMLRenderer) renderMarkdownImage(line string) bool {
+	alt, imageURL, ok := parseMarkdownImage(line)
+	if !ok {
+		return false
+	}
+	if r.resolveImageURL != nil {
+		imageURL = r.resolveImageURL(imageURL)
+	}
+	r.out.WriteString(renderMarkdownImageHTML(alt, imageURL))
+	return true
+}
+
+func (r *newsletterHTMLRenderer) renderCategoryLine(line string) bool {
+	category, count, ok := parseHTMLCategoryLine(line)
+	if !ok {
+		return false
+	}
+	r.openSection(category, count)
+	return true
+}
+
+func (r *newsletterHTMLRenderer) renderFetchWarningHeader(line string, lines []string, index int) bool {
+	if line != "抓取异常" {
+		return false
+	}
+	if !hasRenderableHTMLWarningItems(lines, index+1) {
+		return true
+	}
+	r.openSection(line, "")
+	return true
+}
+
+func (r *newsletterHTMLRenderer) renderWarningItem(line string) bool {
+	if !r.inWarningSection {
+		return false
+	}
+	item, ok := strings.CutPrefix(line, "- ")
+	if !ok {
+		return false
+	}
+	r.out.WriteString(`<p class="warning-item">`)
+	r.out.WriteString(linkifyHTML(cleanMarkdownLine(item), "链接"))
+	r.out.WriteString("</p>")
+	return true
+}
+
+func (r *newsletterHTMLRenderer) renderOverviewItem(line string) bool {
+	if !r.inOverviewSection {
+		return false
+	}
+	if title, ok := strings.CutPrefix(line, "### "); ok {
+		r.closeArticle()
+		r.out.WriteString(`<h3 class="overview-category">`)
+		r.out.WriteString(html.EscapeString(strings.TrimSpace(title)))
+		r.out.WriteString("</h3>")
+		return true
+	}
+	if item, ok := strings.CutPrefix(line, "- "); ok {
+		r.out.WriteString(`<p class="overview-item">`)
+		r.out.WriteString(linkifyHTML(cleanMarkdownLine(item), "链接"))
+		r.out.WriteString("</p>")
+		return true
+	}
+	return false
+}
+
+func (r *newsletterHTMLRenderer) renderArticleTitle(line string) bool {
+	title, ok := parseHTMLArticleTitle(line)
+	if !ok {
+		return false
+	}
+	r.closeArticle()
+	r.out.WriteString(`<article class="news-item"><h3>`)
+	r.out.WriteString(html.EscapeString(title))
+	r.out.WriteString("</h3>")
+	r.inArticle = true
+	return true
+}
+
+func (r *newsletterHTMLRenderer) renderSummary(line string) bool {
+	summary, ok := strings.CutPrefix(line, "**摘要：**")
+	if !ok {
+		return false
+	}
+	r.out.WriteString(`<p class="summary"><strong>摘要：</strong>`)
+	r.out.WriteString(linkifyHTML(cleanMarkdownLine(summary), "链接"))
+	r.out.WriteString("</p>")
+	return true
+}
+
+func (r *newsletterHTMLRenderer) renderImpact(line string) bool {
+	impact, ok := strings.CutPrefix(line, "**影响：**")
+	if !ok {
+		return false
+	}
+	r.out.WriteString(`<p class="impact"><strong>影响：</strong>`)
+	r.out.WriteString(linkifyHTML(cleanMarkdownLine(impact), "链接"))
+	r.out.WriteString("</p>")
+	return true
+}
+
+func (r *newsletterHTMLRenderer) renderStrongLabel(line string) bool {
+	label, content, ok := parseHTMLStrongLabelLine(line)
+	if !ok {
+		return false
+	}
+	r.out.WriteString(`<p class="markdown-label"><strong>`)
+	r.out.WriteString(html.EscapeString(label))
+	r.out.WriteString(`</strong>`)
+	r.out.WriteString(renderInlineMarkdownHTML(cleanMarkdownLine(content), "链接"))
+	r.out.WriteString("</p>")
+	return true
+}
+
+func (r *newsletterHTMLRenderer) renderSourceMeta(line string) bool {
+	if source, ok := strings.CutPrefix(line, "> 来源: "); ok {
+		r.writeSourceMeta(source)
+		return true
+	}
+	if source, ok := strings.CutPrefix(line, "Source: "); ok {
+		r.writeSourceMeta(source)
+		return true
+	}
+	return false
+}
+
+func (r *newsletterHTMLRenderer) writeSourceMeta(source string) {
+	r.out.WriteString(`<p class="meta">`)
+	r.out.WriteString(html.EscapeString(strings.ReplaceAll(cleanMarkdownLine(source), " | ", " · ")))
+	r.out.WriteString("</p>")
+}
+
+func (r *newsletterHTMLRenderer) renderSourceLink(line string) bool {
+	rawURL, ok := strings.CutPrefix(line, "Link: ")
+	if !ok {
+		return false
+	}
+	r.out.WriteString(`<a class="source-link" href="`)
+	r.out.WriteString(html.EscapeString(strings.TrimSpace(rawURL)))
+	r.out.WriteString(`">原文链接</a>`)
+	return true
+}
+
+func (r *newsletterHTMLRenderer) renderParagraph(line string) {
+	r.out.WriteString(`<p class="paragraph">`)
+	r.out.WriteString(linkifyHTML(line, "链接"))
+	r.out.WriteString("</p>")
 }
 
 func parseMarkdownImage(line string) (string, string, bool) {
