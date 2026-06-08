@@ -152,6 +152,19 @@ func TestValidateBriefingSummaryImagesClearsInventedImageURL(t *testing.T) {
 	}
 }
 
+func TestValidateBriefingSummaryImagesReplacesImageFromOtherSourceArticle(t *testing.T) {
+	articles := []model.Article{
+		{ImageURL: "https://example.com/claude.jpg"},
+		{ImageURL: "https://example.com/rocket.jpg"},
+	}
+	summary := model.BriefingSummary{Stories: []model.BriefingStory{{ImageURL: "https://example.com/rocket.jpg", SourceArticleIDs: []int{1}}}}
+
+	got := validateBriefingSummaryImages(summary, articles)
+	if got.Stories[0].ImageURL != "https://example.com/claude.jpg" {
+		t.Fatalf("ImageURL = %q, want source article image", got.Stories[0].ImageURL)
+	}
+}
+
 func TestValidateBriefingSummaryImagesBackfillsFromSourceArticleIDs(t *testing.T) {
 	articles := []model.Article{
 		{ImageURL: ""},
