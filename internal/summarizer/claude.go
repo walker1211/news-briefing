@@ -13,6 +13,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/walker1211/news-briefing/internal/imageutil"
 	"github.com/walker1211/news-briefing/internal/logutil"
 	"github.com/walker1211/news-briefing/internal/model"
 	"github.com/walker1211/news-briefing/internal/output"
@@ -54,7 +55,7 @@ stories 按下面新闻条目里出现的分类顺序输出；每个分类内部
 summary 用2-4句话说明关键事实、背景、数字、参与方和最新进展，不要只做一句话标题复述；如果多条相关新闻合并为同一 story，要交代各条新闻之间的关系。
 impact 用2-3句话说明为什么重要、影响哪些人或机构、后续观察变量，避免空泛地写“值得关注后续进展”。
 source_article_ids 必须使用输入新闻条目的 1-based 编号；合并多条新闻时列出所有来源编号。
-image_url 只能使用输入新闻条目中的 Image 字段原值；没有可用图片时使用空字符串。不要编造、改写或重新托管图片 URL。AI/科技 分类下的重要 story 如果 source_article_ids 对应新闻有 Image 字段，应优先使用其中最相关的一张。
+image_url 只能使用输入新闻条目中的 Image 字段原值；没有可用图片时使用空字符串。不要编造、改写或重新托管图片 URL。不要使用 tracking pixel、RSS 统计图、透明占位图或与 story 主体事件无直接关系的配图。多条新闻合并为同一 story 时，如果无法明确判断哪张图直接对应主标题事件，就把 image_url 设为空字符串。AI/科技 分类下的重要 story 如果 source_article_ids 对应新闻有 Image 字段，应优先使用其中最相关且确定对应的一张。
 
 directions 输出 2-4 个最值得普通用户继续关注的新闻方向，不要少于 2 个，也不要多于 4 个。
 如果高质量独立方向不足，允许合并相近新闻形成更上位但仍然具体的方向；不要为了凑数输出重复方向。
@@ -501,22 +502,25 @@ func stripJSONCodeFence(value string) string {
 func validateBriefingSummaryImages(summary model.BriefingSummary, articles []model.Article) model.BriefingSummary {
 	allowed := make(map[string]struct{})
 	for _, article := range articles {
-		if image := strings.TrimSpace(article.ImageURL); image != "" {
+		if image := usableArticleImage(article); image != "" {
 			allowed[image] = struct{}{}
 		}
 	}
 	for i := range summary.Stories {
 		story := &summary.Stories[i]
+		sourceImage, sourceImageOK := singleSourceArticleImage(story.SourceArticleIDs, articles)
 		image := strings.TrimSpace(story.ImageURL)
 		if image != "" {
-			if _, ok := allowed[image]; ok && sourceArticleIDsContainImage(story.SourceArticleIDs, articles, image) {
+			_, allowedImage := allowed[image]
+			if allowedImage && sourceArticleIDsContainImage(story.SourceArticleIDs, articles, image) && (len(story.SourceArticleIDs) == 0 || sourceImageOK && sourceImage == image) {
 				story.ImageURL = image
 				continue
 			}
-			story.ImageURL = ""
 		}
-		if story.ImageURL == "" {
-			story.ImageURL = firstSourceArticleImage(story.SourceArticleIDs, articles)
+		if sourceImageOK {
+			story.ImageURL = sourceImage
+		} else {
+			story.ImageURL = ""
 		}
 	}
 	return summary
@@ -531,24 +535,38 @@ func sourceArticleIDsContainImage(ids []int, articles []model.Article, image str
 		if idx < 0 || idx >= len(articles) {
 			continue
 		}
-		if strings.TrimSpace(articles[idx].ImageURL) == image {
+		if usableArticleImage(articles[idx]) == image {
 			return true
 		}
 	}
 	return false
 }
 
-func firstSourceArticleImage(ids []int, articles []model.Article) string {
+func singleSourceArticleImage(ids []int, articles []model.Article) (string, bool) {
+	var selected string
 	for _, id := range ids {
 		idx := id - 1
 		if idx < 0 || idx >= len(articles) {
 			continue
 		}
-		if image := strings.TrimSpace(articles[idx].ImageURL); image != "" {
-			return image
+		image := usableArticleImage(articles[idx])
+		if image == "" || image == selected {
+			continue
 		}
+		if selected != "" {
+			return "", false
+		}
+		selected = image
 	}
-	return ""
+	return selected, true
+}
+
+func usableArticleImage(article model.Article) string {
+	image := strings.TrimSpace(article.ImageURL)
+	if image == "" || !imageutil.IsUsableRemoteImageURL(image) {
+		return ""
+	}
+	return image
 }
 
 func (r *Runner) summarizeExtraFlags() []string {

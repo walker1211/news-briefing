@@ -178,6 +178,29 @@ func TestValidateBriefingSummaryImagesBackfillsFromSourceArticleIDs(t *testing.T
 	}
 }
 
+func TestValidateBriefingSummaryImagesSkipsTrackingPixelBackfill(t *testing.T) {
+	articles := []model.Article{{ImageURL: "https://media.npr.org/include/images/tracking/npr-rss-pixel.png?story=nx-s1"}}
+	summary := model.BriefingSummary{Stories: []model.BriefingStory{{SourceArticleIDs: []int{1}}}}
+
+	got := validateBriefingSummaryImages(summary, articles)
+	if got.Stories[0].ImageURL != "" {
+		t.Fatalf("ImageURL = %q, want empty for tracking pixel", got.Stories[0].ImageURL)
+	}
+}
+
+func TestValidateBriefingSummaryImagesClearsAmbiguousMultiSourceImages(t *testing.T) {
+	articles := []model.Article{
+		{ImageURL: "https://example.com/fire.jpg"},
+		{ImageURL: "https://example.com/satellite.jpg"},
+	}
+	summary := model.BriefingSummary{Stories: []model.BriefingStory{{ImageURL: "https://example.com/fire.jpg", SourceArticleIDs: []int{1, 2}}}}
+
+	got := validateBriefingSummaryImages(summary, articles)
+	if got.Stories[0].ImageURL != "" {
+		t.Fatalf("ImageURL = %q, want empty for ambiguous multi-source images", got.Stories[0].ImageURL)
+	}
+}
+
 func TestDeepDivePromptUsesTopicDeepDivePackWording(t *testing.T) {
 	for _, want := range []string{
 		"你是一个资深新闻调研员和话题研究助手。",
