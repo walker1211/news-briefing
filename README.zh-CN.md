@@ -2,8 +2,6 @@
 
 # 国际资讯聚合器
 
-[English](./README.md)
-
 ## 安装
 
 #### 方式一：从 GitHub Releases 下载
