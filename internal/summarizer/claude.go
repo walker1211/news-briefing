@@ -506,19 +506,36 @@ func validateBriefingSummaryImages(summary model.BriefingSummary, articles []mod
 		}
 	}
 	for i := range summary.Stories {
-		image := strings.TrimSpace(summary.Stories[i].ImageURL)
+		story := &summary.Stories[i]
+		image := strings.TrimSpace(story.ImageURL)
 		if image != "" {
-			if _, ok := allowed[image]; ok {
-				summary.Stories[i].ImageURL = image
+			if _, ok := allowed[image]; ok && sourceArticleIDsContainImage(story.SourceArticleIDs, articles, image) {
+				story.ImageURL = image
 				continue
 			}
-			summary.Stories[i].ImageURL = ""
+			story.ImageURL = ""
 		}
-		if summary.Stories[i].ImageURL == "" {
-			summary.Stories[i].ImageURL = firstSourceArticleImage(summary.Stories[i].SourceArticleIDs, articles)
+		if story.ImageURL == "" {
+			story.ImageURL = firstSourceArticleImage(story.SourceArticleIDs, articles)
 		}
 	}
 	return summary
+}
+
+func sourceArticleIDsContainImage(ids []int, articles []model.Article, image string) bool {
+	if len(ids) == 0 {
+		return true
+	}
+	for _, id := range ids {
+		idx := id - 1
+		if idx < 0 || idx >= len(articles) {
+			continue
+		}
+		if strings.TrimSpace(articles[idx].ImageURL) == image {
+			return true
+		}
+	}
+	return false
 }
 
 func firstSourceArticleImage(ids []int, articles []model.Article) string {
