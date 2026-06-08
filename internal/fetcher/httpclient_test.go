@@ -146,19 +146,20 @@ func TestHTTPClientInitializesSharedClientConcurrently(t *testing.T) {
 }
 
 func TestClientFetchRSSUsesInjectedHTTPClient(t *testing.T) {
-	called := false
+	requested := []string{}
 	client := NewClient(&http.Client{Transport: httpClientRoundTripFunc(func(req *http.Request) (*http.Response, error) {
-		called = true
-		if req.URL.String() != "https://example.com/feed.xml" {
-			t.Fatalf("request URL = %q", req.URL.String())
+		requested = append(requested, req.URL.String())
+		body := `<!doctype html><html><head><meta property="og:image" content="https://example.com/a.jpg"></head></html>`
+		if req.URL.String() == "https://example.com/feed.xml" {
+			body = `<?xml version="1.0" encoding="UTF-8"?>
+	<rss version="2.0"><channel><item><title>AI update</title><link>https://example.com/a</link><description>AI news</description><pubDate>Wed, 18 Mar 2026 10:00:00 GMT</pubDate></item></channel></rss>`
 		}
 		return &http.Response{
 			StatusCode: http.StatusOK,
 			Status:     "200 OK",
-			Body: io.NopCloser(strings.NewReader(`<?xml version="1.0" encoding="UTF-8"?>
-<rss version="2.0"><channel><item><title>AI update</title><link>https://example.com/a</link><description>AI news</description><pubDate>Wed, 18 Mar 2026 10:00:00 GMT</pubDate></item></channel></rss>`)),
-			Header:  make(http.Header),
-			Request: req,
+			Body:       io.NopCloser(strings.NewReader(body)),
+			Header:     make(http.Header),
+			Request:    req,
 		}, nil
 	})})
 
@@ -166,11 +167,14 @@ func TestClientFetchRSSUsesInjectedHTTPClient(t *testing.T) {
 	if err != nil {
 		t.Fatalf("FetchRSSContext() error = %v", err)
 	}
-	if !called {
-		t.Fatal("injected client was not called")
+	if strings.Join(requested, "\n") != strings.Join([]string{"https://example.com/feed.xml", "https://example.com/a"}, "\n") {
+		t.Fatalf("requested URLs = %#v", requested)
 	}
 	if len(result.Candidates) != 1 || result.Candidates[0].Article.Title != "AI update" {
 		t.Fatalf("Candidates = %#v", result.Candidates)
+	}
+	if result.Candidates[0].Article.ImageURL != "https://example.com/a.jpg" {
+		t.Fatalf("Article.ImageURL = %q", result.Candidates[0].Article.ImageURL)
 	}
 }
 

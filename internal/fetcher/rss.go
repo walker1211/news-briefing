@@ -4,14 +4,18 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"io"
+	"net/http"
 	"net/url"
 	"os/exec"
 	"regexp"
 	"strings"
 	"time"
 
+	"github.com/PuerkitoBio/goquery"
 	"github.com/mmcdole/gofeed"
 	"github.com/walker1211/news-briefing/internal/config"
+	"github.com/walker1211/news-briefing/internal/imageutil"
 	"github.com/walker1211/news-briefing/internal/model"
 )
 
@@ -84,12 +88,17 @@ func (c *Client) FetchRSSContext(ctx context.Context, source config.Source, keyw
 			summary = summary[:500]
 		}
 
+		imageURL := extractRSSItemImage(item)
+		if imageURL == "" {
+			imageURL = c.fetchOpenGraphImage(ctx, item.Link)
+		}
+
 		result.Candidates = append(result.Candidates, fetchedCandidate{
 			Article: model.Article{
 				Title:     item.Title,
 				Link:      item.Link,
 				Summary:   summary,
-				ImageURL:  extractRSSItemImage(item),
+				ImageURL:  imageURL,
 				Source:    source.Name,
 				Category:  source.Category,
 				Published: pub,
@@ -106,7 +115,7 @@ func extractRSSItemImage(item *gofeed.Item) string {
 		return ""
 	}
 	if item.Image != nil {
-		if imageURL := normalizeImageURL(item.Image.URL, item.Link); imageURL != "" {
+		if imageURL := normalizeRSSImageURL(item.Image.URL, item.Link); imageURL != "" {
 			return imageURL
 		}
 	}
@@ -114,20 +123,78 @@ func extractRSSItemImage(item *gofeed.Item) string {
 		if enclosure == nil || !strings.HasPrefix(strings.ToLower(strings.TrimSpace(enclosure.Type)), "image/") {
 			continue
 		}
-		if imageURL := normalizeImageURL(enclosure.URL, item.Link); imageURL != "" {
+		if imageURL := normalizeRSSImageURL(enclosure.URL, item.Link); imageURL != "" {
 			return imageURL
 		}
 	}
 	for _, html := range []string{item.Content, item.Description} {
-		match := rssImageSourcePattern.FindStringSubmatch(html)
-		if len(match) < 2 {
-			continue
+		matches := rssImageSourcePattern.FindAllStringSubmatch(html, -1)
+		for _, match := range matches {
+			if len(match) < 2 {
+				continue
+			}
+			if imageURL := normalizeRSSImageURL(match[1], item.Link); imageURL != "" {
+				return imageURL
+			}
 		}
-		if imageURL := normalizeImageURL(match[1], item.Link); imageURL != "" {
+	}
+	return ""
+}
+
+func normalizeRSSImageURL(rawURL string, baseURL string) string {
+	imageURL := normalizeImageURL(rawURL, baseURL)
+	if imageURL == "" || !imageutil.IsUsableRemoteImageURL(imageURL) {
+		return ""
+	}
+	return imageURL
+}
+
+func (c *Client) fetchOpenGraphImage(ctx context.Context, articleURL string) string {
+	articleURL = strings.TrimSpace(articleURL)
+	if articleURL == "" {
+		return ""
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, articleURL, nil)
+	if err != nil {
+		return ""
+	}
+	req.Header.Set("Accept", "text/html,application/xhtml+xml")
+	req.Header.Set("User-Agent", userAgent)
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return ""
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
+		return ""
+	}
+	doc, err := goquery.NewDocumentFromReader(io.LimitReader(resp.Body, 2*1024*1024))
+	if err != nil {
+		return ""
+	}
+	for _, selector := range []string{
+		`meta[property="og:image"]`,
+		`meta[property="og:image:url"]`,
+		`meta[name="twitter:image"]`,
+		`meta[name="twitter:image:src"]`,
+		`link[rel="image_src"]`,
+	} {
+		if imageURL := openGraphImageFromSelection(doc.Find(selector).First(), articleURL); imageURL != "" {
 			return imageURL
 		}
 	}
 	return ""
+}
+
+func openGraphImageFromSelection(selection *goquery.Selection, baseURL string) string {
+	if selection == nil || selection.Length() == 0 {
+		return ""
+	}
+	imageURL, ok := selection.Attr("content")
+	if !ok {
+		imageURL, _ = selection.Attr("href")
+	}
+	return normalizeRSSImageURL(imageURL, baseURL)
 }
 
 func shouldFallbackToCurl(source config.Source, err error) bool {

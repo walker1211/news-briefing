@@ -1,10 +1,17 @@
 package output
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
 	"html"
+	"image"
+	"image/color"
+	"image/draw"
+	_ "image/gif"
+	"image/jpeg"
+	"image/png"
 	"io"
 	"net/http"
 	"net/url"
@@ -13,14 +20,18 @@ import (
 	"strings"
 	"time"
 
+	"github.com/walker1211/news-briefing/internal/imageutil"
 	"github.com/walker1211/news-briefing/internal/logutil"
 	"github.com/walker1211/news-briefing/internal/model"
 	"github.com/walker1211/news-briefing/internal/statefile"
+	_ "golang.org/x/image/webp"
 )
 
 type markdownImageDownloader func(rawURL string, path string) error
 
 const maxMarkdownImageBytes = 10 * 1024 * 1024
+const minMarkdownImageWidth = 32
+const minMarkdownImageHeight = 32
 const markdownImageDownloadAttempts = 3
 const markdownImageRetryDelay = 200 * time.Millisecond
 
@@ -56,6 +67,10 @@ func localizeMarkdownImages(rawContent string, outputDir string, date string, pe
 		if !ok || !isRemoteMarkdownImage(imageURL) {
 			continue
 		}
+		if imageutil.IsTrackingImageURL(imageURL) {
+			lines[i] = ""
+			continue
+		}
 		filename := markdownImageFileName(imageURL)
 		localPath := filepath.Join(assetDir, filename)
 		if err := os.MkdirAll(assetDir, 0o755); err != nil {
@@ -86,8 +101,10 @@ func markdownImageExtension(rawURL string) string {
 		return ".jpg"
 	}
 	switch ext := strings.ToLower(filepath.Ext(parsed.Path)); ext {
-	case ".jpg", ".jpeg", ".png", ".webp", ".gif", ".avif":
+	case ".jpg", ".jpeg", ".png", ".gif":
 		return ext
+	case ".webp", ".avif":
+		return ".jpg"
 	default:
 		return ".jpg"
 	}
@@ -173,7 +190,7 @@ func downloadMarkdownImageOnce(client http.Client, rawURL string, path string) e
 		return err
 	}
 	req.Header.Set("User-Agent", "Mozilla/5.0")
-	req.Header.Set("Accept", "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8")
+	req.Header.Set("Accept", "image/jpeg,image/png,image/gif,image/*,*/*;q=0.8")
 	resp, err := client.Do(req)
 	if err != nil {
 		return err
@@ -193,7 +210,65 @@ func downloadMarkdownImageOnce(client http.Client, rawURL string, path string) e
 	if len(data) > maxMarkdownImageBytes {
 		return fmt.Errorf("download image: file too large")
 	}
-	return statefile.WriteAtomicReplaceOnly(path, data, 0o644)
+	return writeValidatedMarkdownImage(path, data)
+}
+
+func writeValidatedMarkdownImage(path string, data []byte) error {
+	config, format, err := image.DecodeConfig(bytes.NewReader(data))
+	if err != nil {
+		return fmt.Errorf("download image: decode config: %w", err)
+	}
+	if config.Width < minMarkdownImageWidth || config.Height < minMarkdownImageHeight {
+		return fmt.Errorf("download image: dimensions %dx%d too small", config.Width, config.Height)
+	}
+	ext := strings.ToLower(filepath.Ext(path))
+	if markdownImageFormatMatchesExtension(format, ext) {
+		return statefile.WriteAtomicReplaceOnly(path, data, 0o644)
+	}
+	img, _, err := image.Decode(bytes.NewReader(data))
+	if err != nil {
+		return fmt.Errorf("download image: decode: %w", err)
+	}
+	switch ext {
+	case ".jpg", ".jpeg":
+		return writeJPEGMarkdownImage(path, img)
+	case ".png":
+		return writePNGMarkdownImage(path, img)
+	default:
+		return fmt.Errorf("download image: format %s does not match extension %s", format, ext)
+	}
+}
+
+func markdownImageFormatMatchesExtension(format string, ext string) bool {
+	switch format {
+	case "jpeg":
+		return ext == ".jpg" || ext == ".jpeg"
+	case "png":
+		return ext == ".png"
+	case "gif":
+		return ext == ".gif"
+	default:
+		return false
+	}
+}
+
+func writeJPEGMarkdownImage(path string, img image.Image) error {
+	var out bytes.Buffer
+	rgba := image.NewRGBA(img.Bounds())
+	draw.Draw(rgba, rgba.Bounds(), &image.Uniform{C: color.White}, image.Point{}, draw.Src)
+	draw.Draw(rgba, rgba.Bounds(), img, img.Bounds().Min, draw.Over)
+	if err := jpeg.Encode(&out, rgba, &jpeg.Options{Quality: 90}); err != nil {
+		return err
+	}
+	return statefile.WriteAtomicReplaceOnly(path, out.Bytes(), 0o644)
+}
+
+func writePNGMarkdownImage(path string, img image.Image) error {
+	var out bytes.Buffer
+	if err := png.Encode(&out, img); err != nil {
+		return err
+	}
+	return statefile.WriteAtomicReplaceOnly(path, out.Bytes(), 0o644)
 }
 
 func isImageLikeOctetStream(contentType string, rawURL string) bool {

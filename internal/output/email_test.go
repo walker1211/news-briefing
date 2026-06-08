@@ -1,8 +1,10 @@
 package output
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"image"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -477,13 +479,14 @@ func TestSendMarkdownFileEmbedsLocalImagesInline(t *testing.T) {
 	if err := os.WriteFile(imagePath, []byte("image data"), 0o644); err != nil {
 		t.Fatalf("WriteFile() image error = %v", err)
 	}
+	remoteImageData := testPNGBytes(t, 64, 64)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.RawQuery != "width=640&crop=smart" {
 			http.Error(w, "bad query", http.StatusForbidden)
 			return
 		}
-		w.Header().Set("Content-Type", "image/jpeg")
-		_, _ = w.Write([]byte("remote image"))
+		w.Header().Set("Content-Type", "image/png")
+		_, _ = w.Write(remoteImageData)
 	}))
 	defer server.Close()
 
@@ -548,8 +551,12 @@ func TestSendMarkdownFileEmbedsLocalImagesInline(t *testing.T) {
 	if gotInline[1].CID != "news-briefing-image-2@news-briefing" {
 		t.Fatalf("remote inline image CID = %q", gotInline[1].CID)
 	}
-	if string(gotRemoteData) != "remote image" {
-		t.Fatalf("remote inline image data = %q", gotRemoteData)
+	config, _, err := image.DecodeConfig(bytes.NewReader(gotRemoteData))
+	if err != nil {
+		t.Fatalf("remote inline image decode error = %v", err)
+	}
+	if config.Width != 64 || config.Height != 64 {
+		t.Fatalf("remote inline image size = %dx%d, want 64x64", config.Width, config.Height)
 	}
 }
 
