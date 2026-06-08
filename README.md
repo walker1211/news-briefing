@@ -2,8 +2,6 @@
 
 # International News Briefing Aggregator
 
-[Landing Page](./README.md) | [中文](./README.zh-CN.md)
-
 ## Installation
 
 #### Option 1: Download from GitHub Releases
