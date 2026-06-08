@@ -1,6 +1,8 @@
+[English](./README.md)
+
 # 国际资讯聚合器
 
-[入口页](./README.md) | [English](./README.en.md)
+[English](./README.md)
 
 ## 安装
 
