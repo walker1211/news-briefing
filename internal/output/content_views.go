@@ -59,6 +59,18 @@ func OrderedCategories(articles []model.Article, categoryOrder []string) []strin
 	return ordered
 }
 
+func OrderedArticleList(articles []model.Article, categoryOrder []string) []model.Article {
+	grouped := make(map[string][]model.Article)
+	for _, article := range articles {
+		grouped[article.Category] = append(grouped[article.Category], article)
+	}
+	ordered := make([]model.Article, 0, len(articles))
+	for _, category := range OrderedCategories(articles, categoryOrder) {
+		ordered = append(ordered, grouped[category]...)
+	}
+	return ordered
+}
+
 func GroupedArticleListView(articles []model.Article, categoryOrder []string, loc *time.Location) string {
 	grouped := make(map[string][]model.Article)
 	for _, a := range articles {

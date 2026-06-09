@@ -160,6 +160,26 @@ func TestGroupedArticleListViewAppendsUnknownCategoriesAfterConfiguredOnes(t *te
 	}
 }
 
+func TestOrderedArticleListUsesGroupedPromptOrder(t *testing.T) {
+	articles := []model.Article{
+		{Title: "Tooling launch", Category: "开源工具"},
+		{Title: "Policy update", Category: "国际政治"},
+		{Title: "OpenAI ships feature", Category: "AI/科技"},
+		{Title: "Claude ships feature", Category: "AI/科技"},
+	}
+
+	got := OrderedArticleList(articles, []string{"AI/科技", "国际政治"})
+	wantTitles := []string{"OpenAI ships feature", "Claude ships feature", "Policy update", "Tooling launch"}
+	if len(got) != len(wantTitles) {
+		t.Fatalf("len(OrderedArticleList()) = %d, want %d", len(got), len(wantTitles))
+	}
+	for i, want := range wantTitles {
+		if got[i].Title != want {
+			t.Fatalf("OrderedArticleList()[%d].Title = %q, want %q", i, got[i].Title, want)
+		}
+	}
+}
+
 func TestStructuredBriefingMarkdownRendersStoryImageBelowTitle(t *testing.T) {
 	summary := model.BriefingSummary{
 		OverviewGroups: []model.BriefingOverviewGroup{{Category: "AI/科技", Items: []string{"🤖 OpenAI 发布新功能"}}},

@@ -188,7 +188,7 @@ func TestValidateBriefingSummaryImagesSkipsTrackingPixelBackfill(t *testing.T) {
 	}
 }
 
-func TestValidateBriefingSummaryImagesClearsAmbiguousMultiSourceImages(t *testing.T) {
+func TestValidateBriefingSummaryImagesKeepsChosenImageFromAmbiguousSourceArticles(t *testing.T) {
 	articles := []model.Article{
 		{ImageURL: "https://example.com/fire.jpg"},
 		{ImageURL: "https://example.com/satellite.jpg"},
@@ -196,8 +196,57 @@ func TestValidateBriefingSummaryImagesClearsAmbiguousMultiSourceImages(t *testin
 	summary := model.BriefingSummary{Stories: []model.BriefingStory{{ImageURL: "https://example.com/fire.jpg", SourceArticleIDs: []int{1, 2}}}}
 
 	got := validateBriefingSummaryImages(summary, articles)
+	if got.Stories[0].ImageURL != "https://example.com/fire.jpg" {
+		t.Fatalf("ImageURL = %q, want chosen source image", got.Stories[0].ImageURL)
+	}
+}
+
+func TestValidateBriefingSummaryImagesDoesNotBackfillAmbiguousMultiSourceImages(t *testing.T) {
+	articles := []model.Article{
+		{ImageURL: "https://example.com/fire.jpg"},
+		{ImageURL: "https://example.com/satellite.jpg"},
+	}
+	summary := model.BriefingSummary{Stories: []model.BriefingStory{{SourceArticleIDs: []int{1, 2}}}}
+
+	got := validateBriefingSummaryImages(summary, articles)
 	if got.Stories[0].ImageURL != "" {
-		t.Fatalf("ImageURL = %q, want empty for ambiguous multi-source images", got.Stories[0].ImageURL)
+		t.Fatalf("ImageURL = %q, want empty for ambiguous multi-source backfill", got.Stories[0].ImageURL)
+	}
+}
+
+func TestRunnerSummarizeValidatesImagesUsingPromptArticleOrder(t *testing.T) {
+	const aiImage = "https://example.com/ai.jpg"
+	const politicsImage = "https://example.com/politics.jpg"
+	setupFakeCLIOutput(t, "claude", `{"overview_groups":[],"stories":[{"category":"AI/科技","title":"AI story","image_url":"https://example.com/ai.jpg","summary":"AI summary.","impact":"AI impact.","source_article_ids":[1],"source_line":"来源: AI Source | 2026-03-18 14:00"}],"situation":"","directions":[]}`)
+	runner := NewRunner("claude", nil, nil, false, "", "")
+	articles := []model.Article{
+		{
+			Title:     "Politics story",
+			Summary:   "Politics summary.",
+			Source:    "Politics Source",
+			Category:  "国际政治",
+			ImageURL:  politicsImage,
+			Published: time.Date(2026, 3, 18, 15, 0, 0, 0, time.UTC),
+		},
+		{
+			Title:     "AI story",
+			Summary:   "AI summary.",
+			Source:    "AI Source",
+			Category:  "AI/科技",
+			ImageURL:  aiImage,
+			Published: time.Date(2026, 3, 18, 14, 0, 0, 0, time.UTC),
+		},
+	}
+
+	got, err := runner.SummarizeContext(context.Background(), articles, []string{"AI/科技", "国际政治"}, time.UTC)
+	if err != nil {
+		t.Fatalf("SummarizeContext() error = %v", err)
+	}
+	if !strings.Contains(got, "]("+aiImage+")") {
+		t.Fatalf("SummarizeContext() = %q, want AI image from prompt source id", got)
+	}
+	if strings.Contains(got, politicsImage) {
+		t.Fatalf("SummarizeContext() = %q, should not use image from original article index", got)
 	}
 }
 
