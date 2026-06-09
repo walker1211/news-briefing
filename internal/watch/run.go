@@ -349,6 +349,15 @@ func applyWatchEventPriority(event *model.WatchEvent) {
 	event.Reason = fmt.Sprintf("命中高价值关键词：%s", strings.Join(event.MatchedKeywords, ", "))
 }
 
+func applyWatchEventPriorityAt(event *model.WatchEvent, now time.Time) {
+	applyWatchEventPriority(event)
+	if !event.IncludeInBriefing || !isStaleClaudeReleaseNotesOverviewEntry(event.ArticleURL, now) {
+		return
+	}
+	event.IncludeInBriefing = false
+	event.Reason += "；旧日期锚点仅记录在 watch 报告"
+}
+
 func matchedWatchKeywords(text string, keywords []string) []string {
 	lower := strings.ToLower(text)
 	matched := make([]string, 0)

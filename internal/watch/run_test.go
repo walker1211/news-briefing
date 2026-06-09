@@ -405,6 +405,78 @@ func TestRunClaudeReleaseNotesIncludesNewArticleInBriefing(t *testing.T) {
 	}
 }
 
+func TestRunClaudeReleaseNotesSkipsStaleDateFragmentContentChangesInBriefing(t *testing.T) {
+	homeURL := "https://docs.claude.com/en/release-notes/overview"
+	entryURL := homeURL + "#november-24-2025"
+	currentHome := `<html><body><main>
+		<h3><div id="november-24-2025"><div>November 24, 2025</div></div></h3>
+		<ul>
+			<li>We've launched <a href="https://www.anthropic.com/news/claude-opus-4-5">Claude Opus 4.5</a>, our latest model for complex coding and API workloads.</li>
+			<li>API release notes now include additional tool updates.</li>
+		</ul>
+	</main></body></html>`
+	responses := map[string]string{
+		homeURL:  currentHome,
+		entryURL: currentHome,
+	}
+	fetchHTML := func(ctx context.Context, url string) (string, error) { return responses[url], nil }
+
+	cfg := &config.Config{
+		Output: config.OutputCfg{Dir: t.TempDir()},
+		Watch: config.WatchConfig{Sites: []config.WatchSite{{
+			Name:             "Claude Platform Release Notes",
+			Type:             config.WatchTypeAnnouncementPage,
+			HomeURL:          homeURL,
+			BriefingCategory: "AI/科技",
+			HighValueKeywords: []string{
+				"Claude", "Opus", "API", "release",
+			},
+		}}},
+	}
+
+	baseline, err := parseAnthropicAnnouncementIndex("Claude Platform Release Notes", homeURL, currentHome)
+	if err != nil {
+		t.Fatalf("parseAnthropicAnnouncementIndex() error = %v", err)
+	}
+	indexStore := NewIndexStore(cfg.Output.Dir)
+	articleStore := NewArticleStore(cfg.Output.Dir)
+	if err := indexStore.Save(IndexState{Categories: map[string]model.WatchIndexSnapshot{
+		"Claude Platform Release Notes::Claude Platform Release Notes": baseline,
+	}}); err != nil {
+		t.Fatalf("indexStore.Save() error = %v", err)
+	}
+	if err := articleStore.Save(ArticleState{
+		entryURL: {
+			URL:         entryURL,
+			Title:       "We've launched Claude Opus 4.5",
+			SummaryHash: hashWatchContent("old summary"),
+			BodyHash:    hashWatchContent("old body"),
+		},
+	}); err != nil {
+		t.Fatalf("articleStore.Save() error = %v", err)
+	}
+
+	articles, report, err := runContext(context.Background(), cfg, time.Date(2026, 6, 9, 18, 0, 0, 0, time.UTC), fetchHTML)
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	found := false
+	for _, event := range report.Events {
+		if event.EventType == "content_changed" && event.ArticleURL == entryURL {
+			found = true
+			if event.IncludeInBriefing {
+				t.Fatalf("stale release-note content change should stay out of briefing: %#v", event)
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("report.Events = %#v", report.Events)
+	}
+	if len(articles) != 0 {
+		t.Fatalf("articles = %#v, want stale release-note content change excluded", articles)
+	}
+}
+
 func TestRunClaudeReleaseNotesHostMigrationDoesNotReannounceExistingEntries(t *testing.T) {
 	oldHome := `<html><body><main><h3><div id="february-17-2026"><div>February 17, 2026</div></div></h3><ul><li>We've launched <a href="https://www.anthropic.com/news/claude-sonnet-4-6">Claude Sonnet 4.6</a>, our latest balanced model combining speed and intelligence for everyday tasks. Sonnet 4.6 delivers improved agentic search performance while consuming fewer tokens.</li></ul></main></body></html>`
 	responses := map[string]string{

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/url"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -14,6 +15,23 @@ import (
 )
 
 var claudeReleaseNotesDateFragmentPattern = regexp.MustCompile(`(?i)^(january|february|march|april|may|june|july|august|september|october|november|december)-[0-9]{1,2}-[0-9]{4}$`)
+
+const staleClaudeReleaseNotesEntryDays = 60
+
+var claudeReleaseNotesMonthByName = map[string]time.Month{
+	"january":   time.January,
+	"february":  time.February,
+	"march":     time.March,
+	"april":     time.April,
+	"may":       time.May,
+	"june":      time.June,
+	"july":      time.July,
+	"august":    time.August,
+	"september": time.September,
+	"october":   time.October,
+	"november":  time.November,
+	"december":  time.December,
+}
 
 func runAnnouncementSite(ctx context.Context, site config.WatchSite, now time.Time, indexState IndexState, articleState ArticleState, fetchHTML fetchHTMLFunc) ([]model.Article, []model.WatchSeenArticle, []model.WatchEvent, error) {
 	homeHTML, err := fetchHTML(ctx, site.HomeURL)
@@ -165,6 +183,49 @@ func parseClaudeReleaseNotesOverview(doc *goquery.Document, pageURL string) []mo
 
 func isClaudeReleaseNotesDateFragment(fragment string) bool {
 	return claudeReleaseNotesDateFragmentPattern.MatchString(strings.TrimSpace(fragment))
+}
+
+func isStaleClaudeReleaseNotesOverviewEntry(rawURL string, now time.Time) bool {
+	if !isClaudeReleaseNotesOverviewEntryURL(rawURL) || now.IsZero() {
+		return false
+	}
+	entryDate, ok := claudeReleaseNotesDateFromFragment(releaseNotesOverviewFragment(rawURL), now.Location())
+	if !ok {
+		return false
+	}
+	nowDate := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location())
+	return entryDate.Before(nowDate.AddDate(0, 0, -staleClaudeReleaseNotesEntryDays))
+}
+
+func claudeReleaseNotesDateFromFragment(fragment string, loc *time.Location) (time.Time, bool) {
+	fragment = strings.ToLower(strings.TrimSpace(fragment))
+	if !isClaudeReleaseNotesDateFragment(fragment) {
+		return time.Time{}, false
+	}
+	parts := strings.Split(fragment, "-")
+	if len(parts) != 3 {
+		return time.Time{}, false
+	}
+	month, ok := claudeReleaseNotesMonthByName[parts[0]]
+	if !ok {
+		return time.Time{}, false
+	}
+	day, err := strconv.Atoi(parts[1])
+	if err != nil {
+		return time.Time{}, false
+	}
+	year, err := strconv.Atoi(parts[2])
+	if err != nil {
+		return time.Time{}, false
+	}
+	if loc == nil {
+		loc = time.UTC
+	}
+	date := time.Date(year, month, day, 0, 0, 0, 0, loc)
+	if date.Year() != year || date.Month() != month || date.Day() != day {
+		return time.Time{}, false
+	}
+	return date, true
 }
 
 func normalizeClaudeReleaseNotesSnapshotURLs(snapshot model.WatchIndexSnapshot, pageURL string) model.WatchIndexSnapshot {

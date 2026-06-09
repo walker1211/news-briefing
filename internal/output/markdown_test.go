@@ -111,6 +111,30 @@ func testPNGBytes(t *testing.T, width int, height int) []byte {
 	return out.Bytes()
 }
 
+func testJPEGBytes(t *testing.T, width int, height int) []byte {
+	t.Helper()
+	img := image.NewRGBA(image.Rect(0, 0, width, height))
+	for y := range height {
+		for x := range width {
+			img.Set(x, y, color.RGBA{R: uint8((x + y) % 256), G: uint8((x * 3) % 256), B: uint8((y * 5) % 256), A: 255})
+		}
+	}
+	var out bytes.Buffer
+	if err := jpeg.Encode(&out, img, &jpeg.Options{Quality: 90}); err != nil {
+		t.Fatalf("jpeg.Encode() error = %v", err)
+	}
+	return out.Bytes()
+}
+
+func paddedImageBytes(data []byte, size int) []byte {
+	if len(data) >= size {
+		return data
+	}
+	out := make([]byte, size)
+	copy(out, data)
+	return out
+}
+
 func TestWriteMarkdownDownloadsRemoteStoryImagesToAssets(t *testing.T) {
 	outputDir := t.TempDir()
 	var downloadedURL string
@@ -202,7 +226,7 @@ func TestWriteMarkdownRemovesTrackingPixelImage(t *testing.T) {
 	}
 }
 
-func TestWriteMarkdownWarnsWhenRemoteStoryImageDownloadFails(t *testing.T) {
+func TestWriteMarkdownRemovesRemoteStoryImageWhenDownloadFails(t *testing.T) {
 	outputDir := t.TempDir()
 	imageURL := "https://cdn.example.com/images/story.jpg"
 	download := func(rawURL string, path string) error {
@@ -235,13 +259,69 @@ func TestWriteMarkdownWarnsWhenRemoteStoryImageDownloadFails(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ReadFile() error = %v", err)
 	}
-	if !strings.Contains(string(data), imageURL) {
-		t.Fatalf("markdown = %q, want original URL retained", string(data))
+	got := string(data)
+	if strings.Contains(got, imageURL) || strings.Contains(got, "![美伊海湾交火]") {
+		t.Fatalf("markdown kept failed remote image: %q", got)
+	}
+	for _, want := range []string{"### 美伊海湾交火", "**摘要：** ..."} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("markdown removed story content: %q", got)
+		}
 	}
 	for _, want := range []string{"Markdown image download failed", "cdn.example.com", "403 Forbidden"} {
 		if !strings.Contains(stderr, want) {
 			t.Fatalf("stderr = %q, want contain %q", stderr, want)
 		}
+	}
+}
+
+func TestDownloadMarkdownImageAcceptsLargeImageAndCompressesOutput(t *testing.T) {
+	imageData := paddedImageBytes(testJPEGBytes(t, 64, 64), 12*1024*1024)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "image/jpeg")
+		_, _ = w.Write(imageData)
+	}))
+	t.Cleanup(server.Close)
+
+	path := filepath.Join(t.TempDir(), "image.jpg")
+	if err := downloadMarkdownImage(server.URL+"/image.jpg", path); err != nil {
+		t.Fatalf("downloadMarkdownImage() error = %v", err)
+	}
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("ReadFile() error = %v", err)
+	}
+	if len(got) > 5*1024*1024 {
+		t.Fatalf("downloaded image size = %d, want at most 5 MiB", len(got))
+	}
+	if len(got) >= len(imageData) {
+		t.Fatalf("downloaded image size = %d, want compressed below original %d", len(got), len(imageData))
+	}
+	file, err := os.Open(path)
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+	defer file.Close()
+	if _, err := jpeg.DecodeConfig(file); err != nil {
+		t.Fatalf("jpeg.DecodeConfig() error = %v", err)
+	}
+}
+
+func TestDownloadMarkdownImageRejectsImageOverThirtyMegabytes(t *testing.T) {
+	imageData := paddedImageBytes(testJPEGBytes(t, 64, 64), 31*1024*1024)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "image/jpeg")
+		_, _ = w.Write(imageData)
+	}))
+	t.Cleanup(server.Close)
+
+	path := filepath.Join(t.TempDir(), "image.jpg")
+	err := downloadMarkdownImage(server.URL+"/image.jpg", path)
+	if err == nil || !strings.Contains(err.Error(), "file too large") {
+		t.Fatalf("downloadMarkdownImage() error = %v, want file too large", err)
+	}
+	if _, statErr := os.Stat(path); !os.IsNotExist(statErr) {
+		t.Fatalf("downloaded oversized image exists, stat error = %v", statErr)
 	}
 }
 

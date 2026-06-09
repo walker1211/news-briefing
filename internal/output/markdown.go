@@ -29,11 +29,13 @@ import (
 
 type markdownImageDownloader func(rawURL string, path string) error
 
-const maxMarkdownImageBytes = 10 * 1024 * 1024
+const maxMarkdownImageBytes = 30 * 1024 * 1024
+const maxMarkdownImageOutputBytes = 5 * 1024 * 1024
 const minMarkdownImageWidth = 32
 const minMarkdownImageHeight = 32
 const markdownImageDownloadAttempts = 3
 const markdownImageRetryDelay = 200 * time.Millisecond
+const markdownImageResizePercent = 80
 
 func WriteMarkdown(briefing *model.Briefing, outputDir string) (string, error) {
 	return writeMarkdownWithImageDownloader(briefing, outputDir, downloadMarkdownImage)
@@ -78,6 +80,7 @@ func localizeMarkdownImages(rawContent string, outputDir string, date string, pe
 		}
 		if err := download(imageURL, localPath); err != nil {
 			logutil.Warnf("Markdown image download failed: host=%s error=%v", markdownImageHost(imageURL), err)
+			lines[i] = ""
 			continue
 		}
 		lines[i] = fmt.Sprintf("![%s](%s)", alt, filepath.ToSlash(filepath.Join(assetRelDir, filename)))
@@ -222,7 +225,7 @@ func writeValidatedMarkdownImage(path string, data []byte) error {
 		return fmt.Errorf("download image: dimensions %dx%d too small", config.Width, config.Height)
 	}
 	ext := strings.ToLower(filepath.Ext(path))
-	if markdownImageFormatMatchesExtension(format, ext) {
+	if markdownImageFormatMatchesExtension(format, ext) && len(data) <= maxMarkdownImageOutputBytes {
 		return statefile.WriteAtomicReplaceOnly(path, data, 0o644)
 	}
 	img, _, err := image.Decode(bytes.NewReader(data))
@@ -231,8 +234,14 @@ func writeValidatedMarkdownImage(path string, data []byte) error {
 	}
 	switch ext {
 	case ".jpg", ".jpeg":
+		if len(data) > maxMarkdownImageOutputBytes {
+			return writeCompressedJPEGMarkdownImage(path, img)
+		}
 		return writeJPEGMarkdownImage(path, img)
 	case ".png":
+		if len(data) > maxMarkdownImageOutputBytes {
+			return writeCompressedPNGMarkdownImage(path, img)
+		}
 		return writePNGMarkdownImage(path, img)
 	default:
 		return fmt.Errorf("download image: format %s does not match extension %s", format, ext)
@@ -253,22 +262,110 @@ func markdownImageFormatMatchesExtension(format string, ext string) bool {
 }
 
 func writeJPEGMarkdownImage(path string, img image.Image) error {
+	data, err := encodeJPEGMarkdownImage(img, 90)
+	if err != nil {
+		return err
+	}
+	return statefile.WriteAtomicReplaceOnly(path, data, 0o644)
+}
+
+func writeCompressedJPEGMarkdownImage(path string, img image.Image) error {
+	data, err := compressedMarkdownImageBytes(img, func(candidate image.Image) ([]byte, error) {
+		return encodeJPEGMarkdownImage(candidate, 85)
+	})
+	if err != nil {
+		return err
+	}
+	return statefile.WriteAtomicReplaceOnly(path, data, 0o644)
+}
+
+func writePNGMarkdownImage(path string, img image.Image) error {
+	data, err := encodePNGMarkdownImage(img)
+	if err != nil {
+		return err
+	}
+	return statefile.WriteAtomicReplaceOnly(path, data, 0o644)
+}
+
+func writeCompressedPNGMarkdownImage(path string, img image.Image) error {
+	data, err := compressedMarkdownImageBytes(img, encodePNGMarkdownImage)
+	if err != nil {
+		return err
+	}
+	return statefile.WriteAtomicReplaceOnly(path, data, 0o644)
+}
+
+func encodeJPEGMarkdownImage(img image.Image, quality int) ([]byte, error) {
 	var out bytes.Buffer
 	rgba := image.NewRGBA(img.Bounds())
 	draw.Draw(rgba, rgba.Bounds(), &image.Uniform{C: color.White}, image.Point{}, draw.Src)
 	draw.Draw(rgba, rgba.Bounds(), img, img.Bounds().Min, draw.Over)
-	if err := jpeg.Encode(&out, rgba, &jpeg.Options{Quality: 90}); err != nil {
-		return err
+	if err := jpeg.Encode(&out, rgba, &jpeg.Options{Quality: quality}); err != nil {
+		return nil, err
 	}
-	return statefile.WriteAtomicReplaceOnly(path, out.Bytes(), 0o644)
+	return out.Bytes(), nil
 }
 
-func writePNGMarkdownImage(path string, img image.Image) error {
+func encodePNGMarkdownImage(img image.Image) ([]byte, error) {
 	var out bytes.Buffer
 	if err := png.Encode(&out, img); err != nil {
-		return err
+		return nil, err
 	}
-	return statefile.WriteAtomicReplaceOnly(path, out.Bytes(), 0o644)
+	return out.Bytes(), nil
+}
+
+func compressedMarkdownImageBytes(img image.Image, encode func(image.Image) ([]byte, error)) ([]byte, error) {
+	candidate := img
+	for {
+		data, err := encode(candidate)
+		if err != nil {
+			return nil, err
+		}
+		if len(data) <= maxMarkdownImageOutputBytes {
+			return data, nil
+		}
+		width, height, ok := nextMarkdownImageSize(candidate.Bounds())
+		if !ok {
+			return nil, fmt.Errorf("download image: compressed file too large")
+		}
+		candidate = resizeMarkdownImage(candidate, width, height)
+	}
+}
+
+func nextMarkdownImageSize(bounds image.Rectangle) (int, int, bool) {
+	width := bounds.Dx()
+	height := bounds.Dy()
+	nextWidth := width
+	nextHeight := height
+	if width > minMarkdownImageWidth {
+		nextWidth = width * markdownImageResizePercent / 100
+		if nextWidth < minMarkdownImageWidth {
+			nextWidth = minMarkdownImageWidth
+		}
+	}
+	if height > minMarkdownImageHeight {
+		nextHeight = height * markdownImageResizePercent / 100
+		if nextHeight < minMarkdownImageHeight {
+			nextHeight = minMarkdownImageHeight
+		}
+	}
+	if nextWidth == width && nextHeight == height {
+		return width, height, false
+	}
+	return nextWidth, nextHeight, true
+}
+
+func resizeMarkdownImage(src image.Image, width int, height int) image.Image {
+	dst := image.NewRGBA(image.Rect(0, 0, width, height))
+	bounds := src.Bounds()
+	for y := range height {
+		sy := bounds.Min.Y + y*bounds.Dy()/height
+		for x := range width {
+			sx := bounds.Min.X + x*bounds.Dx()/width
+			dst.Set(x, y, src.At(sx, sy))
+		}
+	}
+	return dst
 }
 
 func isImageLikeOctetStream(contentType string, rawURL string) bool {
