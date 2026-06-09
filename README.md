@@ -403,6 +403,37 @@ launchctl kickstart -k gui/$(id -u)/com.news-briefing.briefing
 launchctl print gui/$(id -u)/com.news-briefing.briefing
 ```
 
+### Optional: local macOS signing for scheduled automation
+
+If macOS repeatedly asks for Automation, Accessibility, or browser-control permissions after rebuilding `./news-briefing`, sign the local binary with a stable local Code Signing certificate.
+
+This is optional and local-only. The repository does not include certificates, private keys, personal Keychain paths, or signing secrets, and public release artifacts are unchanged.
+
+1. Open Keychain Access.
+2. Choose Certificate Assistant > Create a Certificate.
+3. Name it, for example, `News Briefing Local Code Signing`.
+4. Set Certificate Type to `Code Signing` and store it in the login keychain.
+5. Trust the certificate for code signing if macOS asks.
+6. Build with the local identity:
+
+```bash
+NEWS_BRIEFING_CODESIGN_IDENTITY="News Briefing Local Code Signing" ./build.sh
+```
+
+To make local signing mandatory for your scheduled setup:
+
+```bash
+NEWS_BRIEFING_CODESIGN_IDENTITY="News Briefing Local Code Signing" \
+NEWS_BRIEFING_CODESIGN_REQUIRED=1 \
+./build.sh
+```
+
+After the first signed build, restart launchd and approve the macOS permission prompts once:
+
+```bash
+./launch-restart.sh
+```
+
 Stop and unload:
 
 ```bash

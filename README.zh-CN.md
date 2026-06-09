@@ -405,6 +405,37 @@ launchctl kickstart -k gui/$(id -u)/com.news-briefing.briefing
 launchctl print gui/$(id -u)/com.news-briefing.briefing
 ```
 
+### 可选：为定时自动化配置本地 macOS 签名
+
+如果每次重新构建 `./news-briefing` 后，macOS 都反复询问 Automation、Accessibility 或浏览器控制权限，可以用稳定的本地 Code Signing 证书签名本机二进制。
+
+这是可选的本机配置。仓库不会包含证书、私钥、个人 Keychain 路径或签名密钥，公开 release 产物也不会因此改变。
+
+1. 打开“钥匙串访问”。
+2. 选择 Certificate Assistant > Create a Certificate。
+3. 命名为例如 `News Briefing Local Code Signing`。
+4. Certificate Type 选择 `Code Signing`，并保存到登录钥匙串。
+5. 如果 macOS 提示信任设置，允许该证书用于代码签名。
+6. 使用本地身份构建：
+
+```bash
+NEWS_BRIEFING_CODESIGN_IDENTITY="News Briefing Local Code Signing" ./build.sh
+```
+
+如果希望定时任务使用的本机二进制必须签名，可以启用严格模式：
+
+```bash
+NEWS_BRIEFING_CODESIGN_IDENTITY="News Briefing Local Code Signing" \
+NEWS_BRIEFING_CODESIGN_REQUIRED=1 \
+./build.sh
+```
+
+首次签名构建后，重启 launchd，并在 macOS 弹窗中允许一次：
+
+```bash
+./launch-restart.sh
+```
+
 停止并卸载：
 
 ```bash
