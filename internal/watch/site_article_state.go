@@ -76,7 +76,7 @@ func diffWatchCategoryEvents(site config.WatchSite, now time.Time, prev *model.W
 		if slices.Contains(changedURLs, categoryEvents[i].ArticleURL) {
 			continue
 		}
-		applyWatchEventPriority(&categoryEvents[i])
+		applyWatchEventPriorityAt(&categoryEvents[i], now)
 	}
 	return categoryEvents, changedURLs
 }
@@ -111,7 +111,7 @@ func updateCurrentWatchArticleStates(ctx context.Context, run watchCategoryRun, 
 				Reason:          "正文发生变化",
 				MatchedKeywords: matchedWatchKeywords(content.title+" "+content.summary+" "+content.body, run.site.HighValueKeywords),
 			}
-			applyWatchEventPriority(&event)
+			applyWatchEventPriorityAt(&event, run.now)
 			*categoryEvents = append(*categoryEvents, event)
 			seenPayloads[item.URL] = content
 			storeWatchArticleState(run.articleState, item.URL, content, run.now)
@@ -149,7 +149,7 @@ func enrichChangedWatchEvents(ctx context.Context, run watchCategoryRun, changed
 		if categoryEvents[matchedIndex].Reason == "" {
 			categoryEvents[matchedIndex].Reason = defaultWatchReason(categoryEvents[matchedIndex].EventType, categoryEvents[matchedIndex].ArticleTitle)
 		}
-		applyWatchEventPriority(&categoryEvents[matchedIndex])
+		applyWatchEventPriorityAt(&categoryEvents[matchedIndex], run.now)
 		seenPayloads[url] = content
 	}
 	return nil
