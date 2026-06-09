@@ -452,7 +452,8 @@ func (r *Runner) SummarizeContext(ctx context.Context, articles []model.Article,
 		return "今日暂无符合筛选条件的新闻。", nil
 	}
 
-	input := output.GroupedArticleListView(articles, categoryOrder, loc)
+	promptArticles := output.OrderedArticleList(articles, categoryOrder)
+	input := output.GroupedArticleListView(promptArticles, categoryOrder, loc)
 	prompt := briefingPrompt + "\n\n---\n以下是今日新闻条目：\n\n" + input
 
 	raw, err := r.callClaudeContext(ctx, prompt, r.summarizeExtraFlags()...)
@@ -463,7 +464,7 @@ func (r *Runner) SummarizeContext(ctx context.Context, articles []model.Article,
 	if err != nil {
 		return "", fmt.Errorf("parse structured briefing: %w", err)
 	}
-	structured = validateBriefingSummaryImages(structured, articles)
+	structured = validateBriefingSummaryImages(structured, promptArticles)
 	return output.StructuredBriefingMarkdown(structured, categoryOrder), nil
 }
 
@@ -512,7 +513,7 @@ func validateBriefingSummaryImages(summary model.BriefingSummary, articles []mod
 		image := strings.TrimSpace(story.ImageURL)
 		if image != "" {
 			_, allowedImage := allowed[image]
-			if allowedImage && sourceArticleIDsContainImage(story.SourceArticleIDs, articles, image) && (len(story.SourceArticleIDs) == 0 || sourceImageOK && sourceImage == image) {
+			if allowedImage && sourceArticleIDsContainImage(story.SourceArticleIDs, articles, image) {
 				story.ImageURL = image
 				continue
 			}
