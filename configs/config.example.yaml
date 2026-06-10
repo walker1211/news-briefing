@@ -281,3 +281,10 @@ ai:
     - --bare
     - --disable-slash-commands
   append_system_prompt: true
+  retry:
+    delays:
+      - 1s
+      - 2s
+      - 5s
+      - 9s
+      - 17s

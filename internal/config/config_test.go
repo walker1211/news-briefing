@@ -46,6 +46,71 @@ proxy: {}
 	if !cfg.AI.ShouldAppendSystemPrompt() {
 		t.Fatalf("AI.ShouldAppendSystemPrompt() = false, want true")
 	}
+	wantRetryDelays := []time.Duration{time.Second, 2 * time.Second, 5 * time.Second, 9 * time.Second, 17 * time.Second}
+	if !reflect.DeepEqual(cfg.AI.Retry.Delays, wantRetryDelays) {
+		t.Fatalf("AI.Retry.Delays = %v, want %v", cfg.AI.Retry.Delays, wantRetryDelays)
+	}
+}
+
+func TestLoadParsesAIRetryDelays(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	content := `sources: []
+keywords: []
+email:
+  smtp_host: smtp.example.com
+  smtp_port: 465
+  from: from@example.com
+  to: to@example.com
+schedule: []
+output: {}
+proxy: {}
+ai:
+  retry:
+    delays:
+      - 2s
+      - 11s
+`
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	want := []time.Duration{2 * time.Second, 11 * time.Second}
+	if !reflect.DeepEqual(cfg.AI.Retry.Delays, want) {
+		t.Fatalf("AI.Retry.Delays = %v, want %v", cfg.AI.Retry.Delays, want)
+	}
+}
+
+func TestLoadRejectsInvalidAIRetryDelay(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	content := `sources: []
+keywords: []
+email:
+  smtp_host: smtp.example.com
+  smtp_port: 465
+  from: from@example.com
+  to: to@example.com
+schedule: []
+output: {}
+proxy: {}
+ai:
+  retry:
+    delays:
+      - 0s
+`
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	_, err := Load(path)
+	if err == nil || !strings.Contains(err.Error(), "ai.retry.delays[0]") {
+		t.Fatalf("Load() error = %v, want ai.retry.delays[0] validation error", err)
+	}
 }
 
 func TestLoadPreservesConfiguredAIFlags(t *testing.T) {

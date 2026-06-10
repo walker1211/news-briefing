@@ -59,6 +59,12 @@ const (
 	DefaultXMaxPostsPerTarget             = 10
 )
 
+var DefaultAIRetryDelays = []time.Duration{time.Second, 2 * time.Second, 5 * time.Second, 9 * time.Second, 17 * time.Second}
+
+func cloneDurations(values []time.Duration) []time.Duration {
+	return append([]time.Duration(nil), values...)
+}
+
 type Source struct {
 	Name     string   `yaml:"name"`
 	URL      string   `yaml:"url"`
@@ -170,10 +176,15 @@ type Proxy struct {
 }
 
 type AICfg struct {
-	Command            string   `yaml:"command"`
-	Args               []string `yaml:"args"`
-	ExtraFlags         []string `yaml:"extra_flags"`
-	AppendSystemPrompt *bool    `yaml:"append_system_prompt"`
+	Command            string     `yaml:"command"`
+	Args               []string   `yaml:"args"`
+	ExtraFlags         []string   `yaml:"extra_flags"`
+	AppendSystemPrompt *bool      `yaml:"append_system_prompt"`
+	Retry              AIRetryCfg `yaml:"retry"`
+}
+
+type AIRetryCfg struct {
+	Delays []time.Duration `yaml:"delays"`
 }
 
 func (cfg AICfg) ShouldAppendSystemPrompt() bool {
@@ -430,6 +441,11 @@ func (cfg *Config) Validate() error {
 			return fmt.Errorf("validate ai.extra_flags[%d]: must not be empty", i)
 		}
 	}
+	for i, delay := range cfg.AI.Retry.Delays {
+		if delay <= 0 {
+			return fmt.Errorf("validate ai.retry.delays[%d]: must be > 0", i)
+		}
+	}
 	for i, expr := range cfg.Schedule {
 		trimmed := strings.TrimSpace(expr)
 		if trimmed == "" {
@@ -677,6 +693,11 @@ func Load(configPath string) (*Config, error) {
 	}
 	if len(cfg.AI.Args) == 0 {
 		cfg.AI.Args = []string{"codex"}
+	}
+	if cfg.AI.Retry.Delays == nil {
+		cfg.AI.Retry.Delays = cloneDurations(DefaultAIRetryDelays)
+	} else {
+		cfg.AI.Retry.Delays = cloneDurations(cfg.AI.Retry.Delays)
 	}
 	loc, err := resolveScheduleLocation(cfg.ScheduleTimezone)
 	if err != nil {
