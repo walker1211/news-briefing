@@ -181,10 +181,10 @@ func writeStructuredStory(sb *strings.Builder, story model.BriefingStory) {
 		sb.WriteString("![" + markdownImageAlt(title) + "](" + imageURL + ")\n")
 	}
 	if summary := strings.TrimSpace(story.Summary); summary != "" {
-		sb.WriteString("**摘要：** " + summary + "\n")
+		sb.WriteString("**摘要：** " + summary + "  \n")
 	}
 	if impact := strings.TrimSpace(story.Impact); impact != "" {
-		sb.WriteString("**影响：** " + impact + "\n")
+		sb.WriteString("**影响：** " + impact + "  \n")
 	}
 	if source := strings.TrimSpace(story.SourceLine); source != "" {
 		sb.WriteString("> " + strings.TrimPrefix(source, "> ") + "\n")

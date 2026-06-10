@@ -207,6 +207,22 @@ func TestStructuredBriefingMarkdownRendersStoryImageBelowTitle(t *testing.T) {
 	}
 }
 
+func TestStructuredBriefingMarkdownHardBreaksStorySummaryAndImpact(t *testing.T) {
+	summary := model.BriefingSummary{Stories: []model.BriefingStory{{
+		Category:   "AI/科技",
+		Title:      "OpenAI 发布新功能",
+		Summary:    "功能摘要。",
+		Impact:     "影响分析。",
+		SourceLine: "来源: Example | 2026-03-18 14:00",
+	}}}
+
+	got := StructuredBriefingMarkdown(summary, []string{"AI/科技"})
+	want := "**摘要：** 功能摘要。  \n**影响：** 影响分析。  \n> 来源: Example | 2026-03-18 14:00"
+	if !strings.Contains(got, want) {
+		t.Fatalf("StructuredBriefingMarkdown() = %q, want hard breaks between story fields", got)
+	}
+}
+
 func TestStructuredBriefingMarkdownOmitsEmptyStoryImage(t *testing.T) {
 	summary := model.BriefingSummary{Stories: []model.BriefingStory{{Category: "AI/科技", Title: "OpenAI 发布新功能", Summary: "功能摘要。"}}}
 
