@@ -102,6 +102,7 @@ type Runner struct {
 	appendSystemPrompt bool
 	proxyEnv           []string
 	retrySleep         sleepFunc
+	retryDelays        []time.Duration
 	failureLogPath     string
 }
 
@@ -119,6 +120,7 @@ var (
 	defaultExtraFlags         []string
 	defaultAppendSystemPrompt = true
 	defaultFailureLogPath     = filepath.Join("logs", "ai-cli-failures.log")
+	defaultRetryDelays        = []time.Duration{time.Second, 2 * time.Second, 5 * time.Second, 9 * time.Second, 17 * time.Second}
 	legacyDefaultMu           sync.RWMutex
 	legacyDefaultConfig       = newDefaultRunnerConfig()
 	requestIDPattern          = regexp.MustCompile(`[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}`)
@@ -131,6 +133,7 @@ type runnerConfig struct {
 	appendSystemPrompt bool
 	httpProxy          string
 	socks5Proxy        string
+	retryDelays        []time.Duration
 	failureLogPath     string
 }
 
@@ -140,6 +143,7 @@ func newDefaultRunnerConfig() runnerConfig {
 		args:               cloneStrings(defaultCommandArgs),
 		extraFlags:         cloneStrings(defaultExtraFlags),
 		appendSystemPrompt: defaultAppendSystemPrompt,
+		retryDelays:        cloneDurations(defaultRetryDelays),
 		failureLogPath:     defaultFailureLogPath,
 	}
 }
@@ -152,6 +156,7 @@ func (c runnerConfig) clone() runnerConfig {
 		appendSystemPrompt: c.appendSystemPrompt,
 		httpProxy:          c.httpProxy,
 		socks5Proxy:        c.socks5Proxy,
+		retryDelays:        cloneDurations(c.retryDelays),
 		failureLogPath:     c.failureLogPath,
 	}
 }
@@ -160,8 +165,12 @@ func cloneStrings(values []string) []string {
 	return append([]string(nil), values...)
 }
 
+func cloneDurations(values []time.Duration) []time.Duration {
+	return append([]time.Duration(nil), values...)
+}
+
 func (c runnerConfig) newRunner() *Runner {
-	runner := NewRunner(c.command, c.args, c.extraFlags, c.appendSystemPrompt, c.httpProxy, c.socks5Proxy)
+	runner := NewRunnerWithRetryDelays(c.command, c.args, c.extraFlags, c.appendSystemPrompt, c.httpProxy, c.socks5Proxy, c.retryDelays)
 	runner.failureLogPath = c.failureLogPath
 	return runner
 }
@@ -182,6 +191,10 @@ func legacyDefaultRunner() *Runner {
 }
 
 func NewRunner(command string, args []string, extraFlags []string, appendSystemPrompt bool, httpProxy, socks5Proxy string) *Runner {
+	return NewRunnerWithRetryDelays(command, args, extraFlags, appendSystemPrompt, httpProxy, socks5Proxy, nil)
+}
+
+func NewRunnerWithRetryDelays(command string, args []string, extraFlags []string, appendSystemPrompt bool, httpProxy, socks5Proxy string, retryDelays []time.Duration) *Runner {
 	name := command
 	if name == "" {
 		name = defaultCommand
@@ -189,6 +202,9 @@ func NewRunner(command string, args []string, extraFlags []string, appendSystemP
 	runnerArgs := cloneStrings(args)
 	if len(runnerArgs) == 0 {
 		runnerArgs = cloneStrings(defaultCommandArgs)
+	}
+	if retryDelays == nil {
+		retryDelays = defaultRetryDelays
 	}
 
 	var proxyEnv []string
@@ -211,6 +227,7 @@ func NewRunner(command string, args []string, extraFlags []string, appendSystemP
 		appendSystemPrompt: appendSystemPrompt,
 		proxyEnv:           proxyEnv,
 		retrySleep:         retrySleep,
+		retryDelays:        cloneDurations(retryDelays),
 		failureLogPath:     defaultFailureLogPath,
 	}
 }
@@ -258,6 +275,11 @@ func isRetryableAICLIError(err error, stdout string, stderr string) bool {
 		"timeout",
 		"i/o timeout",
 		"connection reset",
+		"lock file is already being held",
+		"failed to acquire startup lock",
+		"another ccs process may be starting cliproxy",
+		"elocked",
+		"enotacquired",
 		"eof",
 		"ai cli returned empty content",
 	} {
@@ -286,15 +308,17 @@ func (r *Runner) callClaudeWithKind(kind callKind, prompt string, extraFlags ...
 }
 
 func (r *Runner) callClaudeWithKindContext(ctx context.Context, kind callKind, prompt string, extraFlags ...string) (string, error) {
-	attemptDelays := []time.Duration{0, time.Second, 3 * time.Second}
 	var lastErr error
-	for attempt, delay := range attemptDelays {
+	for attempt := 0; attempt <= len(r.retryDelays); attempt++ {
 		if err := ctx.Err(); err != nil {
 			return "", err
 		}
-		if delay > 0 {
-			if err := r.retrySleep(ctx, delay); err != nil {
-				return "", err
+		if attempt > 0 {
+			delay := r.retryDelays[attempt-1]
+			if delay > 0 {
+				if err := r.retrySleep(ctx, delay); err != nil {
+					return "", err
+				}
 			}
 		}
 		out, stdoutText, stderrText, err := r.runClaudeCommandContext(ctx, prompt, extraFlags...)
@@ -313,7 +337,7 @@ func (r *Runner) callClaudeWithKindContext(ctx context.Context, kind callKind, p
 			stdoutText = strings.TrimSpace(out)
 		}
 		lastErr = buildRetryableCallError(attempt+1, err, stdoutText, stderrText)
-		if !isRetryableAICLIError(err, stdoutText, stderrText) || attempt == len(attemptDelays)-1 {
+		if !isRetryableAICLIError(err, stdoutText, stderrText) || attempt == len(r.retryDelays) {
 			finalErr := fmt.Errorf("ai cli failed after %d attempts: %w", attempt+1, lastErr)
 			r.appendAICLIFailureLog(kind, attempt+1, stdoutText, stderrText, finalErr)
 			return "", finalErr

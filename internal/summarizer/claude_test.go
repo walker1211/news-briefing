@@ -400,6 +400,105 @@ func TestCallClaudeRetriesRetryableFailureAndEventuallySucceeds(t *testing.T) {
 	}
 }
 
+func TestCallClaudeRetriesCCSStartupLockError(t *testing.T) {
+	dir := t.TempDir()
+	oldPath := os.Getenv("PATH")
+	t.Cleanup(func() {
+		_ = os.Setenv("PATH", oldPath)
+		ResetCommandForTest()
+	})
+
+	statePath := filepath.Join(dir, "attempts.txt")
+	commandName := "locked-ai"
+	if runtime.GOOS == "windows" {
+		commandName += ".bat"
+	}
+	commandPath := filepath.Join(dir, commandName)
+	script := "#!/bin/sh\n" +
+		"COUNT=0\n" +
+		"if [ -f \"" + statePath + "\" ]; then COUNT=$(cat \"" + statePath + "\"); fi\n" +
+		"COUNT=$((COUNT+1))\n" +
+		"printf '%s' \"$COUNT\" > \"" + statePath + "\"\n" +
+		"if [ \"$COUNT\" -eq 1 ]; then\n" +
+		"  >&2 printf '[X] Lock file is already being held'\n" +
+		"  exit 1\n" +
+		"fi\n" +
+		"printf 'final body'\n"
+	if err := os.WriteFile(commandPath, []byte(script), 0o755); err != nil {
+		t.Fatalf("write fake cli: %v", err)
+	}
+	if err := os.Setenv("PATH", dir+string(os.PathListSeparator)+oldPath); err != nil {
+		t.Fatalf("set PATH: %v", err)
+	}
+
+	runner := NewRunner("locked-ai", nil, nil, true, "", "")
+	runner.retrySleep = func(context.Context, time.Duration) error { return nil }
+	got, err := runner.callClaudeWithKind(callKindSummarize, "hello world")
+	if err != nil {
+		t.Fatalf("callClaudeWithKind() error = %v", err)
+	}
+	if got != "final body" {
+		t.Fatalf("callClaudeWithKind() = %q, want %q", got, "final body")
+	}
+	data, err := os.ReadFile(statePath)
+	if err != nil {
+		t.Fatalf("ReadFile() attempts error = %v", err)
+	}
+	if strings.TrimSpace(string(data)) != "2" {
+		t.Fatalf("attempt count = %q, want %q", strings.TrimSpace(string(data)), "2")
+	}
+}
+
+func TestCallClaudeUsesConfiguredRetryDelays(t *testing.T) {
+	dir := t.TempDir()
+	oldPath := os.Getenv("PATH")
+	t.Cleanup(func() {
+		_ = os.Setenv("PATH", oldPath)
+		ResetCommandForTest()
+	})
+
+	statePath := filepath.Join(dir, "attempts.txt")
+	commandName := "configured-delay-ai"
+	if runtime.GOOS == "windows" {
+		commandName += ".bat"
+	}
+	commandPath := filepath.Join(dir, commandName)
+	script := "#!/bin/sh\n" +
+		"COUNT=0\n" +
+		"if [ -f \"" + statePath + "\" ]; then COUNT=$(cat \"" + statePath + "\"); fi\n" +
+		"COUNT=$((COUNT+1))\n" +
+		"printf '%s' \"$COUNT\" > \"" + statePath + "\"\n" +
+		"if [ \"$COUNT\" -lt 3 ]; then\n" +
+		"  >&2 printf 'server_error request req-%s' \"$COUNT\"\n" +
+		"  exit 1\n" +
+		"fi\n" +
+		"printf 'final body'\n"
+	if err := os.WriteFile(commandPath, []byte(script), 0o755); err != nil {
+		t.Fatalf("write fake cli: %v", err)
+	}
+	if err := os.Setenv("PATH", dir+string(os.PathListSeparator)+oldPath); err != nil {
+		t.Fatalf("set PATH: %v", err)
+	}
+
+	runner := NewRunnerWithRetryDelays("configured-delay-ai", nil, nil, true, "", "", []time.Duration{2 * time.Second, 5 * time.Second})
+	var slept []time.Duration
+	runner.retrySleep = func(ctx context.Context, d time.Duration) error {
+		slept = append(slept, d)
+		return nil
+	}
+	got, err := runner.callClaudeWithKind(callKindSummarize, "hello world")
+	if err != nil {
+		t.Fatalf("callClaudeWithKind() error = %v", err)
+	}
+	if got != "final body" {
+		t.Fatalf("callClaudeWithKind() = %q, want final body", got)
+	}
+	wantSleeps := []time.Duration{2 * time.Second, 5 * time.Second}
+	if !reflect.DeepEqual(slept, wantSleeps) {
+		t.Fatalf("retry sleeps = %v, want %v", slept, wantSleeps)
+	}
+}
+
 func TestCallClaudeWithKindContextReturnsContextErrorWithoutRetry(t *testing.T) {
 	runner := NewRunner("unused-ai", nil, nil, true, "", "")
 	ctx, cancel := context.WithCancel(context.Background())
@@ -485,7 +584,7 @@ func TestCallClaudeReturnsAggregatedErrorAfterRetryExhaustion(t *testing.T) {
 	if err == nil {
 		t.Fatal("callClaudeWithKind() error = nil, want retry exhaustion")
 	}
-	for _, want := range []string{"after 3 attempts", "stdout attempt 3", "req-3"} {
+	for _, want := range []string{"after 6 attempts", "stdout attempt 6", "req-6"} {
 		if !strings.Contains(err.Error(), want) {
 			t.Fatalf("callClaudeWithKind() error = %q, want substring %q", err.Error(), want)
 		}
@@ -533,7 +632,7 @@ func TestCallClaudeWritesFailureLogAfterRetryExhaustion(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ReadFile() log error = %v", err)
 	}
-	for _, want := range []string{"translate", "19318a28-85ad-423c-a7cd-9b262bcb6741", "attempts=3"} {
+	for _, want := range []string{"translate", "19318a28-85ad-423c-a7cd-9b262bcb6741", "attempts=6"} {
 		if !strings.Contains(string(data), want) {
 			t.Fatalf("failure log = %q, want substring %q", string(data), want)
 		}
@@ -666,7 +765,7 @@ func TestTranslateWritesFailureLogWhenSanitizedOutputStaysEmpty(t *testing.T) {
 	if err == nil {
 		t.Fatal("Translate() error = nil, want retry exhaustion")
 	}
-	for _, want := range []string{"after 3 attempts", "ai cli returned empty content"} {
+	for _, want := range []string{"after 6 attempts", "ai cli returned empty content"} {
 		if !strings.Contains(err.Error(), want) {
 			t.Fatalf("Translate() error = %q, want substring %q", err.Error(), want)
 		}
@@ -675,14 +774,14 @@ func TestTranslateWritesFailureLogWhenSanitizedOutputStaysEmpty(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ReadFile() attempts error = %v", err)
 	}
-	if strings.TrimSpace(string(data)) != "3" {
-		t.Fatalf("attempt count = %q, want %q", strings.TrimSpace(string(data)), "3")
+	if strings.TrimSpace(string(data)) != "6" {
+		t.Fatalf("attempt count = %q, want %q", strings.TrimSpace(string(data)), "6")
 	}
 	logData, err := os.ReadFile(logPath)
 	if err != nil {
 		t.Fatalf("ReadFile() log error = %v", err)
 	}
-	for _, want := range []string{"translate", "attempts=3"} {
+	for _, want := range []string{"translate", "attempts=6"} {
 		if !strings.Contains(string(logData), want) {
 			t.Fatalf("failure log = %q, want substring %q", string(logData), want)
 		}
@@ -724,7 +823,7 @@ func TestSummarizeWritesFailureLogWhenSanitizedOutputStaysEmpty(t *testing.T) {
 	if err == nil {
 		t.Fatal("Summarize() error = nil, want retry exhaustion")
 	}
-	for _, want := range []string{"after 3 attempts", "ai cli returned empty content"} {
+	for _, want := range []string{"after 6 attempts", "ai cli returned empty content"} {
 		if !strings.Contains(err.Error(), want) {
 			t.Fatalf("Summarize() error = %q, want substring %q", err.Error(), want)
 		}
@@ -733,14 +832,14 @@ func TestSummarizeWritesFailureLogWhenSanitizedOutputStaysEmpty(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ReadFile() attempts error = %v", err)
 	}
-	if strings.TrimSpace(string(data)) != "3" {
-		t.Fatalf("attempt count = %q, want %q", strings.TrimSpace(string(data)), "3")
+	if strings.TrimSpace(string(data)) != "6" {
+		t.Fatalf("attempt count = %q, want %q", strings.TrimSpace(string(data)), "6")
 	}
 	logData, err := os.ReadFile(logPath)
 	if err != nil {
 		t.Fatalf("ReadFile() log error = %v", err)
 	}
-	for _, want := range []string{"summarize", "attempts=3"} {
+	for _, want := range []string{"summarize", "attempts=6"} {
 		if !strings.Contains(string(logData), want) {
 			t.Fatalf("failure log = %q, want substring %q", string(logData), want)
 		}
@@ -782,7 +881,7 @@ func TestDeepDiveWritesFailureLogWhenSanitizedOutputStaysEmpty(t *testing.T) {
 	if err == nil {
 		t.Fatal("DeepDive() error = nil, want retry exhaustion")
 	}
-	for _, want := range []string{"after 3 attempts", "ai cli returned empty content"} {
+	for _, want := range []string{"after 6 attempts", "ai cli returned empty content"} {
 		if !strings.Contains(err.Error(), want) {
 			t.Fatalf("DeepDive() error = %q, want substring %q", err.Error(), want)
 		}
@@ -791,14 +890,14 @@ func TestDeepDiveWritesFailureLogWhenSanitizedOutputStaysEmpty(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ReadFile() attempts error = %v", err)
 	}
-	if strings.TrimSpace(string(data)) != "3" {
-		t.Fatalf("attempt count = %q, want %q", strings.TrimSpace(string(data)), "3")
+	if strings.TrimSpace(string(data)) != "6" {
+		t.Fatalf("attempt count = %q, want %q", strings.TrimSpace(string(data)), "6")
 	}
 	logData, err := os.ReadFile(logPath)
 	if err != nil {
 		t.Fatalf("ReadFile() log error = %v", err)
 	}
-	for _, want := range []string{"deep", "attempts=3"} {
+	for _, want := range []string{"deep", "attempts=6"} {
 		if !strings.Contains(string(logData), want) {
 			t.Fatalf("failure log = %q, want substring %q", string(logData), want)
 		}
