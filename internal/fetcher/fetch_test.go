@@ -582,3 +582,40 @@ func TestFetchAllSourcesSerializesRedditByType(t *testing.T) {
 		t.Fatalf("order = %v", order)
 	}
 }
+
+func TestFetchAllSourcesSerializesRedditRSSByHost(t *testing.T) {
+	fetchers := stubSourceFetchers()
+	var rssSources []string
+	fetchers.rss = func(ctx context.Context, src config.Source, keywords []string, since time.Time) (sourceFetchResult, error) {
+		rssSources = append(rssSources, src.Name)
+		return sourceFetchResult{Source: src}, nil
+	}
+	fetchers.reddit = func(ctx context.Context, src config.Source, keywords []string, since time.Time) (sourceFetchResult, error) {
+		t.Fatalf("reddit fetcher called for RSS source %q", src.Name)
+		return sourceFetchResult{}, nil
+	}
+	var sleeps []time.Duration
+	sleep := func(ctx context.Context, d time.Duration) error {
+		sleeps = append(sleeps, d)
+		return nil
+	}
+
+	cfg := &config.Config{Sources: []config.Source{
+		{Name: "Reddit Singularity", Type: config.SourceTypeRSS, URL: "https://www.reddit.com/r/singularity/.rss"},
+		{Name: "Reddit WorldNews", Type: config.SourceTypeRSS, URL: "https://www.reddit.com/r/worldnews/.rss"},
+	}}
+
+	_, failed, err := fetchAllSourcesDetailedWith(context.Background(), cfg, time.Time{}, fetchers, sleep)
+	if err != nil {
+		t.Fatalf("fetchAllSourcesDetailed() error = %v", err)
+	}
+	if len(failed) != 0 {
+		t.Fatalf("failed = %#v, want no failed sources", failed)
+	}
+	if strings.Join(rssSources, ",") != "Reddit Singularity,Reddit WorldNews" {
+		t.Fatalf("rssSources = %v", rssSources)
+	}
+	if len(sleeps) != 1 || sleeps[0] != 2*time.Second {
+		t.Fatalf("sleeps = %v, want [2s]", sleeps)
+	}
+}

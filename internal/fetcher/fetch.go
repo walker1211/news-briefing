@@ -124,6 +124,10 @@ func serialSourceFetchers() sourceFetchers {
 	return fetchers
 }
 
+func shouldRateLimitAsReddit(src config.Source) bool {
+	return src.Type == config.SourceTypeReddit || isRedditURL(src.URL)
+}
+
 // isRateLimited 检测是否为 429 限流响应
 func isRateLimited(err error) bool {
 	return err != nil && strings.Contains(err.Error(), "429")
@@ -372,7 +376,7 @@ func fetchAllSourcesDetailedWith(ctx context.Context, cfg *config.Config, since 
 	var redditSources []config.Source
 	var otherSources []config.Source
 	for _, src := range cfg.Sources {
-		if src.Type == config.SourceTypeReddit {
+		if shouldRateLimitAsReddit(src) {
 			redditSources = append(redditSources, src)
 		} else {
 			otherSources = append(otherSources, src)
@@ -401,7 +405,13 @@ func fetchAllSourcesDetailedWith(ctx context.Context, cfg *config.Config, since 
 
 	if len(redditSources) > 0 {
 		wg.Go(func() {
-			fetchRedditSourcesSeriallyWith(ctx, redditSources, cfg.Keywords, since, fetchers.reddit, sleep, func(item FailedSource) {
+			fetchRedditSource := func(ctx context.Context, src config.Source, keywords []string, since time.Time) (sourceFetchResult, error) {
+				if src.Type == config.SourceTypeReddit {
+					return fetchers.reddit(ctx, src, keywords, since)
+				}
+				return fetchWithRetryUsing(ctx, src, keywords, since, fetchers, sleep, retrySettings)
+			}
+			fetchRedditSourcesSeriallyWith(ctx, redditSources, cfg.Keywords, since, fetchRedditSource, sleep, func(item FailedSource) {
 				mu.Lock()
 				failed = append(failed, item)
 				mu.Unlock()

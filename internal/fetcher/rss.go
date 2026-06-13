@@ -201,16 +201,19 @@ func shouldFallbackToCurl(source config.Source, err error) bool {
 	if err == nil {
 		return false
 	}
-	u, parseErr := url.Parse(source.URL)
+	if !isRedditURL(source.URL) {
+		return false
+	}
+	return strings.Contains(strings.ToLower(err.Error()), "403")
+}
+
+func isRedditURL(rawURL string) bool {
+	u, parseErr := url.Parse(rawURL)
 	if parseErr != nil {
 		return false
 	}
 	host := strings.ToLower(u.Hostname())
-	isReddit := host == "reddit.com" || strings.HasSuffix(host, ".reddit.com")
-	if !isReddit {
-		return false
-	}
-	return strings.Contains(strings.ToLower(err.Error()), "403")
+	return host == "reddit.com" || strings.HasSuffix(host, ".reddit.com")
 }
 
 func matchedKeywords(text string, keywords []string) []string {
