@@ -190,13 +190,17 @@ func runContext(ctx context.Context, cfg *config.Config, now time.Time, fetchHTM
 		return nil, nil, err
 	}
 
+	articleConcurrency := cfg.Watch.ArticleConcurrency
+	if articleConcurrency < 1 {
+		articleConcurrency = config.DefaultWatchArticleConcurrency
+	}
 	articles := make([]model.Article, 0)
 	seenItems := make([]model.WatchSeenArticle, 0)
 	for _, site := range cfg.Watch.Sites {
 		if err := ctx.Err(); err != nil {
 			return nil, nil, err
 		}
-		siteArticles, siteSeenItems, events, err := runSite(ctx, site, now, indexState, articleState, fetchHTML)
+		siteArticles, siteSeenItems, events, err := runSite(ctx, site, now, indexState, articleState, fetchHTML, articleConcurrency)
 		if err != nil {
 			if ctxErr := ctx.Err(); ctxErr != nil {
 				return nil, nil, ctxErr
@@ -231,18 +235,18 @@ func runContext(ctx context.Context, cfg *config.Config, now time.Time, fetchHTM
 	return articles, report, nil
 }
 
-func runSite(ctx context.Context, site config.WatchSite, now time.Time, indexState IndexState, articleState ArticleState, fetchHTML fetchHTMLFunc) ([]model.Article, []model.WatchSeenArticle, []model.WatchEvent, error) {
+func runSite(ctx context.Context, site config.WatchSite, now time.Time, indexState IndexState, articleState ArticleState, fetchHTML fetchHTMLFunc, articleConcurrency int) ([]model.Article, []model.WatchSeenArticle, []model.WatchEvent, error) {
 	switch site.Type {
 	case config.WatchTypeAnthropicSupport:
-		return runAnthropicSupportSite(ctx, site, now, indexState, articleState, fetchHTML)
+		return runAnthropicSupportSite(ctx, site, now, indexState, articleState, fetchHTML, articleConcurrency)
 	case config.WatchTypeAnnouncementPage:
-		return runAnnouncementSite(ctx, site, now, indexState, articleState, fetchHTML)
+		return runAnnouncementSite(ctx, site, now, indexState, articleState, fetchHTML, articleConcurrency)
 	default:
 		return nil, nil, nil, nil
 	}
 }
 
-func runAnthropicSupportSite(ctx context.Context, site config.WatchSite, now time.Time, indexState IndexState, articleState ArticleState, fetchHTML fetchHTMLFunc) ([]model.Article, []model.WatchSeenArticle, []model.WatchEvent, error) {
+func runAnthropicSupportSite(ctx context.Context, site config.WatchSite, now time.Time, indexState IndexState, articleState ArticleState, fetchHTML fetchHTMLFunc, articleConcurrency int) ([]model.Article, []model.WatchSeenArticle, []model.WatchEvent, error) {
 	homeHTML, err := fetchHTML(ctx, site.HomeURL)
 	if err != nil {
 		return nil, nil, nil, err
@@ -293,13 +297,14 @@ func runAnthropicSupportSite(ctx context.Context, site config.WatchSite, now tim
 		current.SnapshotAt = now
 
 		categoryArticles, categorySeenItems, categoryEvents, err := runWatchCategory(ctx, watchCategoryRun{
-			site:         site,
-			now:          now,
-			stateKey:     watchCategoryStateKey(site.Name, current.Category),
-			current:      current,
-			indexState:   indexState,
-			articleState: articleState,
-			fetchContent: fetchContent,
+			site:               site,
+			now:                now,
+			stateKey:           watchCategoryStateKey(site.Name, current.Category),
+			current:            current,
+			indexState:         indexState,
+			articleState:       articleState,
+			fetchContent:       fetchContent,
+			articleConcurrency: articleConcurrency,
 		})
 		if err != nil {
 			return nil, nil, nil, err

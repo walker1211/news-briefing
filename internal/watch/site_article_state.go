@@ -3,6 +3,7 @@ package watch
 import (
 	"context"
 	"slices"
+	"sync"
 	"time"
 
 	"github.com/walker1211/news-briefing/internal/config"
@@ -17,14 +18,20 @@ type watchArticleContent struct {
 
 type watchArticleContentFetcher func(context.Context, string) (watchArticleContent, error)
 
+type watchArticleContentResult struct {
+	item    model.WatchIndexItem
+	content watchArticleContent
+}
+
 type watchCategoryRun struct {
-	site         config.WatchSite
-	now          time.Time
-	stateKey     string
-	current      model.WatchIndexSnapshot
-	indexState   IndexState
-	articleState ArticleState
-	fetchContent watchArticleContentFetcher
+	site               config.WatchSite
+	now                time.Time
+	stateKey           string
+	current            model.WatchIndexSnapshot
+	indexState         IndexState
+	articleState       ArticleState
+	fetchContent       watchArticleContentFetcher
+	articleConcurrency int
 }
 
 func runWatchCategory(ctx context.Context, run watchCategoryRun) ([]model.Article, []model.WatchSeenArticle, []model.WatchEvent, error) {
@@ -55,12 +62,12 @@ func runWatchCategory(ctx context.Context, run watchCategoryRun) ([]model.Articl
 }
 
 func bootstrapWatchCategoryState(ctx context.Context, run watchCategoryRun) error {
-	for _, item := range run.current.Items {
-		content, err := run.fetchContent(ctx, item.URL)
-		if err != nil {
-			return err
-		}
-		storeWatchArticleState(run.articleState, item.URL, content, run.now)
+	results, err := fetchWatchArticleContents(ctx, run.current.Items, run.fetchContent, run.articleConcurrency)
+	if err != nil {
+		return err
+	}
+	for _, result := range results {
+		storeWatchArticleState(run.articleState, result.item.URL, result.content, run.now)
 	}
 	return nil
 }
@@ -81,17 +88,87 @@ func diffWatchCategoryEvents(site config.WatchSite, now time.Time, prev *model.W
 	return categoryEvents, changedURLs
 }
 
+func fetchWatchArticleContents(ctx context.Context, items []model.WatchIndexItem, fetchContent watchArticleContentFetcher, concurrency int) ([]watchArticleContentResult, error) {
+	results := make([]watchArticleContentResult, len(items))
+	if len(items) == 0 {
+		return results, nil
+	}
+	workerCount := concurrency
+	if workerCount < 1 {
+		workerCount = config.DefaultWatchArticleConcurrency
+	}
+	if len(items) < workerCount {
+		workerCount = len(items)
+	}
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	jobs := make(chan int)
+	var wg sync.WaitGroup
+	var mu sync.Mutex
+	var firstErr error
+	setErr := func(err error) {
+		mu.Lock()
+		defer mu.Unlock()
+		if firstErr == nil {
+			firstErr = err
+			cancel()
+		}
+	}
+	for range workerCount {
+		wg.Go(func() {
+			for index := range jobs {
+				if err := ctx.Err(); err != nil {
+					continue
+				}
+				content, err := fetchContent(ctx, items[index].URL)
+				if err != nil {
+					setErr(err)
+					continue
+				}
+				results[index] = watchArticleContentResult{item: items[index], content: content}
+			}
+		})
+	}
+sendJobs:
+	for index := range items {
+		select {
+		case <-ctx.Done():
+			break sendJobs
+		case jobs <- index:
+		}
+	}
+	close(jobs)
+	wg.Wait()
+	if firstErr != nil {
+		return nil, firstErr
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	return results, nil
+}
+
 func updateCurrentWatchArticleStates(ctx context.Context, run watchCategoryRun, changedURLs []string, categoryEvents *[]model.WatchEvent) (map[string]watchArticleContent, error) {
 	seenPayloads := make(map[string]watchArticleContent)
+	changed := make(map[string]struct{}, len(changedURLs))
+	for _, url := range changedURLs {
+		changed[url] = struct{}{}
+	}
+	items := make([]model.WatchIndexItem, 0, len(run.current.Items))
 	for _, item := range run.current.Items {
-		if slices.Contains(changedURLs, item.URL) {
+		if _, ok := changed[item.URL]; ok {
 			continue
 		}
+		items = append(items, item)
+	}
+	results, err := fetchWatchArticleContents(ctx, items, run.fetchContent, run.articleConcurrency)
+	if err != nil {
+		return nil, err
+	}
+	for _, result := range results {
+		item := result.item
+		content := result.content
 		state, ok := run.articleState[item.URL]
-		content, err := run.fetchContent(ctx, item.URL)
-		if err != nil {
-			return nil, err
-		}
 		summaryHash := hashWatchContent(content.summary)
 		bodyHash := hashWatchContent(content.body)
 		if !ok {

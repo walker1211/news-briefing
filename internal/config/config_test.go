@@ -1076,6 +1076,9 @@ ai: {}
 	if err != nil {
 		t.Fatalf("Load() error = %v", err)
 	}
+	if cfg.Watch.ArticleConcurrency != DefaultWatchArticleConcurrency {
+		t.Fatalf("ArticleConcurrency = %d, want %d", cfg.Watch.ArticleConcurrency, DefaultWatchArticleConcurrency)
+	}
 	provider := cfg.Watch.ProxyProvider
 	if !provider.Enabled || provider.Type != "browsebox" {
 		t.Fatalf("ProxyProvider = %#v", provider)
@@ -1168,6 +1171,55 @@ ai: {}
 	want := []string{"https://support.claude.com/zh-CN", "https://www.anthropic.com/news"}
 	if !reflect.DeepEqual(cfg.Watch.ProxyProvider.HealthURLs, want) {
 		t.Fatalf("HealthURLs = %#v, want %#v", cfg.Watch.ProxyProvider.HealthURLs, want)
+	}
+}
+
+func TestLoadAppliesConfiguredWatchArticleConcurrency(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	content := `sources: []
+keywords: []
+fetch: {}
+watch:
+  article_concurrency: 2
+email: {}
+schedule: []
+output: {}
+proxy: {}
+ai: {}
+`
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if cfg.Watch.ArticleConcurrency != 2 {
+		t.Fatalf("ArticleConcurrency = %d, want 2", cfg.Watch.ArticleConcurrency)
+	}
+}
+
+func TestLoadRejectsInvalidWatchArticleConcurrency(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	content := `sources: []
+keywords: []
+fetch: {}
+watch:
+  article_concurrency: 0
+email: {}
+schedule: []
+output: {}
+proxy: {}
+ai: {}
+`
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	_, err := Load(path)
+	if err == nil || !strings.Contains(err.Error(), "watch.article_concurrency") {
+		t.Fatalf("Load() error = %v, want watch.article_concurrency", err)
 	}
 }
 
