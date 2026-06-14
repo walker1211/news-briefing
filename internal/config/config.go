@@ -54,6 +54,7 @@ const (
 	DefaultWatchBrowseboxStartupTimeout   = 2 * time.Minute
 	DefaultWatchBrowseboxProxyPort        = 17997
 	DefaultWatchBrowseboxControllerPort   = 17998
+	DefaultWatchArticleConcurrency        = 8
 	DefaultXRefreshWaitTimeout            = 10 * time.Minute
 	DefaultXRefreshWaitInterval           = 5 * time.Second
 	DefaultXMaxPostsPerTarget             = 10
@@ -85,8 +86,10 @@ type FetchConfig struct {
 }
 
 type WatchConfig struct {
-	Sites         []WatchSite        `yaml:"sites"`
-	ProxyProvider WatchProxyProvider `yaml:"proxy_provider"`
+	Sites                 []WatchSite        `yaml:"sites"`
+	ArticleConcurrencyRaw *int               `yaml:"article_concurrency"`
+	ArticleConcurrency    int                `yaml:"-"`
+	ProxyProvider         WatchProxyProvider `yaml:"proxy_provider"`
 }
 
 type WatchProxyProvider struct {
@@ -254,6 +257,11 @@ func expandHomePath(path string) string {
 }
 
 func applyWatchDefaults(watch *WatchConfig) error {
+	if watch.ArticleConcurrencyRaw == nil {
+		watch.ArticleConcurrency = DefaultWatchArticleConcurrency
+	} else {
+		watch.ArticleConcurrency = *watch.ArticleConcurrencyRaw
+	}
 	provider := &watch.ProxyProvider
 	if !provider.Enabled {
 		return nil
@@ -459,6 +467,9 @@ func (cfg *Config) Validate() error {
 		if err := validateSource(i, source); err != nil {
 			return err
 		}
+	}
+	if cfg.Watch.ArticleConcurrency < 1 {
+		return fmt.Errorf("validate watch.article_concurrency: must be at least 1")
 	}
 	for i, site := range cfg.Watch.Sites {
 		if err := validateWatchSite(i, site); err != nil {

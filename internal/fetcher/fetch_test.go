@@ -356,6 +356,15 @@ func TestFetchWithRetryRejectsUnknownSourceType(t *testing.T) {
 	}
 }
 
+func TestRandomRedditDelayReturnsTwoToFourSeconds(t *testing.T) {
+	for range 1000 {
+		got := randomRedditDelay()
+		if got < 2*time.Second || got > 4*time.Second {
+			t.Fatalf("randomRedditDelay() = %v, want between 2s and 4s", got)
+		}
+	}
+}
+
 func TestClientFetchAllSourcesRetriesRedditSerially(t *testing.T) {
 	attempts := 0
 	client := NewClient(&http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
@@ -391,11 +400,14 @@ func TestClientFetchAllSourcesRetriesRedditSerially(t *testing.T) {
 	}
 }
 
-func TestFetchRedditSourcesKeepsTwoSecondGapAndOrder(t *testing.T) {
+func TestFetchRedditSourcesUsesInjectedGapAndKeepsOrder(t *testing.T) {
 	var sleeps []time.Duration
 	sleep := func(ctx context.Context, d time.Duration) error {
 		sleeps = append(sleeps, d)
 		return nil
+	}
+	delay := func() time.Duration {
+		return 3500 * time.Millisecond
 	}
 
 	var order []string
@@ -406,15 +418,15 @@ func TestFetchRedditSourcesKeepsTwoSecondGapAndOrder(t *testing.T) {
 
 	sources := []config.Source{{Name: "r1"}, {Name: "r2"}, {Name: "r3"}}
 	var failed []FailedSource
-	fetchRedditSourcesSeriallyWith(context.Background(), sources, nil, time.Time{}, fetchReddit, sleep, func(item FailedSource) {
+	fetchRedditSourcesSeriallyWith(context.Background(), sources, nil, time.Time{}, fetchReddit, sleep, delay, func(item FailedSource) {
 		failed = append(failed, item)
 	}, func(items sourceFetchResult) {})
 
 	if strings.Join(order, ",") != "r1,r2,r3" {
 		t.Fatalf("order = %v", order)
 	}
-	if len(sleeps) != 2 || sleeps[0] != 2*time.Second || sleeps[1] != 2*time.Second {
-		t.Fatalf("sleeps = %v", sleeps)
+	if len(sleeps) != 2 || sleeps[0] != 3500*time.Millisecond || sleeps[1] != 3500*time.Millisecond {
+		t.Fatalf("sleeps = %v, want two 3.5s gaps", sleeps)
 	}
 }
 
@@ -543,9 +555,12 @@ func TestFetchRedditSourcesStopsDuringGapWhenCancelled(t *testing.T) {
 		cancel()
 		return ctx.Err()
 	}
+	delay := func() time.Duration {
+		return 3 * time.Second
+	}
 
 	var failed []FailedSource
-	fetchRedditSourcesSeriallyWith(ctx, []config.Source{{Name: "r1"}, {Name: "r2"}}, nil, time.Time{}, fetchReddit, sleep, func(item FailedSource) {
+	fetchRedditSourcesSeriallyWith(ctx, []config.Source{{Name: "r1"}, {Name: "r2"}}, nil, time.Time{}, fetchReddit, sleep, delay, func(item FailedSource) {
 		failed = append(failed, item)
 	}, func(sourceFetchResult) {})
 
@@ -615,7 +630,7 @@ func TestFetchAllSourcesSerializesRedditRSSByHost(t *testing.T) {
 	if strings.Join(rssSources, ",") != "Reddit Singularity,Reddit WorldNews" {
 		t.Fatalf("rssSources = %v", rssSources)
 	}
-	if len(sleeps) != 1 || sleeps[0] != 2*time.Second {
-		t.Fatalf("sleeps = %v, want [2s]", sleeps)
+	if len(sleeps) != 1 || sleeps[0] < 2*time.Second || sleeps[0] > 4*time.Second {
+		t.Fatalf("sleeps = %v, want one gap between 2s and 4s", sleeps)
 	}
 }

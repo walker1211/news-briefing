@@ -33,7 +33,7 @@ var claudeReleaseNotesMonthByName = map[string]time.Month{
 	"december":  time.December,
 }
 
-func runAnnouncementSite(ctx context.Context, site config.WatchSite, now time.Time, indexState IndexState, articleState ArticleState, fetchHTML fetchHTMLFunc) ([]model.Article, []model.WatchSeenArticle, []model.WatchEvent, error) {
+func runAnnouncementSite(ctx context.Context, site config.WatchSite, now time.Time, indexState IndexState, articleState ArticleState, fetchHTML fetchHTMLFunc, articleConcurrency int) ([]model.Article, []model.WatchSeenArticle, []model.WatchEvent, error) {
 	homeHTML, err := fetchHTML(ctx, site.HomeURL)
 	if err != nil {
 		return nil, nil, nil, err
@@ -66,13 +66,14 @@ func runAnnouncementSite(ctx context.Context, site config.WatchSite, now time.Ti
 	}
 
 	return runWatchCategory(ctx, watchCategoryRun{
-		site:         site,
-		now:          now,
-		stateKey:     stateKey,
-		current:      current,
-		indexState:   indexState,
-		articleState: articleState,
-		fetchContent: fetchContent,
+		site:               site,
+		now:                now,
+		stateKey:           stateKey,
+		current:            current,
+		indexState:         indexState,
+		articleState:       articleState,
+		fetchContent:       fetchContent,
+		articleConcurrency: articleConcurrency,
 	})
 }
 

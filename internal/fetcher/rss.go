@@ -49,6 +49,10 @@ func FetchRSSContext(ctx context.Context, source config.Source, keywords []strin
 }
 
 func (c *Client) FetchRSSContext(ctx context.Context, source config.Source, keywords []string, since time.Time) (sourceFetchResult, error) {
+	return c.fetchRSSContextWithOpenGraphOptions(ctx, source, keywords, since, sleepContext, randomRedditDelay)
+}
+
+func (c *Client) fetchRSSContextWithOpenGraphOptions(ctx context.Context, source config.Source, keywords []string, since time.Time, sleep sleepFunc, delay delayFunc) (sourceFetchResult, error) {
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 
@@ -75,6 +79,8 @@ func (c *Client) FetchRSSContext(ctx context.Context, source config.Source, keyw
 	}
 
 	result := sourceFetchResult{Source: source}
+	isRedditRSS := isRedditURL(source.URL)
+	redditOpenGraphFallbacks := 0
 	for _, item := range feed.Items {
 		pub := time.Now()
 		if item.PublishedParsed != nil {
@@ -90,7 +96,19 @@ func (c *Client) FetchRSSContext(ctx context.Context, source config.Source, keyw
 
 		imageURL := extractRSSItemImage(item)
 		if imageURL == "" {
-			imageURL = c.fetchOpenGraphImage(ctx, item.Link)
+			if isRedditRSS {
+				if redditOpenGraphFallbacks < 3 {
+					if redditOpenGraphFallbacks > 0 {
+						if err := sleep(ctx, delay()); err != nil {
+							return sourceFetchResult{}, err
+						}
+					}
+					redditOpenGraphFallbacks++
+					imageURL = c.fetchOpenGraphImage(ctx, item.Link)
+				}
+			} else {
+				imageURL = c.fetchOpenGraphImage(ctx, item.Link)
+			}
 		}
 
 		result.Candidates = append(result.Candidates, fetchedCandidate{

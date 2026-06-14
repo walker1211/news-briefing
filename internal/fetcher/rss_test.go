@@ -265,6 +265,222 @@ func TestFetchRSSLeavesImageURLEmptyWhenNoImageExists(t *testing.T) {
 	}
 }
 
+func TestFetchRedditRSSLimitsOpenGraphFallbackToThreeItems(t *testing.T) {
+	requested := []string{}
+	client := NewClient(&http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		requested = append(requested, req.URL.String())
+
+		body := `<!doctype html><html><head><meta property="og:image" content="/image.jpg"></head></html>`
+		if req.URL.Path == "/r/singularity/.rss" {
+			body = `<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0">
+  <channel>
+    <title>r/singularity</title>
+    <item><title>Story 1</title><link>https://www.reddit.com/r/singularity/comments/1/story-1/</link><description>AI story</description></item>
+    <item><title>Story 2</title><link>https://www.reddit.com/r/singularity/comments/2/story-2/</link><description>AI story</description></item>
+    <item><title>Story 3</title><link>https://www.reddit.com/r/singularity/comments/3/story-3/</link><description>AI story</description></item>
+    <item><title>Story 4</title><link>https://www.reddit.com/r/singularity/comments/4/story-4/</link><description>AI story</description></item>
+    <item><title>Story 5</title><link>https://www.reddit.com/r/singularity/comments/5/story-5/</link><description>AI story</description></item>
+  </channel>
+</rss>`
+		}
+
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Status:     "200 OK",
+			Body:       io.NopCloser(strings.NewReader(body)),
+			Header:     make(http.Header),
+			Request:    req,
+		}, nil
+	})})
+
+	sleep := func(context.Context, time.Duration) error {
+		return nil
+	}
+	delay := func() time.Duration {
+		return 3 * time.Second
+	}
+
+	result, err := client.fetchRSSContextWithOpenGraphOptions(context.Background(), config.Source{
+		Name:     "Reddit Singularity",
+		URL:      "https://www.reddit.com/r/singularity/.rss",
+		Type:     config.SourceTypeRSS,
+		Category: "AI/科技",
+	}, []string{"AI"}, time.Time{}, sleep, delay)
+	if err != nil {
+		t.Fatalf("FetchRSSContext() error = %v", err)
+	}
+	if len(result.Candidates) != 5 {
+		t.Fatalf("len(result.Candidates) = %d, want 5", len(result.Candidates))
+	}
+
+	wantRequests := strings.Join([]string{
+		"https://www.reddit.com/r/singularity/.rss",
+		"https://www.reddit.com/r/singularity/comments/1/story-1/",
+		"https://www.reddit.com/r/singularity/comments/2/story-2/",
+		"https://www.reddit.com/r/singularity/comments/3/story-3/",
+	}, "\n")
+	if strings.Join(requested, "\n") != wantRequests {
+		t.Fatalf("requested URLs = %#v, want only feed plus first 3 OpenGraph fallbacks", requested)
+	}
+
+	for i := 0; i < 3; i++ {
+		if result.Candidates[i].Article.ImageURL == "" {
+			t.Fatalf("candidate %d ImageURL empty, want OpenGraph image", i)
+		}
+	}
+	for i := 3; i < 5; i++ {
+		if result.Candidates[i].Article.ImageURL != "" {
+			t.Fatalf("candidate %d ImageURL = %q, want empty after fallback limit", i, result.Candidates[i].Article.ImageURL)
+		}
+	}
+}
+
+func TestFetchRedditRSSOpenGraphFallbackSleepsBetweenFallbackRequests(t *testing.T) {
+	client := NewClient(&http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		body := `<!doctype html><html><head><meta property="og:image" content="/image.jpg"></head></html>`
+		if req.URL.Path == "/r/singularity/.rss" {
+			body = `<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0">
+  <channel>
+    <title>r/singularity</title>
+    <item><title>Story 1</title><link>https://www.reddit.com/r/singularity/comments/1/story-1/</link><description>AI story</description></item>
+    <item><title>Story 2</title><link>https://www.reddit.com/r/singularity/comments/2/story-2/</link><description>AI story</description></item>
+    <item><title>Story 3</title><link>https://www.reddit.com/r/singularity/comments/3/story-3/</link><description>AI story</description></item>
+  </channel>
+</rss>`
+		}
+
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Status:     "200 OK",
+			Body:       io.NopCloser(strings.NewReader(body)),
+			Header:     make(http.Header),
+			Request:    req,
+		}, nil
+	})})
+
+	var sleeps []time.Duration
+	sleep := func(ctx context.Context, d time.Duration) error {
+		sleeps = append(sleeps, d)
+		return nil
+	}
+	delay := func() time.Duration {
+		return 2500 * time.Millisecond
+	}
+
+	_, err := client.fetchRSSContextWithOpenGraphOptions(context.Background(), config.Source{
+		Name: "Reddit Singularity",
+		URL:  "https://www.reddit.com/r/singularity/.rss",
+		Type: config.SourceTypeRSS,
+	}, []string{"AI"}, time.Time{}, sleep, delay)
+	if err != nil {
+		t.Fatalf("FetchRSSContext() error = %v", err)
+	}
+
+	if len(sleeps) != 2 || sleeps[0] != 2500*time.Millisecond || sleeps[1] != 2500*time.Millisecond {
+		t.Fatalf("sleeps = %v, want two 2.5s gaps between 3 fallback requests", sleeps)
+	}
+}
+
+func TestFetchRSSOpenGraphFallbackDoesNotLimitNonRedditFeeds(t *testing.T) {
+	requested := []string{}
+	client := NewClient(&http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		requested = append(requested, req.URL.String())
+
+		body := `<!doctype html><html><head><meta property="og:image" content="/image.jpg"></head></html>`
+		if req.URL.Path == "/feed.xml" {
+			body = `<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0">
+  <channel>
+    <title>Example Feed</title>
+    <item><title>Story 1</title><link>https://example.com/story-1</link><description>AI story</description></item>
+    <item><title>Story 2</title><link>https://example.com/story-2</link><description>AI story</description></item>
+    <item><title>Story 3</title><link>https://example.com/story-3</link><description>AI story</description></item>
+    <item><title>Story 4</title><link>https://example.com/story-4</link><description>AI story</description></item>
+  </channel>
+</rss>`
+		}
+
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Status:     "200 OK",
+			Body:       io.NopCloser(strings.NewReader(body)),
+			Header:     make(http.Header),
+			Request:    req,
+		}, nil
+	})})
+
+	var sleeps []time.Duration
+	sleep := func(ctx context.Context, d time.Duration) error {
+		sleeps = append(sleeps, d)
+		return nil
+	}
+	delay := func() time.Duration {
+		return 3 * time.Second
+	}
+
+	result, err := client.fetchRSSContextWithOpenGraphOptions(context.Background(), config.Source{
+		Name: "Example",
+		URL:  "https://example.com/feed.xml",
+		Type: config.SourceTypeRSS,
+	}, []string{"AI"}, time.Time{}, sleep, delay)
+	if err != nil {
+		t.Fatalf("FetchRSSContext() error = %v", err)
+	}
+	if len(result.Candidates) != 4 {
+		t.Fatalf("len(result.Candidates) = %d, want 4", len(result.Candidates))
+	}
+	if len(requested) != 5 {
+		t.Fatalf("requested URLs = %#v, want feed plus 4 OpenGraph fallback requests", requested)
+	}
+	if len(sleeps) != 0 {
+		t.Fatalf("sleeps = %v, want no Reddit RSS fallback sleeps for non-Reddit feed", sleeps)
+	}
+}
+
+func TestFetchRedditRSSOpenGraphFallbackStopsDuringGapWhenCancelled(t *testing.T) {
+	client := NewClient(&http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		body := `<!doctype html><html><head><meta property="og:image" content="/image.jpg"></head></html>`
+		if req.URL.Path == "/r/singularity/.rss" {
+			body = `<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0">
+  <channel>
+    <title>r/singularity</title>
+    <item><title>Story 1</title><link>https://www.reddit.com/r/singularity/comments/1/story-1/</link><description>AI story</description></item>
+    <item><title>Story 2</title><link>https://www.reddit.com/r/singularity/comments/2/story-2/</link><description>AI story</description></item>
+  </channel>
+</rss>`
+		}
+
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Status:     "200 OK",
+			Body:       io.NopCloser(strings.NewReader(body)),
+			Header:     make(http.Header),
+			Request:    req,
+		}, nil
+	})})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	sleep := func(ctx context.Context, d time.Duration) error {
+		cancel()
+		return ctx.Err()
+	}
+	delay := func() time.Duration {
+		return 3 * time.Second
+	}
+
+	_, err := client.fetchRSSContextWithOpenGraphOptions(ctx, config.Source{
+		Name: "Reddit Singularity",
+		URL:  "https://www.reddit.com/r/singularity/.rss",
+		Type: config.SourceTypeRSS,
+	}, []string{"AI"}, time.Time{}, sleep, delay)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("FetchRSSContext() error = %v, want context.Canceled", err)
+	}
+}
+
 func TestFetchRSSReturnsCurlFallbackError(t *testing.T) {
 	client := NewClient(&http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
 		return &http.Response{

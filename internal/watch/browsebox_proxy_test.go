@@ -135,6 +135,34 @@ sleep 5
 	}
 }
 
+func TestStartBrowseboxProxyProcessRunsCommandFromBinaryDirectory(t *testing.T) {
+	dir := t.TempDir()
+	otherDir := t.TempDir()
+	commandPath := filepath.Join(dir, "browsebox")
+	command := "#!/bin/sh\n" +
+		"if [ \"$(pwd)\" != " + strconv.Quote(dir) + " ]; then\n" +
+		"  printf 'cwd mismatch: %s\\n' \"$(pwd)\" >&2\n" +
+		"  exit 8\n" +
+		"fi\n" +
+		"printf 'Proxy: http://127.0.0.1:17997\\n'\n" +
+		"sleep 5\n"
+	if err := os.WriteFile(commandPath, []byte(command), 0o755); err != nil {
+		t.Fatalf("write fake browsebox: %v", err)
+	}
+	t.Chdir(otherDir)
+	cfg := &config.Config{Watch: config.WatchConfig{ProxyProvider: config.WatchProxyProvider{
+		Command:        commandPath,
+		ProxyPort:      17997,
+		ControllerPort: 17998,
+	}}}
+
+	session, err := startBrowseboxProxyProcess(context.Background(), cfg)
+	if err != nil {
+		t.Fatalf("startBrowseboxProxyProcess() error = %v", err)
+	}
+	_ = session.Close()
+}
+
 func TestStartBrowseboxProxyProcessReturnsWhenChildExitsBeforeReady(t *testing.T) {
 	dir := t.TempDir()
 	commandPath := filepath.Join(dir, "browsebox")

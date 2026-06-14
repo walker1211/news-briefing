@@ -3,6 +3,7 @@ package fetcher
 import (
 	"context"
 	"fmt"
+	"math/rand/v2"
 	"net/http"
 	"os"
 	"sort"
@@ -14,7 +15,11 @@ import (
 	"github.com/walker1211/news-briefing/internal/model"
 )
 
-const maxRetries = config.DefaultFetchRetryTimes
+const (
+	maxRetries     = config.DefaultFetchRetryTimes
+	redditDelayMin = 2 * time.Second
+	redditDelayMax = 4 * time.Second
+)
 
 type fetchRetrySettings struct {
 	times int
@@ -22,6 +27,11 @@ type fetchRetrySettings struct {
 }
 
 type sleepFunc func(context.Context, time.Duration) error
+type delayFunc func() time.Duration
+
+func randomRedditDelay() time.Duration {
+	return redditDelayMin + time.Duration(rand.Int64N(int64(redditDelayMax-redditDelayMin)+1))
+}
 
 func sleepContext(ctx context.Context, d time.Duration) error {
 	timer := time.NewTimer(d)
@@ -411,7 +421,7 @@ func fetchAllSourcesDetailedWith(ctx context.Context, cfg *config.Config, since 
 				}
 				return fetchWithRetryUsing(ctx, src, keywords, since, fetchers, sleep, retrySettings)
 			}
-			fetchRedditSourcesSeriallyWith(ctx, redditSources, cfg.Keywords, since, fetchRedditSource, sleep, func(item FailedSource) {
+			fetchRedditSourcesSeriallyWith(ctx, redditSources, cfg.Keywords, since, fetchRedditSource, sleep, randomRedditDelay, func(item FailedSource) {
 				mu.Lock()
 				failed = append(failed, item)
 				mu.Unlock()
@@ -430,14 +440,14 @@ func fetchAllSourcesDetailedWith(ctx context.Context, cfg *config.Config, since 
 	return all, failed, nil
 }
 
-func fetchRedditSourcesSeriallyWith(ctx context.Context, sources []config.Source, keywords []string, since time.Time, fetchReddit sourceFetchFunc, sleep sleepFunc, appendFailed func(FailedSource), appendResult func(sourceFetchResult)) {
+func fetchRedditSourcesSeriallyWith(ctx context.Context, sources []config.Source, keywords []string, since time.Time, fetchReddit sourceFetchFunc, sleep sleepFunc, delay delayFunc, appendFailed func(FailedSource), appendResult func(sourceFetchResult)) {
 	for i, src := range sources {
 		if err := ctx.Err(); err != nil {
 			appendFailed(FailedSource{Name: src.Name, Err: err})
 			return
 		}
 		if i > 0 {
-			if err := sleep(ctx, 2*time.Second); err != nil {
+			if err := sleep(ctx, delay()); err != nil {
 				appendFailed(FailedSource{Name: src.Name, Err: err})
 				return
 			}

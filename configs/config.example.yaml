@@ -163,6 +163,7 @@ fetch:
   retry_wait_time: 200ms
 
 watch:
+  article_concurrency: 8
   sites:
     - name: Anthropic Claude Support
       type: anthropic_support

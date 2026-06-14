@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -1088,5 +1089,74 @@ func TestRunContentChangedUpdatesSeenState(t *testing.T) {
 	}
 	if item.Body == "旧正文" || item.DetectedAt.IsZero() {
 		t.Fatalf("item = %#v", item)
+	}
+}
+
+func TestRunWatchCategoryChecksExistingArticlesConcurrently(t *testing.T) {
+	now := time.Date(2026, 6, 14, 12, 0, 0, 0, time.UTC)
+	items := []model.WatchIndexItem{
+		{Title: "Article 1", URL: "https://example.com/1", ItemHash: "1"},
+		{Title: "Article 2", URL: "https://example.com/2", ItemHash: "2"},
+		{Title: "Article 3", URL: "https://example.com/3", ItemHash: "3"},
+		{Title: "Article 4", URL: "https://example.com/4", ItemHash: "4"},
+	}
+	articleState := ArticleState{}
+	titles := make(map[string]string, len(items))
+	for _, item := range items {
+		titles[item.URL] = item.Title
+		articleState[item.URL] = model.WatchArticleState{
+			URL:         item.URL,
+			Title:       item.Title,
+			SummaryHash: hashWatchContent("summary"),
+			BodyHash:    hashWatchContent("body"),
+		}
+	}
+	indexState := IndexState{Categories: map[string]model.WatchIndexSnapshot{
+		"source::category": {
+			Category:  "category",
+			ItemCount: len(items),
+			Items:     items,
+		},
+	}}
+	var mu sync.Mutex
+	inFlight := 0
+	maxInFlight := 0
+	calls := 0
+	fetchContent := func(ctx context.Context, url string) (watchArticleContent, error) {
+		mu.Lock()
+		inFlight++
+		calls++
+		if inFlight > maxInFlight {
+			maxInFlight = inFlight
+		}
+		mu.Unlock()
+		time.Sleep(30 * time.Millisecond)
+		mu.Lock()
+		inFlight--
+		mu.Unlock()
+		return watchArticleContent{title: titles[url], summary: "summary", body: "body"}, nil
+	}
+
+	articles, seenItems, events, err := runWatchCategory(context.Background(), watchCategoryRun{
+		site:               config.WatchSite{Name: "source"},
+		now:                now,
+		stateKey:           "source::category",
+		current:            indexState.Categories["source::category"],
+		indexState:         indexState,
+		articleState:       articleState,
+		fetchContent:       fetchContent,
+		articleConcurrency: 2,
+	})
+	if err != nil {
+		t.Fatalf("runWatchCategory() error = %v", err)
+	}
+	if len(articles) != 0 || len(seenItems) != 0 || len(events) != 0 {
+		t.Fatalf("articles=%#v seenItems=%#v events=%#v, want no changes", articles, seenItems, events)
+	}
+	if calls != len(items) {
+		t.Fatalf("calls = %d, want %d", calls, len(items))
+	}
+	if maxInFlight != 2 {
+		t.Fatalf("maxInFlight = %d, want configured concurrency 2", maxInFlight)
 	}
 }

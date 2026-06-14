@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -147,10 +148,31 @@ func browseboxHealthURLs(cfg *config.Config) []string {
 	return urls
 }
 
+func browseboxCommandWithDir(command string) (string, string) {
+	command = strings.TrimSpace(command)
+	if command == "" {
+		return command, ""
+	}
+	if filepath.IsAbs(command) {
+		return command, filepath.Dir(command)
+	}
+	if strings.ContainsRune(command, os.PathSeparator) {
+		absCommand, err := filepath.Abs(command)
+		if err == nil {
+			return absCommand, filepath.Dir(absCommand)
+		}
+	}
+	return command, ""
+}
+
 func startBrowseboxProxyProcess(ctx context.Context, cfg *config.Config) (*browseboxProxySession, error) {
 	provider := cfg.Watch.ProxyProvider
+	command, commandDir := browseboxCommandWithDir(provider.Command)
 	commandCtx, cancel := context.WithCancel(ctx)
-	cmd := exec.CommandContext(commandCtx, provider.Command, browseboxProxyArgs(cfg)...)
+	cmd := exec.CommandContext(commandCtx, command, browseboxProxyArgs(cfg)...)
+	if commandDir != "" {
+		cmd.Dir = commandDir
+	}
 	cmd.Cancel = func() error {
 		if cmd.Process == nil {
 			return nil
