@@ -418,7 +418,7 @@ func TestFetchRedditSourcesUsesInjectedGapAndKeepsOrder(t *testing.T) {
 
 	sources := []config.Source{{Name: "r1"}, {Name: "r2"}, {Name: "r3"}}
 	var failed []FailedSource
-	fetchRedditSourcesSeriallyWith(context.Background(), sources, nil, time.Time{}, fetchReddit, sleep, delay, func(item FailedSource) {
+	fetchRedditSourcesSeriallyWith(context.Background(), sources, nil, time.Time{}, fetchReddit, sleep, redditSourceDelayOptions{fallback: delay, jitter: delay, maxWait: 10 * time.Second}, func(item FailedSource) {
 		failed = append(failed, item)
 	}, func(items sourceFetchResult) {})
 
@@ -427,6 +427,84 @@ func TestFetchRedditSourcesUsesInjectedGapAndKeepsOrder(t *testing.T) {
 	}
 	if len(sleeps) != 2 || sleeps[0] != 3500*time.Millisecond || sleeps[1] != 3500*time.Millisecond {
 		t.Fatalf("sleeps = %v, want two 3.5s gaps", sleeps)
+	}
+}
+
+func TestFetchRedditSourcesUsesRateLimitHeaderDelayWithJitter(t *testing.T) {
+	var sleeps []time.Duration
+	sleep := func(ctx context.Context, d time.Duration) error {
+		sleeps = append(sleeps, d)
+		return nil
+	}
+	delays := redditSourceDelayOptions{
+		fallback: func() time.Duration { return time.Minute },
+		jitter:   func() time.Duration { return 3 * time.Second },
+		maxWait:  2 * time.Minute,
+	}
+
+	var order []string
+	fetchReddit := func(ctx context.Context, src config.Source, keywords []string, since time.Time) (sourceFetchResult, error) {
+		order = append(order, src.Name)
+		result := sourceFetchResult{Source: src}
+		if src.Name == "r1" {
+			result.RedditRateLimitWait = 53 * time.Second
+		}
+		return result, nil
+	}
+
+	var failed []FailedSource
+	fetchRedditSourcesSeriallyWith(context.Background(), []config.Source{{Name: "r1"}, {Name: "r2"}}, nil, time.Time{}, fetchReddit, sleep, delays, func(item FailedSource) {
+		failed = append(failed, item)
+	}, func(sourceFetchResult) {})
+
+	if strings.Join(order, ",") != "r1,r2" {
+		t.Fatalf("order = %v", order)
+	}
+	if len(sleeps) != 1 || sleeps[0] != 56*time.Second {
+		t.Fatalf("sleeps = %v, want one 56s rate-limit wait", sleeps)
+	}
+	if len(failed) != 0 {
+		t.Fatalf("failed = %#v, want no failed sources", failed)
+	}
+}
+
+func TestFetchRedditSourcesStopsWhenRateLimitWaitExceedsMax(t *testing.T) {
+	var sleeps []time.Duration
+	sleep := func(ctx context.Context, d time.Duration) error {
+		sleeps = append(sleeps, d)
+		return nil
+	}
+	delays := redditSourceDelayOptions{
+		fallback: func() time.Duration { return time.Minute },
+		jitter:   func() time.Duration { return 3 * time.Second },
+		maxWait:  2 * time.Minute,
+	}
+
+	var order []string
+	fetchReddit := func(ctx context.Context, src config.Source, keywords []string, since time.Time) (sourceFetchResult, error) {
+		order = append(order, src.Name)
+		return sourceFetchResult{Source: src, RedditRateLimitWait: 119 * time.Second}, nil
+	}
+
+	var failed []FailedSource
+	var results []sourceFetchResult
+	fetchRedditSourcesSeriallyWith(context.Background(), []config.Source{{Name: "r1"}, {Name: "r2"}, {Name: "r3"}}, nil, time.Time{}, fetchReddit, sleep, delays, func(item FailedSource) {
+		failed = append(failed, item)
+	}, func(item sourceFetchResult) {
+		results = append(results, item)
+	})
+
+	if strings.Join(order, ",") != "r1" {
+		t.Fatalf("order = %v, want only first source fetched", order)
+	}
+	if len(results) != 1 || results[0].Source.Name != "r1" {
+		t.Fatalf("results = %#v, want first source result", results)
+	}
+	if len(sleeps) != 0 {
+		t.Fatalf("sleeps = %v, want no sleep when wait exceeds max", sleeps)
+	}
+	if len(failed) != 1 || failed[0].Name != "r2" || !strings.Contains(failed[0].Err.Error(), "exceeds max") {
+		t.Fatalf("failed = %#v, want r2 exceeds max failure", failed)
 	}
 }
 
@@ -560,7 +638,7 @@ func TestFetchRedditSourcesStopsDuringGapWhenCancelled(t *testing.T) {
 	}
 
 	var failed []FailedSource
-	fetchRedditSourcesSeriallyWith(ctx, []config.Source{{Name: "r1"}, {Name: "r2"}}, nil, time.Time{}, fetchReddit, sleep, delay, func(item FailedSource) {
+	fetchRedditSourcesSeriallyWith(ctx, []config.Source{{Name: "r1"}, {Name: "r2"}}, nil, time.Time{}, fetchReddit, sleep, redditSourceDelayOptions{fallback: delay, jitter: delay, maxWait: 10 * time.Second}, func(item FailedSource) {
 		failed = append(failed, item)
 	}, func(sourceFetchResult) {})
 
@@ -595,6 +673,45 @@ func TestFetchAllSourcesSerializesRedditByType(t *testing.T) {
 	}
 	if strings.Join(order, ",") != "reddit-1,reddit-2" {
 		t.Fatalf("order = %v", order)
+	}
+}
+
+func TestFetchAllSourcesUsesConfiguredRedditSourceGap(t *testing.T) {
+	fetchers := stubSourceFetchers()
+	var rssSources []string
+	fetchers.rss = func(ctx context.Context, src config.Source, keywords []string, since time.Time) (sourceFetchResult, error) {
+		rssSources = append(rssSources, src.Name)
+		return sourceFetchResult{Source: src}, nil
+	}
+	var sleeps []time.Duration
+	sleep := func(ctx context.Context, d time.Duration) error {
+		sleeps = append(sleeps, d)
+		return nil
+	}
+
+	cfg := &config.Config{
+		Fetch: config.FetchConfig{
+			RedditSourceDelayMin: time.Minute,
+			RedditSourceDelayMax: 70 * time.Second,
+		},
+		Sources: []config.Source{
+			{Name: "Reddit Singularity", Type: config.SourceTypeRSS, URL: "https://www.reddit.com/r/singularity/.rss"},
+			{Name: "Reddit WorldNews", Type: config.SourceTypeRSS, URL: "https://www.reddit.com/r/worldnews/.rss"},
+		},
+	}
+
+	_, failed, err := fetchAllSourcesDetailedWith(context.Background(), cfg, time.Time{}, fetchers, sleep)
+	if err != nil {
+		t.Fatalf("fetchAllSourcesDetailed() error = %v", err)
+	}
+	if len(failed) != 0 {
+		t.Fatalf("failed = %#v, want no failed sources", failed)
+	}
+	if strings.Join(rssSources, ",") != "Reddit Singularity,Reddit WorldNews" {
+		t.Fatalf("rssSources = %v", rssSources)
+	}
+	if len(sleeps) != 1 || sleeps[0] < time.Minute || sleeps[0] > 70*time.Second {
+		t.Fatalf("sleeps = %v, want one gap between 1m and 1m10s", sleeps)
 	}
 }
 

@@ -52,6 +52,44 @@ proxy: {}
 	}
 }
 
+func TestLoadParsesFetchRedditSourceDelayRange(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	content := `sources: []
+keywords: []
+email:
+  smtp_host: smtp.example.com
+  smtp_port: 465
+  from: from@example.com
+  to: to@example.com
+schedule: []
+output: {}
+proxy: {}
+fetch:
+  reddit_source_delay_min: 60s
+  reddit_source_delay_max: 70s
+  reddit_rate_limit_wait_max: 120s
+`
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+
+	if cfg.Fetch.RedditSourceDelayMin != time.Minute {
+		t.Fatalf("Fetch.RedditSourceDelayMin = %v, want 1m", cfg.Fetch.RedditSourceDelayMin)
+	}
+	if cfg.Fetch.RedditSourceDelayMax != 70*time.Second {
+		t.Fatalf("Fetch.RedditSourceDelayMax = %v, want 1m10s", cfg.Fetch.RedditSourceDelayMax)
+	}
+	if cfg.Fetch.RedditRateLimitWaitMax != 2*time.Minute {
+		t.Fatalf("Fetch.RedditRateLimitWaitMax = %v, want 2m", cfg.Fetch.RedditRateLimitWaitMax)
+	}
+}
+
 func TestLoadParsesAIRetryDelays(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.yaml")

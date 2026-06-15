@@ -48,6 +48,9 @@ const (
 	DefaultFetchTimeout                   = 30 * time.Second
 	DefaultFetchRetryTimes                = 3
 	DefaultFetchRetryWaitTime             = 200 * time.Millisecond
+	DefaultFetchRedditSourceDelayMin      = 2 * time.Second
+	DefaultFetchRedditSourceDelayMax      = 4 * time.Second
+	DefaultFetchRedditRateLimitWaitMax    = 120 * time.Second
 	DefaultWatchBrowseboxCommand          = "browsebox"
 	DefaultWatchBrowseboxNodesConcurrency = 12
 	DefaultWatchBrowseboxDelayTimeoutMS   = 7000
@@ -77,12 +80,18 @@ type Source struct {
 }
 
 type FetchConfig struct {
-	TimeoutRaw       string        `yaml:"timeout"`
-	RetryTimesRaw    *int          `yaml:"retry_times"`
-	RetryWaitTimeRaw string        `yaml:"retry_wait_time"`
-	Timeout          time.Duration `yaml:"-"`
-	RetryTimes       int           `yaml:"-"`
-	RetryWaitTime    time.Duration `yaml:"-"`
+	TimeoutRaw                string        `yaml:"timeout"`
+	RetryTimesRaw             *int          `yaml:"retry_times"`
+	RetryWaitTimeRaw          string        `yaml:"retry_wait_time"`
+	RedditSourceDelayMinRaw   string        `yaml:"reddit_source_delay_min"`
+	RedditSourceDelayMaxRaw   string        `yaml:"reddit_source_delay_max"`
+	RedditRateLimitWaitMaxRaw string        `yaml:"reddit_rate_limit_wait_max"`
+	Timeout                   time.Duration `yaml:"-"`
+	RetryTimes                int           `yaml:"-"`
+	RetryWaitTime             time.Duration `yaml:"-"`
+	RedditSourceDelayMin      time.Duration `yaml:"-"`
+	RedditSourceDelayMax      time.Duration `yaml:"-"`
+	RedditRateLimitWaitMax    time.Duration `yaml:"-"`
 }
 
 type WatchConfig struct {
@@ -323,6 +332,15 @@ func applyFetchDefaults(fetch *FetchConfig) error {
 	if strings.TrimSpace(fetch.RetryWaitTimeRaw) == "" {
 		fetch.RetryWaitTimeRaw = DefaultFetchRetryWaitTime.String()
 	}
+	if strings.TrimSpace(fetch.RedditSourceDelayMinRaw) == "" {
+		fetch.RedditSourceDelayMinRaw = DefaultFetchRedditSourceDelayMin.String()
+	}
+	if strings.TrimSpace(fetch.RedditSourceDelayMaxRaw) == "" {
+		fetch.RedditSourceDelayMaxRaw = DefaultFetchRedditSourceDelayMax.String()
+	}
+	if strings.TrimSpace(fetch.RedditRateLimitWaitMaxRaw) == "" {
+		fetch.RedditRateLimitWaitMaxRaw = DefaultFetchRedditRateLimitWaitMax.String()
+	}
 
 	timeout, err := time.ParseDuration(strings.TrimSpace(fetch.TimeoutRaw))
 	if err != nil {
@@ -339,6 +357,30 @@ func applyFetchDefaults(fetch *FetchConfig) error {
 	if wait < 0 {
 		return fmt.Errorf("validate fetch.retry_wait_time: must be zero or greater")
 	}
+	redditDelayMin, err := time.ParseDuration(strings.TrimSpace(fetch.RedditSourceDelayMinRaw))
+	if err != nil {
+		return fmt.Errorf("parse fetch.reddit_source_delay_min: %w", err)
+	}
+	if redditDelayMin <= 0 {
+		return fmt.Errorf("validate fetch.reddit_source_delay_min: must be greater than 0")
+	}
+	redditDelayMax, err := time.ParseDuration(strings.TrimSpace(fetch.RedditSourceDelayMaxRaw))
+	if err != nil {
+		return fmt.Errorf("parse fetch.reddit_source_delay_max: %w", err)
+	}
+	if redditDelayMax <= 0 {
+		return fmt.Errorf("validate fetch.reddit_source_delay_max: must be greater than 0")
+	}
+	if redditDelayMax < redditDelayMin {
+		return fmt.Errorf("validate fetch.reddit_source_delay_max: must be greater than or equal to reddit_source_delay_min")
+	}
+	redditRateLimitWaitMax, err := time.ParseDuration(strings.TrimSpace(fetch.RedditRateLimitWaitMaxRaw))
+	if err != nil {
+		return fmt.Errorf("parse fetch.reddit_rate_limit_wait_max: %w", err)
+	}
+	if redditRateLimitWaitMax <= 0 {
+		return fmt.Errorf("validate fetch.reddit_rate_limit_wait_max: must be greater than 0")
+	}
 	if *fetch.RetryTimesRaw < 1 {
 		return fmt.Errorf("validate fetch.retry_times: must be at least 1")
 	}
@@ -346,6 +388,9 @@ func applyFetchDefaults(fetch *FetchConfig) error {
 	fetch.Timeout = timeout
 	fetch.RetryTimes = *fetch.RetryTimesRaw
 	fetch.RetryWaitTime = wait
+	fetch.RedditSourceDelayMin = redditDelayMin
+	fetch.RedditSourceDelayMax = redditDelayMax
+	fetch.RedditRateLimitWaitMax = redditRateLimitWaitMax
 	return nil
 }
 

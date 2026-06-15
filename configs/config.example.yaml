@@ -161,6 +161,9 @@ fetch:
   timeout: 30s
   retry_times: 3
   retry_wait_time: 200ms
+  reddit_source_delay_min: 60s
+  reddit_source_delay_max: 70s
+  reddit_rate_limit_wait_max: 120s
 
 watch:
   article_concurrency: 8
