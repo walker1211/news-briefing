@@ -29,8 +29,42 @@ type fetchRetrySettings struct {
 type sleepFunc func(context.Context, time.Duration) error
 type delayFunc func() time.Duration
 
+type redditSourceDelayOptions struct {
+	fallback delayFunc
+	jitter   delayFunc
+	maxWait  time.Duration
+}
+
+func randomDuration(min, max time.Duration) time.Duration {
+	return min + time.Duration(rand.Int64N(int64(max-min)+1))
+}
+
 func randomRedditDelay() time.Duration {
-	return redditDelayMin + time.Duration(rand.Int64N(int64(redditDelayMax-redditDelayMin)+1))
+	return randomDuration(redditDelayMin, redditDelayMax)
+}
+
+func redditSourceDelayFromConfig(cfg *config.Config) delayFunc {
+	min := config.DefaultFetchRedditSourceDelayMin
+	max := config.DefaultFetchRedditSourceDelayMax
+	if cfg != nil && cfg.Fetch.RedditSourceDelayMin > 0 && cfg.Fetch.RedditSourceDelayMax >= cfg.Fetch.RedditSourceDelayMin {
+		min = cfg.Fetch.RedditSourceDelayMin
+		max = cfg.Fetch.RedditSourceDelayMax
+	}
+	return func() time.Duration {
+		return randomDuration(min, max)
+	}
+}
+
+func redditSourceDelayOptionsFromConfig(cfg *config.Config) redditSourceDelayOptions {
+	maxWait := config.DefaultFetchRedditRateLimitWaitMax
+	if cfg != nil && cfg.Fetch.RedditRateLimitWaitMax > 0 {
+		maxWait = cfg.Fetch.RedditRateLimitWaitMax
+	}
+	return redditSourceDelayOptions{
+		fallback: redditSourceDelayFromConfig(cfg),
+		jitter:   randomRedditDelay,
+		maxWait:  maxWait,
+	}
 }
 
 func sleepContext(ctx context.Context, d time.Duration) error {
@@ -65,8 +99,9 @@ type fetchedCandidate struct {
 }
 
 type sourceFetchResult struct {
-	Source     config.Source
-	Candidates []fetchedCandidate
+	Source              config.Source
+	Candidates          []fetchedCandidate
+	RedditRateLimitWait time.Duration
 }
 
 type sourceFetchFunc func(context.Context, config.Source, []string, time.Time) (sourceFetchResult, error)
@@ -421,7 +456,7 @@ func fetchAllSourcesDetailedWith(ctx context.Context, cfg *config.Config, since 
 				}
 				return fetchWithRetryUsing(ctx, src, keywords, since, fetchers, sleep, retrySettings)
 			}
-			fetchRedditSourcesSeriallyWith(ctx, redditSources, cfg.Keywords, since, fetchRedditSource, sleep, randomRedditDelay, func(item FailedSource) {
+			fetchRedditSourcesSeriallyWith(ctx, redditSources, cfg.Keywords, since, fetchRedditSource, sleep, redditSourceDelayOptionsFromConfig(cfg), func(item FailedSource) {
 				mu.Lock()
 				failed = append(failed, item)
 				mu.Unlock()
@@ -440,22 +475,31 @@ func fetchAllSourcesDetailedWith(ctx context.Context, cfg *config.Config, since 
 	return all, failed, nil
 }
 
-func fetchRedditSourcesSeriallyWith(ctx context.Context, sources []config.Source, keywords []string, since time.Time, fetchReddit sourceFetchFunc, sleep sleepFunc, delay delayFunc, appendFailed func(FailedSource), appendResult func(sourceFetchResult)) {
+func fetchRedditSourcesSeriallyWith(ctx context.Context, sources []config.Source, keywords []string, since time.Time, fetchReddit sourceFetchFunc, sleep sleepFunc, delays redditSourceDelayOptions, appendFailed func(FailedSource), appendResult func(sourceFetchResult)) {
+	nextDelay := delays.fallback()
 	for i, src := range sources {
 		if err := ctx.Err(); err != nil {
 			appendFailed(FailedSource{Name: src.Name, Err: err})
 			return
 		}
 		if i > 0 {
-			if err := sleep(ctx, delay()); err != nil {
+			if delays.maxWait > 0 && nextDelay > delays.maxWait {
+				appendFailed(FailedSource{Name: src.Name, Err: fmt.Errorf("reddit rate limit wait %s exceeds max %s", nextDelay, delays.maxWait)})
+				return
+			}
+			if err := sleep(ctx, nextDelay); err != nil {
 				appendFailed(FailedSource{Name: src.Name, Err: err})
 				return
 			}
 		}
 		result, err := fetchReddit(ctx, src, keywords, since)
+		nextDelay = delays.fallback()
 		if err != nil {
 			appendFailed(FailedSource{Name: src.Name, Err: err})
 			continue
+		}
+		if result.RedditRateLimitWait > 0 {
+			nextDelay = result.RedditRateLimitWait + delays.jitter()
 		}
 		appendResult(result)
 	}

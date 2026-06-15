@@ -63,6 +63,66 @@ func TestFetchRSSFallsBackToCurlForReddit403(t *testing.T) {
 
 }
 
+func TestFetchRedditRSSCapturesRateLimitResetHeader(t *testing.T) {
+	client := NewClient(&http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Status:     "200 OK",
+			Body: io.NopCloser(strings.NewReader(`<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0">
+  <channel>
+    <title>r/worldnews</title>
+  </channel>
+</rss>`)),
+			Header:  http.Header{"X-Ratelimit-Reset": []string{"53"}},
+			Request: req,
+		}, nil
+	})})
+
+	result, err := client.FetchRSS(config.Source{
+		Name:     "Reddit WorldNews",
+		URL:      "https://www.reddit.com/r/worldnews/.rss",
+		Type:     config.SourceTypeRSS,
+		Category: "国际政治",
+	}, nil, time.Time{})
+	if err != nil {
+		t.Fatalf("FetchRSS() error = %v", err)
+	}
+	if result.RedditRateLimitWait != 53*time.Second {
+		t.Fatalf("RedditRateLimitWait = %v, want 53s", result.RedditRateLimitWait)
+	}
+}
+
+func TestFetchRedditRSSPrefersRetryAfterHeader(t *testing.T) {
+	client := NewClient(&http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Status:     "200 OK",
+			Body: io.NopCloser(strings.NewReader(`<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0">
+  <channel>
+    <title>r/worldnews</title>
+  </channel>
+</rss>`)),
+			Header:  http.Header{"Retry-After": []string{"12"}, "X-Ratelimit-Reset": []string{"53"}},
+			Request: req,
+		}, nil
+	})})
+
+	result, err := client.FetchRSS(config.Source{
+		Name:     "Reddit WorldNews",
+		URL:      "https://www.reddit.com/r/worldnews/.rss",
+		Type:     config.SourceTypeRSS,
+		Category: "国际政治",
+	}, nil, time.Time{})
+	if err != nil {
+		t.Fatalf("FetchRSS() error = %v", err)
+	}
+	if result.RedditRateLimitWait != 12*time.Second {
+		t.Fatalf("RedditRateLimitWait = %v, want 12s", result.RedditRateLimitWait)
+	}
+}
+
 func TestFetchRSSExtractsImageFromEnclosure(t *testing.T) {
 	client := NewClient(&http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
 		return &http.Response{

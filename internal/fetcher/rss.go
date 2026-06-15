@@ -9,6 +9,7 @@ import (
 	"net/url"
 	"os/exec"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -59,7 +60,7 @@ func (c *Client) fetchRSSContextWithOpenGraphOptions(ctx context.Context, source
 	fp := gofeed.NewParser()
 	fp.Client = c.httpClient
 
-	feed, err := fp.ParseURLWithContext(source.URL, ctx)
+	feed, headers, err := c.fetchRSSFeed(ctx, source, fp)
 	if err != nil {
 		if !shouldFallbackToCurl(source, err) {
 			return sourceFetchResult{}, err
@@ -76,10 +77,14 @@ func (c *Client) fetchRSSContextWithOpenGraphOptions(ctx context.Context, source
 		if err != nil {
 			return sourceFetchResult{}, err
 		}
+		headers = nil
 	}
 
 	result := sourceFetchResult{Source: source}
 	isRedditRSS := isRedditURL(source.URL)
+	if isRedditRSS {
+		result.RedditRateLimitWait = redditRateLimitWaitFromHeader(headers)
+	}
 	redditOpenGraphFallbacks := 0
 	for _, item := range feed.Items {
 		pub := time.Now()
@@ -126,6 +131,48 @@ func (c *Client) fetchRSSContextWithOpenGraphOptions(ctx context.Context, source
 	}
 
 	return result, nil
+}
+
+func (c *Client) fetchRSSFeed(ctx context.Context, source config.Source, fp *gofeed.Parser) (*gofeed.Feed, http.Header, error) {
+	if !isRedditURL(source.URL) {
+		feed, err := fp.ParseURLWithContext(source.URL, ctx)
+		return feed, nil, err
+	}
+	return c.fetchRSSFeedWithHeaders(ctx, source.URL, fp)
+}
+
+func (c *Client) fetchRSSFeedWithHeaders(ctx context.Context, feedURL string, fp *gofeed.Parser) (*gofeed.Feed, http.Header, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, feedURL, nil)
+	if err != nil {
+		return nil, nil, err
+	}
+	req.Header.Set("Accept", "application/rss+xml, application/xml;q=0.9, */*;q=0.8")
+	req.Header.Set("User-Agent", userAgent)
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
+		return nil, resp.Header, fmt.Errorf("http error: %d %s", resp.StatusCode, resp.Status)
+	}
+	feed, err := fp.Parse(resp.Body)
+	return feed, resp.Header, err
+}
+
+func redditRateLimitWaitFromHeader(header http.Header) time.Duration {
+	if wait := headerSecondsDuration(header.Get("Retry-After")); wait > 0 {
+		return wait
+	}
+	return headerSecondsDuration(header.Get("X-Ratelimit-Reset"))
+}
+
+func headerSecondsDuration(raw string) time.Duration {
+	seconds, err := strconv.ParseFloat(strings.TrimSpace(raw), 64)
+	if err != nil || seconds <= 0 {
+		return 0
+	}
+	return time.Duration(seconds * float64(time.Second))
 }
 
 func extractRSSItemImage(item *gofeed.Item) string {
