@@ -2,6 +2,7 @@ package output
 
 import (
 	"bytes"
+	"encoding/json"
 	"fmt"
 	"image"
 	"image/color"
@@ -68,6 +69,183 @@ func TestWriteMarkdownKeepsDefaultHeaderAndOmitsTopHeroImage(t *testing.T) {
 	}
 	if strings.Contains(got, "![封面图]") {
 		t.Fatalf("WriteMarkdown() injected top hero image: %q", got)
+	}
+}
+
+func TestWriteMarkdownWritesCardManifestFromStructuredBriefing(t *testing.T) {
+	outputDir := t.TempDir()
+	imageURL := "https://cdn.example.com/openai.jpg"
+	download := func(rawURL string, path string) error {
+		if rawURL != imageURL {
+			t.Fatalf("download URL = %q, want %q", rawURL, imageURL)
+		}
+		return os.WriteFile(path, []byte("image bytes"), 0o644)
+	}
+	briefing := &model.Briefing{
+		Date:   "26.06.16",
+		Period: "1800",
+		Articles: []model.Article{
+			{
+				Title:     "OpenAI 发布新功能",
+				Summary:   "原始摘要",
+				ImageURL:  imageURL,
+				Source:    "The Verge",
+				Category:  "AI/科技",
+				Link:      "https://example.com/openai",
+				Published: time.Date(2026, 6, 16, 11, 0, 0, 0, time.FixedZone("CST", 8*60*60)),
+			},
+			{
+				Title:     "外交新闻",
+				Source:    "BBC",
+				Category:  "国际政治",
+				Link:      "https://example.com/world",
+				Published: time.Date(2026, 6, 16, 10, 0, 0, 0, time.UTC),
+			},
+		},
+		StructuredSummary: &model.BriefingSummary{
+			OverviewGroups: []model.BriefingOverviewGroup{{Category: "AI/科技", Items: []string{"要点一", "要点二"}}},
+			Stories: []model.BriefingStory{
+				{Category: "AI/科技", Title: "OpenAI 发布新功能", Summary: "摘要正文", Impact: "影响正文", ImageURL: imageURL, SourceArticleIDs: []int{1}},
+				{Category: "国际政治", Title: "外交新闻", Summary: "不应进入 manifest", SourceArticleIDs: []int{2}},
+			},
+		},
+		RawContent: strings.Join([]string{
+			"## 今日速览",
+			"",
+			"### AI/科技",
+			"",
+			"- 要点一",
+			"- 要点二",
+			"",
+			"## AI/科技",
+			"",
+			"### OpenAI 发布新功能",
+			"![OpenAI 发布新功能](" + imageURL + ")",
+			"**摘要：** 摘要正文  ",
+			"**影响：** 影响正文  ",
+		}, "\n"),
+	}
+	path, err := writeMarkdownWithImageDownloader(briefing, outputDir, download)
+	if err != nil {
+		t.Fatalf("writeMarkdownWithImageDownloader() error = %v", err)
+	}
+
+	manifestPath := strings.TrimSuffix(path, ".md") + ".card-manifest.json"
+	data, err := os.ReadFile(filepath.Clean(manifestPath))
+	if err != nil {
+		t.Fatalf("ReadFile(manifest) error = %v", err)
+	}
+	var got struct {
+		SchemaVersion string `json:"schema_version"`
+		SourceApp     string `json:"source_app"`
+		Document      struct {
+			Title   string   `json:"title"`
+			Date    string   `json:"date"`
+			Period  string   `json:"period"`
+			Summary []string `json:"summary"`
+		} `json:"document"`
+		Items []struct {
+			ID          string `json:"id"`
+			Category    string `json:"category"`
+			Title       string `json:"title"`
+			Summary     string `json:"summary"`
+			Impact      string `json:"impact"`
+			Source      string `json:"source"`
+			PublishedAt string `json:"published_at"`
+			URL         string `json:"url"`
+			Image       *struct {
+				Src string `json:"src"`
+				Alt string `json:"alt"`
+			} `json:"image"`
+		} `json:"items"`
+	}
+	if err := json.Unmarshal(data, &got); err != nil {
+		t.Fatalf("json.Unmarshal(manifest) error = %v", err)
+	}
+	if got.SchemaVersion != "card-article-manifest/v1" || got.SourceApp != "news-briefing" {
+		t.Fatalf("manifest identity = %#v", got)
+	}
+	if got.Document.Title != "国际资讯简报 26.06.16 晚间 18:00" || got.Document.Date != "2026-06-16" || got.Document.Period != "1800" {
+		t.Fatalf("manifest document = %#v", got.Document)
+	}
+	if strings.Join(got.Document.Summary, ",") != "要点一,要点二" {
+		t.Fatalf("manifest summary = %#v", got.Document.Summary)
+	}
+	if len(got.Items) != 1 {
+		t.Fatalf("len(manifest.items) = %d, want 1: %#v", len(got.Items), got.Items)
+	}
+	item := got.Items[0]
+	if item.ID == "" || item.Category != "AI/科技" || item.Title != "OpenAI 发布新功能" || item.Summary != "摘要正文" || item.Impact != "影响正文" || item.Source != "The Verge" || item.PublishedAt != "2026-06-16T11:00:00+08:00" || item.URL != "https://example.com/openai" {
+		t.Fatalf("manifest item = %#v", item)
+	}
+	if item.Image == nil || !strings.HasPrefix(item.Image.Src, "assets/26.06.16-1800/") || item.Image.Alt != "OpenAI 发布新功能" {
+		t.Fatalf("manifest image = %#v", item.Image)
+	}
+}
+
+func TestWriteMarkdownManifestOmitsMissingImage(t *testing.T) {
+	outputDir := t.TempDir()
+	path, err := WriteMarkdown(&model.Briefing{
+		Date:   "26.06.16",
+		Period: "0800",
+		Articles: []model.Article{{
+			Title:     "OpenAI 发布新功能",
+			Source:    "OpenAI News",
+			Category:  "AI/科技",
+			Link:      "https://example.com/openai",
+			Published: time.Date(2026, 6, 16, 1, 0, 0, 0, time.UTC),
+		}},
+		StructuredSummary: &model.BriefingSummary{
+			OverviewGroups: []model.BriefingOverviewGroup{{Category: "AI/科技", Items: []string{"要点一"}}},
+			Stories:        []model.BriefingStory{{Category: "AI/科技", Title: "OpenAI 发布新功能", Summary: "摘要正文", Impact: "影响正文", SourceArticleIDs: []int{1}}},
+		},
+		RawContent: "## 今日速览\n\n- 要点一\n\n## AI/科技\n\n### OpenAI 发布新功能\n**摘要：** 摘要正文",
+	}, outputDir)
+	if err != nil {
+		t.Fatalf("WriteMarkdown() error = %v", err)
+	}
+
+	manifestPath := strings.TrimSuffix(path, ".md") + ".card-manifest.json"
+	data, err := os.ReadFile(filepath.Clean(manifestPath))
+	if err != nil {
+		t.Fatalf("ReadFile(manifest) error = %v", err)
+	}
+	if strings.Contains(string(data), "\"image\"") {
+		t.Fatalf("manifest should omit missing image: %s", string(data))
+	}
+}
+
+func TestWriteMarkdownManifestOmitsImageWhenDownloadFails(t *testing.T) {
+	outputDir := t.TempDir()
+	imageURL := "https://example.com/openai.jpg"
+	path, err := writeMarkdownWithImageDownloader(&model.Briefing{
+		Date:   "26.06.16",
+		Period: "0800",
+		Articles: []model.Article{{
+			Title:    "OpenAI 发布新功能",
+			Source:   "OpenAI News",
+			Category: "AI/科技",
+			Link:     "https://example.com/openai",
+		}},
+		StructuredSummary: &model.BriefingSummary{
+			OverviewGroups: []model.BriefingOverviewGroup{{Category: "AI/科技", Items: []string{"要点一"}}},
+			Stories:        []model.BriefingStory{{Category: "AI/科技", Title: "OpenAI 发布新功能", Summary: "摘要正文", Impact: "影响正文", ImageURL: imageURL, SourceArticleIDs: []int{1}}},
+		},
+		RawContent: "## 今日速览\n\n- 要点一\n\n## AI/科技\n\n### OpenAI 发布新功能\n![OpenAI 发布新功能](" + imageURL + ")\n**摘要：** 摘要正文",
+	}, outputDir, func(rawURL string, path string) error {
+		return fmt.Errorf("download failed")
+	})
+	if err != nil {
+		t.Fatalf("writeMarkdownWithImageDownloader() error = %v", err)
+	}
+
+	manifestPath := strings.TrimSuffix(path, ".md") + ".card-manifest.json"
+	data, err := os.ReadFile(filepath.Clean(manifestPath))
+	if err != nil {
+		t.Fatalf("ReadFile(manifest) error = %v", err)
+	}
+	if strings.Contains(string(data), "\"image\"") || strings.Contains(string(data), imageURL) {
+		t.Fatalf("manifest should omit failed remote image: %s", string(data))
 	}
 }
 

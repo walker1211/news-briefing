@@ -33,6 +33,42 @@ func TestRunPublishHookExpandsCommandHome(t *testing.T) {
 	}
 }
 
+func TestExpandPublishHookArgsIncludesCardManifestPlaceholders(t *testing.T) {
+	got := expandPublishHookArgs([]string{
+		"--file", "{markdown_file}",
+		"--xhs-card-manifest", "{xhs_card_manifest}",
+		"--legacy-card-manifest", "{card_manifest}",
+		"--source", "{source_app}",
+		"--date", "{date}",
+		"--period", "{period}",
+	}, publishHookRequest{
+		MarkdownFile:     "/tmp/output/26.06.16-晚间-1800.md",
+		CardManifestFile: "/tmp/output/26.06.16-晚间-1800.card-manifest.json",
+		SourceApp:        "news-briefing",
+		Date:             "26.06.16",
+		Period:           "1800",
+	})
+	want := strings.Join([]string{
+		"--file", "/tmp/output/26.06.16-晚间-1800.md",
+		"--xhs-card-manifest", "/tmp/output/26.06.16-晚间-1800.card-manifest.json",
+		"--legacy-card-manifest", "/tmp/output/26.06.16-晚间-1800.card-manifest.json",
+		"--source", "news-briefing",
+		"--date", "26.06.16",
+		"--period", "1800",
+	}, "\x00")
+	if strings.Join(got, "\x00") != want {
+		t.Fatalf("expandPublishHookArgs() = %#v", got)
+	}
+}
+
+func TestExpandPublishHookArgsLeavesUnknownPlaceholdersStable(t *testing.T) {
+	got := expandPublishHookArgs([]string{"--file", "{markdown_file}", "--unknown", "{unknown}"}, publishHookRequest{MarkdownFile: "briefing.md"})
+	want := []string{"--file", "briefing.md", "--unknown", "{unknown}"}
+	if strings.Join(got, "\x00") != strings.Join(want, "\x00") {
+		t.Fatalf("expandPublishHookArgs() = %#v, want %#v", got, want)
+	}
+}
+
 func TestRunPublishHookDoesNotLeakCommandOutput(t *testing.T) {
 	if os.Getenv("NEWS_BRIEFING_PUBLISH_HOOK_LEAK_SUBPROCESS") == "1" {
 		fmt.Fprintln(os.Stdout, "HOOK_STDOUT_MARKER=abc123")

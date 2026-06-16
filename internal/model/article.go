@@ -13,9 +13,10 @@ type Article struct {
 }
 
 type Briefing struct {
-	Date       string
-	Period     string // "HHMM" 格式，如 "0800"、"1400"、"2000"
-	Articles   []Article
-	Summary    string // Claude 生成的摘要
-	RawContent string // 完整的 Markdown 内容
+	Date              string
+	Period            string // "HHMM" 格式，如 "0800"、"1400"、"2000"
+	Articles          []Article
+	Summary           string // Claude 生成的摘要
+	StructuredSummary *BriefingSummary
+	RawContent        string // 完整的 Markdown 内容
 }

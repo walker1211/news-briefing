@@ -56,12 +56,13 @@ type watchDeps struct {
 }
 
 type aiDeps struct {
-	summarize        func([]model.Article, []string, *time.Location) (string, error)
-	summarizeContext func(context.Context, []model.Article, []string, *time.Location) (string, error)
-	translate        func([]model.Article, []string, *time.Location) (string, error)
-	translateContext func(context.Context, []model.Article, []string, *time.Location) (string, error)
-	deepDive         func(string, []model.Article, *time.Location) (string, error)
-	deepDiveContext  func(context.Context, string, []model.Article, *time.Location) (string, error)
+	summarize                func([]model.Article, []string, *time.Location) (string, error)
+	summarizeContext         func(context.Context, []model.Article, []string, *time.Location) (string, error)
+	summarizeBriefingContext func(context.Context, []model.Article, []string, *time.Location) (model.BriefingSummary, string, error)
+	translate                func([]model.Article, []string, *time.Location) (string, error)
+	translateContext         func(context.Context, []model.Article, []string, *time.Location) (string, error)
+	deepDive                 func(string, []model.Article, *time.Location) (string, error)
+	deepDiveContext          func(context.Context, string, []model.Article, *time.Location) (string, error)
 }
 
 type outputDeps struct {
@@ -118,12 +119,13 @@ func newApp(cfg *config.Config) *app {
 			fetchWatchContext: watchRunner.RunContext,
 		},
 		ai: aiDeps{
-			summarize:        aiRunner.Summarize,
-			summarizeContext: aiRunner.SummarizeContext,
-			translate:        aiRunner.Translate,
-			translateContext: aiRunner.TranslateContext,
-			deepDive:         aiRunner.DeepDive,
-			deepDiveContext:  aiRunner.DeepDiveContext,
+			summarize:                aiRunner.Summarize,
+			summarizeContext:         aiRunner.SummarizeContext,
+			summarizeBriefingContext: aiRunner.SummarizeBriefingContext,
+			translate:                aiRunner.Translate,
+			translateContext:         aiRunner.TranslateContext,
+			deepDive:                 aiRunner.DeepDive,
+			deepDiveContext:          aiRunner.DeepDiveContext,
 		},
 		output: outputDeps{
 			composeBody: output.FormatBody,
@@ -434,13 +436,31 @@ func (app *app) fetchBriefingArticlesWithWatch(ctx context.Context, watchTime ti
 }
 
 func (app *app) summarizeArticles(ctx context.Context, articles []model.Article, categoryOrder []string, loc *time.Location) (string, error) {
+	_, markdown, err := app.summarizeBriefing(ctx, articles, categoryOrder, loc)
+	return markdown, err
+}
+
+func (app *app) summarizeBriefing(ctx context.Context, articles []model.Article, categoryOrder []string, loc *time.Location) (*model.BriefingSummary, string, error) {
+	if app.ai.summarizeBriefingContext != nil {
+		structured, markdown, err := app.ai.summarizeBriefingContext(ctx, articles, categoryOrder, loc)
+		if err != nil {
+			return nil, "", err
+		}
+		return &structured, markdown, nil
+	}
 	if app.ai.summarizeContext != nil {
-		return app.ai.summarizeContext(ctx, articles, categoryOrder, loc)
+		markdown, err := app.ai.summarizeContext(ctx, articles, categoryOrder, loc)
+		return nil, markdown, err
 	}
 	if app.ai.summarize != nil {
-		return app.ai.summarize(articles, categoryOrder, loc)
+		markdown, err := app.ai.summarize(articles, categoryOrder, loc)
+		return nil, markdown, err
 	}
-	return summarizer.SummarizeContext(ctx, articles, categoryOrder, loc)
+	structured, markdown, err := summarizer.SummarizeBriefingContext(ctx, articles, categoryOrder, loc)
+	if err != nil {
+		return nil, "", err
+	}
+	return &structured, markdown, nil
 }
 
 func (app *app) translateArticles(ctx context.Context, articles []model.Article, categoryOrder []string, loc *time.Location) (string, error) {
@@ -853,10 +873,11 @@ func (app *app) renderBriefingContext(ctx context.Context, commandPath string, d
 		Original: output.GroupedArticleListView(articles, categoryOrder, app.displayLocation()),
 	}
 	summary := ""
+	var structuredSummary *model.BriefingSummary
 	if outputNeedsTranslatedContent(app.cfg.Output.Mode) {
 		logutil.Println("Generating summary with AI CLI...")
 		var err error
-		summary, err = app.summarizeArticles(ctx, articles, categoryOrder, app.displayLocation())
+		structuredSummary, summary, err = app.summarizeBriefing(ctx, articles, categoryOrder, app.displayLocation())
 		if err != nil {
 			return err
 		}
@@ -874,11 +895,12 @@ func (app *app) renderBriefingContext(ctx context.Context, commandPath string, d
 	body = output.AppendFailedSection(body, failed)
 
 	briefing := &model.Briefing{
-		Date:       date,
-		Period:     period,
-		Articles:   articles,
-		Summary:    summary,
-		RawContent: body,
+		Date:              date,
+		Period:            period,
+		Articles:          articles,
+		Summary:           summary,
+		StructuredSummary: structuredSummary,
+		RawContent:        body,
 	}
 
 	if err := runIfActive(ctx, func() error {
@@ -922,10 +944,11 @@ func (app *app) runPostMarkdownActions(ctx context.Context, briefing *model.Brie
 		}
 		go func() {
 			hookDone <- runHook(ctx, app.cfg.PublishHook, publishHookRequest{
-				MarkdownFile: publishMarkdownPath,
-				SourceApp:    "news-briefing",
-				Date:         briefing.Date,
-				Period:       briefing.Period,
+				MarkdownFile:     publishMarkdownPath,
+				CardManifestFile: cardManifestPathForMarkdown(publishMarkdownPath),
+				SourceApp:        "news-briefing",
+				Date:             briefing.Date,
+				Period:           briefing.Period,
 			})
 		}()
 	} else {
@@ -958,6 +981,10 @@ func (app *app) runPostMarkdownActions(ctx context.Context, briefing *model.Brie
 		logutil.Errorf("publish hook failed: %v", err)
 	}
 	return emailErr
+}
+
+func cardManifestPathForMarkdown(markdownPath string) string {
+	return strings.TrimSuffix(markdownPath, filepath.Ext(markdownPath)) + ".card-manifest.json"
 }
 
 func (app *app) runDeepDive(cmd deepCommand) error {
