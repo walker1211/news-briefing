@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 	"time"
@@ -223,10 +224,12 @@ func executeContext(ctx context.Context, app *app, cmd command) error {
 		return app.runAlertsContext(ctx)
 	case xRoutesCommand:
 		return app.runXRoutesContext(ctx)
+	case xReadyCommand:
+		return app.runXReadyContext(ctx, c)
 	case serveCommand:
 		logutil.Println("Starting news aggregator in scheduled mode...")
 		if err := app.startScheduler(ctx, app.cfg, func(window scheduler.Window) {
-			if err := app.runScheduledBriefingContext(ctx, window, true); err != nil {
+			if err := app.runScheduledBriefingOnceContext(ctx, window, "cron", true); err != nil {
 				logutil.Errorf("scheduled run failed: %v", err)
 			}
 		}); err != nil {
@@ -266,7 +269,7 @@ func commandSendsEmail(cmd command) bool {
 	switch c := cmd.(type) {
 	case runCommand:
 		return !c.noEmail
-	case serveCommand:
+	case serveCommand, xReadyCommand:
 		return true
 	case regenCommand:
 		return c.sendEmail
@@ -581,6 +584,183 @@ func (app *app) runScheduledBriefingContext(ctx context.Context, window schedule
 		return err
 	}
 	return app.renderBriefingContext(ctx, "serve", date, window.Period, result.articles, result.filteredArticles, result.seenArticles, result.failed, false, sendEmail, result.watchSiteErrorNotices...)
+}
+
+const scheduledRunRunningTTL = 2 * time.Hour
+
+func (app *app) runXReadyContext(ctx context.Context, cmd xReadyCommand) error {
+	window, err := app.xReadyWindow(cmd)
+	if err != nil {
+		return err
+	}
+	loc := app.displayLocation()
+	logutil.Printf("[scheduler] X ready callback: [%s -> %s]", window.From.In(loc).Format(time.RFC3339), window.To.In(loc).Format(time.RFC3339))
+	return app.runScheduledBriefingOnceContext(ctx, window, "x-ready-callback", true)
+}
+
+func (app *app) xReadyWindow(cmd xReadyCommand) (scheduler.Window, error) {
+	loc := app.displayLocation()
+	from, err := parseXReadyTime(cmd.fromRaw, loc)
+	if err != nil {
+		return scheduler.Window{}, fmt.Errorf("parse --from: %w", err)
+	}
+	to, err := parseXReadyTime(cmd.toRaw, loc)
+	if err != nil {
+		return scheduler.Window{}, fmt.Errorf("parse --to: %w", err)
+	}
+	if !to.After(from) {
+		return scheduler.Window{}, fmt.Errorf("--to must be after --from")
+	}
+	period := strings.TrimSpace(cmd.period)
+	if period == "" {
+		period = defaultPeriodFrom(to.In(loc))
+	}
+	if err := validatePeriod(period); err != nil {
+		return scheduler.Window{}, err
+	}
+	return scheduler.Window{Expr: "x-ready-callback", Period: period, From: from, To: to}, nil
+}
+
+func parseXReadyTime(value string, loc *time.Location) (time.Time, error) {
+	value = strings.TrimSpace(value)
+	if t, err := time.Parse(time.RFC3339Nano, value); err == nil {
+		return t, nil
+	}
+	return parseRegenTime(value, loc)
+}
+
+func (app *app) runScheduledBriefingOnceContext(ctx context.Context, window scheduler.Window, trigger string, sendEmail bool) error {
+	paths, acquired, err := app.acquireScheduledRunWindow(window, trigger)
+	if err != nil {
+		return err
+	}
+	if !acquired {
+		return nil
+	}
+	err = app.runScheduledBriefingContext(ctx, window, sendEmail)
+	if err != nil {
+		if markErr := markScheduledRunFailed(paths, trigger, window, err); markErr != nil {
+			logutil.Errorf("mark scheduled run failed: %v", markErr)
+		}
+		return err
+	}
+	return markScheduledRunDone(paths, trigger, window)
+}
+
+type scheduledRunPaths struct {
+	running string
+	done    string
+	failed  string
+}
+
+func (app *app) acquireScheduledRunWindow(window scheduler.Window, trigger string) (scheduledRunPaths, bool, error) {
+	paths := app.scheduledRunPaths(window)
+	if err := os.MkdirAll(filepath.Dir(paths.running), 0o755); err != nil {
+		return paths, false, err
+	}
+	if _, err := os.Stat(paths.done); err == nil {
+		logutil.Printf("[scheduler] 跳过窗口 %s：已完成", window.Period)
+		return paths, false, nil
+	} else if !os.IsNotExist(err) {
+		return paths, false, err
+	}
+	if info, err := os.Stat(paths.running); err == nil {
+		if time.Since(info.ModTime()) < scheduledRunRunningTTL {
+			logutil.Printf("[scheduler] 跳过窗口 %s：已有执行中任务", window.Period)
+			return paths, false, nil
+		}
+		logutil.Printf("[scheduler] 替换过期执行标记: %s", paths.running)
+		if err := os.Remove(paths.running); err != nil && !os.IsNotExist(err) {
+			return paths, false, err
+		}
+	} else if !os.IsNotExist(err) {
+		return paths, false, err
+	}
+	file, err := os.OpenFile(paths.running, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
+	if os.IsExist(err) {
+		logutil.Printf("[scheduler] 跳过窗口 %s：已有执行中任务", window.Period)
+		return paths, false, nil
+	}
+	if err != nil {
+		return paths, false, err
+	}
+	if _, err := file.WriteString(scheduledRunStateContent("running", trigger, window, nil)); err != nil {
+		_ = file.Close()
+		return paths, false, err
+	}
+	if err := file.Close(); err != nil {
+		return paths, false, err
+	}
+	if err := os.Remove(paths.failed); err != nil && !os.IsNotExist(err) {
+		return paths, false, err
+	}
+	return paths, true, nil
+}
+
+func (app *app) scheduledRunPaths(window scheduler.Window) scheduledRunPaths {
+	outputDir := "output"
+	if app != nil && app.cfg != nil && strings.TrimSpace(app.cfg.Output.Dir) != "" {
+		outputDir = app.cfg.Output.Dir
+	}
+	key := scheduledRunWindowKey(window)
+	dir := filepath.Join(outputDir, "state", "scheduled-runs")
+	return scheduledRunPaths{
+		running: filepath.Join(dir, key+".running"),
+		done:    filepath.Join(dir, key+".done"),
+		failed:  filepath.Join(dir, key+".failed"),
+	}
+}
+
+func scheduledRunWindowKey(window scheduler.Window) string {
+	return window.From.UTC().Format("20060102T150405Z") + "_" + window.To.UTC().Format("20060102T150405Z")
+}
+
+func markScheduledRunDone(paths scheduledRunPaths, trigger string, window scheduler.Window) error {
+	if err := os.WriteFile(paths.done, []byte(scheduledRunStateContent("done", trigger, window, nil)), 0o644); err != nil {
+		return err
+	}
+	if err := os.Remove(paths.running); err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	return nil
+}
+
+func markScheduledRunFailed(paths scheduledRunPaths, trigger string, window scheduler.Window, runErr error) error {
+	if err := os.WriteFile(paths.failed, []byte(scheduledRunStateContent("failed", trigger, window, runErr)), 0o644); err != nil {
+		return err
+	}
+	if err := os.Remove(paths.running); err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	return nil
+}
+
+func scheduledRunStateContent(status string, trigger string, window scheduler.Window, runErr error) string {
+	var builder strings.Builder
+	builder.WriteString("status: ")
+	builder.WriteString(status)
+	builder.WriteByte('\n')
+	builder.WriteString("trigger: ")
+	builder.WriteString(trigger)
+	builder.WriteByte('\n')
+	builder.WriteString("period: ")
+	builder.WriteString(window.Period)
+	builder.WriteByte('\n')
+	builder.WriteString("from: ")
+	builder.WriteString(window.From.Format(time.RFC3339))
+	builder.WriteByte('\n')
+	builder.WriteString("to: ")
+	builder.WriteString(window.To.Format(time.RFC3339))
+	builder.WriteByte('\n')
+	builder.WriteString("updated_at: ")
+	builder.WriteString(time.Now().Format(time.RFC3339))
+	builder.WriteByte('\n')
+	if runErr != nil {
+		builder.WriteString("error: ")
+		builder.WriteString(runErr.Error())
+		builder.WriteByte('\n')
+	}
+	return builder.String()
 }
 
 func (app *app) runRegen(cmd regenCommand) error {

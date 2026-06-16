@@ -244,7 +244,8 @@ email:
 schedule:
   - "0 8 * * *"
   - "0 18 * * *"
-# Optional. Delays actual execution while keeping the schedule window boundaries above.
+# Optional. Grace delay before cron fallback runs while keeping the schedule window boundaries above.
+# Upstream X visible refresh can trigger the same window earlier with `news-briefing x ready`.
 schedule_delay: 10m
 
 # Optional. Defaults to the machine's local timezone when omitted.
