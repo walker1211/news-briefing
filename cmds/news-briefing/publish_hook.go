@@ -12,10 +12,11 @@ import (
 )
 
 type publishHookRequest struct {
-	MarkdownFile string
-	SourceApp    string
-	Date         string
-	Period       string
+	MarkdownFile     string
+	CardManifestFile string
+	SourceApp        string
+	Date             string
+	Period           string
 }
 
 func runPublishHook(ctx context.Context, cfg config.PublishHookConfig, req publishHookRequest) error {
@@ -64,6 +65,8 @@ func expandPublishHookArgs(args []string, req publishHookRequest) []string {
 	out := make([]string, 0, len(args))
 	for _, arg := range args {
 		arg = strings.ReplaceAll(arg, "{markdown_file}", req.MarkdownFile)
+		arg = strings.ReplaceAll(arg, "{card_manifest}", req.CardManifestFile)
+		arg = strings.ReplaceAll(arg, "{xhs_card_manifest}", req.CardManifestFile)
 		arg = strings.ReplaceAll(arg, "{source_app}", req.SourceApp)
 		arg = strings.ReplaceAll(arg, "{date}", req.Date)
 		arg = strings.ReplaceAll(arg, "{period}", req.Period)

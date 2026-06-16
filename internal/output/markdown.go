@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"html"
 	"image"
@@ -46,19 +47,24 @@ func writeMarkdownWithImageDownloader(briefing *model.Briefing, outputDir string
 	path := filepath.Join(outputDir, filename)
 
 	rawContent := briefing.RawContent
+	localizedImages := map[string]string{}
 	if download != nil {
-		rawContent = localizeMarkdownImages(rawContent, outputDir, briefing.Date, briefing.Period, download)
+		rawContent, localizedImages = localizeMarkdownImages(rawContent, outputDir, briefing.Date, briefing.Period, download)
 	}
 	content := briefingHeaderBlock(briefing) + rawContent
 
 	if err := statefile.WriteAtomicReplaceOnly(path, []byte(content), 0644); err != nil {
 		return "", fmt.Errorf("write markdown: %w", err)
 	}
+	if err := writeCardManifestSidecar(briefing, path, localizedImages); err != nil {
+		return "", fmt.Errorf("write card manifest: %w", err)
+	}
 
 	return path, nil
 }
 
-func localizeMarkdownImages(rawContent string, outputDir string, date string, period string, download markdownImageDownloader) string {
+func localizeMarkdownImages(rawContent string, outputDir string, date string, period string, download markdownImageDownloader) (string, map[string]string) {
+	localized := make(map[string]string)
 	assetDirName := briefingAssetDirName(date, period)
 	assetDir := filepath.Join(outputDir, "assets", assetDirName)
 	assetRelDir := filepath.ToSlash(filepath.Join("assets", assetDirName))
@@ -83,9 +89,159 @@ func localizeMarkdownImages(rawContent string, outputDir string, date string, pe
 			lines[i] = ""
 			continue
 		}
-		lines[i] = fmt.Sprintf("![%s](%s)", alt, filepath.ToSlash(filepath.Join(assetRelDir, filename)))
+		relPath := filepath.ToSlash(filepath.Join(assetRelDir, filename))
+		localized[imageURL] = relPath
+		lines[i] = fmt.Sprintf("![%s](%s)", alt, relPath)
 	}
-	return strings.Join(lines, "\n")
+	return strings.Join(lines, "\n"), localized
+}
+
+type cardManifest struct {
+	SchemaVersion string             `json:"schema_version"`
+	SourceApp     string             `json:"source_app"`
+	Document      cardManifestDoc    `json:"document"`
+	Items         []cardManifestItem `json:"items"`
+}
+
+type cardManifestDoc struct {
+	Title   string   `json:"title"`
+	Date    string   `json:"date,omitempty"`
+	Period  string   `json:"period"`
+	Summary []string `json:"summary"`
+}
+
+type cardManifestItem struct {
+	ID          string             `json:"id"`
+	Category    string             `json:"category"`
+	Title       string             `json:"title"`
+	Summary     string             `json:"summary"`
+	Impact      string             `json:"impact"`
+	Source      string             `json:"source,omitempty"`
+	PublishedAt string             `json:"published_at,omitempty"`
+	URL         string             `json:"url,omitempty"`
+	Image       *cardManifestImage `json:"image,omitempty"`
+}
+
+type cardManifestImage struct {
+	Src string `json:"src"`
+	Alt string `json:"alt"`
+}
+
+func writeCardManifestSidecar(briefing *model.Briefing, markdownPath string, localizedImages map[string]string) error {
+	manifest := buildCardManifest(briefing, localizedImages)
+	data, err := json.MarshalIndent(manifest, "", "  ")
+	if err != nil {
+		return err
+	}
+	data = append(data, '\n')
+	return statefile.WriteAtomicReplaceOnly(cardManifestPath(markdownPath), data, 0o644)
+}
+
+func cardManifestPath(markdownPath string) string {
+	return strings.TrimSuffix(markdownPath, filepath.Ext(markdownPath)) + ".card-manifest.json"
+}
+
+func buildCardManifest(briefing *model.Briefing, localizedImages map[string]string) cardManifest {
+	manifest := cardManifest{
+		SchemaVersion: "card-article-manifest/v1",
+		SourceApp:     "news-briefing",
+	}
+	if briefing == nil {
+		return manifest
+	}
+	manifest.Document = cardManifestDoc{
+		Title:   briefingTitle(briefing.Date, briefing.Period),
+		Date:    isoBriefingDate(briefing.Date),
+		Period:  briefing.Period,
+		Summary: briefingManifestSummary(briefing.StructuredSummary),
+	}
+	if briefing.StructuredSummary == nil {
+		manifest.Items = []cardManifestItem{}
+		return manifest
+	}
+	for _, story := range briefing.StructuredSummary.Stories {
+		if strings.TrimSpace(story.Category) != "AI/科技" {
+			continue
+		}
+		item := cardManifestItem{
+			ID:       stableManifestItemID(story, briefing.Articles),
+			Category: strings.TrimSpace(story.Category),
+			Title:    strings.TrimSpace(story.Title),
+			Summary:  strings.TrimSpace(story.Summary),
+			Impact:   strings.TrimSpace(story.Impact),
+		}
+		if source := firstSourceArticle(story.SourceArticleIDs, briefing.Articles); source != nil {
+			item.Source = strings.TrimSpace(source.Source)
+			item.URL = strings.TrimSpace(source.Link)
+			if !source.Published.IsZero() {
+				item.PublishedAt = source.Published.Format(time.RFC3339)
+			}
+		}
+		if image := cardManifestLocalImage(story.ImageURL, localizedImages); image != "" {
+			item.Image = &cardManifestImage{Src: image, Alt: markdownImageAlt(item.Title)}
+		}
+		manifest.Items = append(manifest.Items, item)
+	}
+	return manifest
+}
+
+func cardManifestLocalImage(raw string, localizedImages map[string]string) string {
+	image := html.UnescapeString(strings.TrimSpace(raw))
+	if image == "" {
+		return ""
+	}
+	if local := strings.TrimSpace(localizedImages[image]); local != "" {
+		return local
+	}
+	if !isRemoteMarkdownImage(image) {
+		return image
+	}
+	return ""
+}
+
+func briefingManifestSummary(summary *model.BriefingSummary) []string {
+	if summary == nil {
+		return []string{}
+	}
+	items := []string{}
+	for _, group := range summary.OverviewGroups {
+		for _, item := range group.Items {
+			item = strings.TrimSpace(strings.TrimPrefix(item, "- "))
+			if item != "" {
+				items = append(items, item)
+			}
+		}
+	}
+	return items
+}
+
+func isoBriefingDate(date string) string {
+	if t, err := time.Parse("06.01.02", strings.TrimSpace(date)); err == nil {
+		return t.Format("2006-01-02")
+	}
+	if t, err := time.Parse("2006-01-02", strings.TrimSpace(date)); err == nil {
+		return t.Format("2006-01-02")
+	}
+	return ""
+}
+
+func firstSourceArticle(ids []int, articles []model.Article) *model.Article {
+	for _, id := range ids {
+		idx := id - 1
+		if idx >= 0 && idx < len(articles) {
+			return &articles[idx]
+		}
+	}
+	return nil
+}
+
+func stableManifestItemID(story model.BriefingStory, articles []model.Article) string {
+	parts := []string{strings.TrimSpace(story.Category), strings.TrimSpace(story.Title)}
+	if source := firstSourceArticle(story.SourceArticleIDs, articles); source != nil {
+		parts = append(parts, strings.TrimSpace(source.Link), strings.TrimSpace(source.Source))
+	}
+	sum := sha256.Sum256([]byte(strings.Join(parts, "\x00")))
+	return hex.EncodeToString(sum[:])[:16]
 }
 
 func briefingAssetDirName(date string, period string) string {

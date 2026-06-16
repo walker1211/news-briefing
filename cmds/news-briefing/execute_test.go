@@ -130,6 +130,10 @@ func TestRenderBriefingRunsPublishHookAfterMarkdownWrite(t *testing.T) {
 	if hook.MarkdownFile != markdownPath {
 		t.Fatalf("MarkdownFile = %q, want %q", hook.MarkdownFile, markdownPath)
 	}
+	wantManifestPath := strings.TrimSuffix(markdownPath, ".md") + ".card-manifest.json"
+	if hook.CardManifestFile != wantManifestPath {
+		t.Fatalf("CardManifestFile = %q, want %q", hook.CardManifestFile, wantManifestPath)
+	}
 	if hook.SourceApp != "news-briefing" {
 		t.Fatalf("SourceApp = %q, want news-briefing", hook.SourceApp)
 	}
@@ -178,6 +182,10 @@ func TestRenderBriefingPassesAbsoluteMarkdownPathToPublishHook(t *testing.T) {
 	}
 	if hook.MarkdownFile != want {
 		t.Fatalf("MarkdownFile = %q, want absolute path %q", hook.MarkdownFile, want)
+	}
+	wantManifest := strings.TrimSuffix(want, ".md") + ".card-manifest.json"
+	if hook.CardManifestFile != wantManifest {
+		t.Fatalf("CardManifestFile = %q, want absolute path %q", hook.CardManifestFile, wantManifest)
 	}
 }
 

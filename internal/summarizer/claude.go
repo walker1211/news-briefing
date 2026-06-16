@@ -467,13 +467,22 @@ func SummarizeContext(ctx context.Context, articles []model.Article, categoryOrd
 	return legacyDefaultRunner().SummarizeContext(ctx, articles, categoryOrder, loc)
 }
 
+func SummarizeBriefingContext(ctx context.Context, articles []model.Article, categoryOrder []string, loc *time.Location) (model.BriefingSummary, string, error) {
+	return legacyDefaultRunner().SummarizeBriefingContext(ctx, articles, categoryOrder, loc)
+}
+
 func (r *Runner) Summarize(articles []model.Article, categoryOrder []string, loc *time.Location) (string, error) {
 	return r.SummarizeContext(context.Background(), articles, categoryOrder, loc)
 }
 
 func (r *Runner) SummarizeContext(ctx context.Context, articles []model.Article, categoryOrder []string, loc *time.Location) (string, error) {
+	_, markdown, err := r.SummarizeBriefingContext(ctx, articles, categoryOrder, loc)
+	return markdown, err
+}
+
+func (r *Runner) SummarizeBriefingContext(ctx context.Context, articles []model.Article, categoryOrder []string, loc *time.Location) (model.BriefingSummary, string, error) {
 	if len(articles) == 0 {
-		return "今日暂无符合筛选条件的新闻。", nil
+		return model.BriefingSummary{}, "今日暂无符合筛选条件的新闻。", nil
 	}
 
 	promptArticles := output.OrderedArticleList(articles, categoryOrder)
@@ -482,14 +491,14 @@ func (r *Runner) SummarizeContext(ctx context.Context, articles []model.Article,
 
 	raw, err := r.callClaudeContext(ctx, prompt, r.summarizeExtraFlags()...)
 	if err != nil {
-		return "", err
+		return model.BriefingSummary{}, "", err
 	}
 	structured, err := parseBriefingSummaryJSON(raw)
 	if err != nil {
-		return "", fmt.Errorf("parse structured briefing: %w", err)
+		return model.BriefingSummary{}, "", fmt.Errorf("parse structured briefing: %w", err)
 	}
 	structured = validateBriefingSummaryImages(structured, promptArticles)
-	return output.StructuredBriefingMarkdown(structured, categoryOrder), nil
+	return structured, output.StructuredBriefingMarkdown(structured, categoryOrder), nil
 }
 
 func parseBriefingSummaryJSON(raw string) (model.BriefingSummary, error) {

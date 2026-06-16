@@ -269,6 +269,8 @@ publish_hook:
     - "{date}"
     - --period
     - "{period}"
+    - --xhs-card-manifest
+    - "{xhs_card_manifest}"
     - --channels
     - wechat,xhs
     - --mode
