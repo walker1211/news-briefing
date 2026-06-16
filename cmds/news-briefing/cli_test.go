@@ -73,6 +73,50 @@ func TestParseArgsXRoutes(t *testing.T) {
 	}
 }
 
+func TestParseArgsXReady(t *testing.T) {
+	cmd, err := parseArgs([]string{"x", "ready", "--from", "2026-06-16T08:00:00+08:00", "--to", "2026-06-16T18:00:00+08:00", "--period", "1800"})
+	if err != nil {
+		t.Fatalf("parseArgs() error = %v", err)
+	}
+	ready, ok := cmd.(xReadyCommand)
+	if !ok {
+		t.Fatalf("command type = %T", cmd)
+	}
+	if ready.fromRaw != "2026-06-16T08:00:00+08:00" || ready.toRaw != "2026-06-16T18:00:00+08:00" || ready.period != "1800" {
+		t.Fatalf("x ready command = %#v", ready)
+	}
+}
+
+func TestParseArgsXReadyRejects(t *testing.T) {
+	t.Run("missing from", func(t *testing.T) {
+		_, err := parseArgs([]string{"x", "ready", "--to", "2026-06-16 18:00"})
+		if err == nil || !strings.Contains(err.Error(), "--from") {
+			t.Fatalf("parseArgs() error = %v, want missing --from", err)
+		}
+	})
+
+	t.Run("missing to", func(t *testing.T) {
+		_, err := parseArgs([]string{"x", "ready", "--from", "2026-06-16 08:00"})
+		if err == nil || !strings.Contains(err.Error(), "--to") {
+			t.Fatalf("parseArgs() error = %v, want missing --to", err)
+		}
+	})
+
+	t.Run("invalid period", func(t *testing.T) {
+		_, err := parseArgs([]string{"x", "ready", "--from", "2026-06-16 08:00", "--to", "2026-06-16 18:00", "--period", "2460"})
+		if err == nil || !strings.Contains(err.Error(), "HHMM") {
+			t.Fatalf("parseArgs() error = %v, want invalid period", err)
+		}
+	})
+
+	t.Run("unknown flag", func(t *testing.T) {
+		_, err := parseArgs([]string{"x", "ready", "--from", "2026-06-16 08:00", "--to", "2026-06-16 18:00", "--bad"})
+		if err == nil || !strings.Contains(err.Error(), "unknown flag for x ready") {
+			t.Fatalf("parseArgs() error = %v, want unknown flag", err)
+		}
+	})
+}
+
 func TestParseArgsXRoutesRejects(t *testing.T) {
 	t.Run("missing subcommand", func(t *testing.T) {
 		_, err := parseArgs([]string{"x"})

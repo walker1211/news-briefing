@@ -101,13 +101,14 @@ Commands:
   news-briefing fetch [--zh]      仅抓取新闻，显示原始文章列表（--zh 翻译成中文）
   news-briefing alerts            打印过去 24 小时 X 强事件候选（不发邮件，不调用 AI）
   news-briefing x routes          导出 rsshub-stack 可用的 X 账号 route 列表
+  news-briefing x ready [flags]   上游 X visible 数据落地后立即处理指定窗口
   news-briefing serve             守护模式，按 configs/config.yaml 中 schedule 配置自动执行
   news-briefing deep <topic>      深挖某话题，生成话题深挖包
   news-briefing resend-md --file <path>  按已有 Markdown 重发邮件
   news-briefing help              显示此帮助
 
 Note:
-  可执行文件名为 news-briefing；子命令包括 run / regen / fetch / alerts / x routes / serve / deep / resend-md / help
+  可执行文件名为 news-briefing；子命令包括 run / regen / fetch / alerts / x routes / x ready / serve / deep / resend-md / help
 
 Flags (for run):
   --raw                  同时显示原始文章列表
@@ -130,6 +131,12 @@ Flags (for fetch):
 Flags (for alerts):
   无；读取 x_accounts NDJSON，按过去 24 小时和强事件词过滤
 
+Flags (for x ready):
+  --from "YYYY-MM-DD HH:MM" 或 RFC3339  开始时间（人工格式按 schedule_timezone 解析）
+  --to "YYYY-MM-DD HH:MM" 或 RFC3339    结束时间（人工格式按 schedule_timezone 解析）
+  --period HHMM                         可选，默认取 --to 在 schedule_timezone 下的 HHMM
+  该命令供上游 X visible 数据落地后回调用；cron 仍按 schedule_delay 兜底
+
 Flags (for deep):
   --from "YYYY-MM-DD HH:MM"   可选开始时间（按 schedule_timezone 解析，未配置时使用系统本地时区）
   --to "YYYY-MM-DD HH:MM"     可选结束时间（按 schedule_timezone 解析，未配置时使用系统本地时区）
@@ -149,6 +156,7 @@ Examples:
   news-briefing alerts
   news-briefing x routes
   news-briefing x routes > ../rsshub-stack/routes/x-accounts.txt
+  news-briefing x ready --from "2026-06-16T08:00:00+08:00" --to "2026-06-16T18:00:00+08:00"
   news-briefing deep "OpenAI"
   news-briefing deep "Claude" --send-email
   news-briefing deep "Claude" --ignore-seen

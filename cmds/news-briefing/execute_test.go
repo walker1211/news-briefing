@@ -845,6 +845,160 @@ func TestExecuteRegenRejectsToBeforeFromAfterTimezoneParsing(t *testing.T) {
 	}
 }
 
+func TestXReadyWindowParsesRFC3339AndDerivesPeriodInConfiguredTimezone(t *testing.T) {
+	loc, err := time.LoadLocation("Asia/Shanghai")
+	if err != nil {
+		t.Fatalf("LoadLocation() error = %v", err)
+	}
+	app := &app{cfg: &config.Config{ScheduleLocation: loc}}
+
+	window, err := app.xReadyWindow(xReadyCommand{fromRaw: "2026-06-16T08:00:00+08:00", toRaw: "2026-06-16T18:00:00+08:00"})
+	if err != nil {
+		t.Fatalf("xReadyWindow() error = %v", err)
+	}
+	wantFrom := time.Date(2026, 6, 16, 8, 0, 0, 0, loc)
+	wantTo := time.Date(2026, 6, 16, 18, 0, 0, 0, loc)
+	if window.Expr != "x-ready-callback" || window.Period != "1800" || !window.From.Equal(wantFrom) || !window.To.Equal(wantTo) {
+		t.Fatalf("window = %#v, want expr x-ready-callback period 1800 from %s to %s", window, wantFrom, wantTo)
+	}
+}
+
+func TestXReadyWindowParsesLocalTimeAndRejectsEmptyWindow(t *testing.T) {
+	loc, err := time.LoadLocation("America/Los_Angeles")
+	if err != nil {
+		t.Fatalf("LoadLocation() error = %v", err)
+	}
+	app := &app{cfg: &config.Config{ScheduleLocation: loc}}
+
+	window, err := app.xReadyWindow(xReadyCommand{fromRaw: "2026-06-16 08:00", toRaw: "2026-06-16 18:00", period: "1800"})
+	if err != nil {
+		t.Fatalf("xReadyWindow() error = %v", err)
+	}
+	if window.From.Location() != loc || window.To.Location() != loc || window.Period != "1800" {
+		t.Fatalf("window = %#v, want configured location and explicit period", window)
+	}
+
+	_, err = app.xReadyWindow(xReadyCommand{fromRaw: "2026-06-16 18:00", toRaw: "2026-06-16 18:00"})
+	if err == nil || !strings.Contains(err.Error(), "after --from") {
+		t.Fatalf("xReadyWindow() error = %v, want empty window rejection", err)
+	}
+}
+
+func TestExecuteXReadyRunsScheduledWindowOnce(t *testing.T) {
+	t.Setenv("EMAIL_SMTP_AUTH_CODE", "test")
+	loc, err := time.LoadLocation("Asia/Shanghai")
+	if err != nil {
+		t.Fatalf("LoadLocation() error = %v", err)
+	}
+	from := time.Date(2026, 6, 16, 8, 0, 0, 0, loc)
+	to := time.Date(2026, 6, 16, 18, 0, 0, 0, loc)
+	cfg := executeTestConfigWithEmail(t, model.OutputModeOriginalOnly)
+	cfg.ScheduleLocation = loc
+	calls := 0
+	emailCalls := 0
+	app := &app{
+		cfg: cfg,
+		fetch: fetchDeps{
+			fetchWindowDetailedContext: func(ctx context.Context, cfg *config.Config, gotFrom, gotTo time.Time, markSeen bool, ignoreSeen bool) (fetcher.FetchResult, error) {
+				calls++
+				if !gotFrom.Equal(from) || !gotTo.Equal(to) || markSeen || ignoreSeen {
+					t.Fatalf("fetch window = %s -> %s markSeen=%v ignoreSeen=%v", gotFrom, gotTo, markSeen, ignoreSeen)
+				}
+				return fetcher.FetchResult{Articles: sampleExecuteArticles()}, nil
+			},
+		},
+		output: silentBriefingOutputDeps("body"),
+		email: emailDeps{
+			sendEmail: func(*model.Briefing, *config.Config, []fetcher.FailedSource) error {
+				emailCalls++
+				return nil
+			},
+		},
+	}
+
+	cmd := xReadyCommand{fromRaw: "2026-06-16T08:00:00+08:00", toRaw: "2026-06-16T18:00:00+08:00"}
+	if err := execute(app, cmd); err != nil {
+		t.Fatalf("execute() error = %v", err)
+	}
+	if err := execute(app, cmd); err != nil {
+		t.Fatalf("execute() second error = %v", err)
+	}
+	if calls != 1 || emailCalls != 1 {
+		t.Fatalf("calls=%d emailCalls=%d, want one run due to done state", calls, emailCalls)
+	}
+}
+
+func TestScheduledBriefingOnceSkipsDoneAndFreshRunning(t *testing.T) {
+	window := scheduler.Window{Expr: "0 18 * * *", Period: "1800", From: time.Date(2026, 6, 16, 8, 0, 0, 0, time.UTC), To: time.Date(2026, 6, 16, 18, 0, 0, 0, time.UTC)}
+	app := newScheduledOnceTestApp(t, errors.New("should not run"))
+	paths := app.scheduledRunPaths(window)
+	if err := os.MkdirAll(filepath.Dir(paths.done), 0o755); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+	if err := os.WriteFile(paths.done, []byte("done"), 0o644); err != nil {
+		t.Fatalf("WriteFile(done) error = %v", err)
+	}
+	if err := app.runScheduledBriefingOnceContext(context.Background(), window, "x-ready-callback", false); err != nil {
+		t.Fatalf("runScheduledBriefingOnceContext(done) error = %v", err)
+	}
+
+	app = newScheduledOnceTestApp(t, errors.New("should not run"))
+	paths = app.scheduledRunPaths(window)
+	if err := os.MkdirAll(filepath.Dir(paths.running), 0o755); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+	if err := os.WriteFile(paths.running, []byte("running"), 0o644); err != nil {
+		t.Fatalf("WriteFile(running) error = %v", err)
+	}
+	if err := app.runScheduledBriefingOnceContext(context.Background(), window, "cron", false); err != nil {
+		t.Fatalf("runScheduledBriefingOnceContext(running) error = %v", err)
+	}
+}
+
+func TestScheduledBriefingOnceReplacesStaleRunningAndWritesFailed(t *testing.T) {
+	window := scheduler.Window{Expr: "0 18 * * *", Period: "1800", From: time.Date(2026, 6, 16, 8, 0, 0, 0, time.UTC), To: time.Date(2026, 6, 16, 18, 0, 0, 0, time.UTC)}
+	runErr := errors.New("fetch failed")
+	app := newScheduledOnceTestApp(t, runErr)
+	paths := app.scheduledRunPaths(window)
+	if err := os.MkdirAll(filepath.Dir(paths.running), 0o755); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+	if err := os.WriteFile(paths.running, []byte("running"), 0o644); err != nil {
+		t.Fatalf("WriteFile(running) error = %v", err)
+	}
+	stale := time.Now().Add(-scheduledRunRunningTTL - time.Minute)
+	if err := os.Chtimes(paths.running, stale, stale); err != nil {
+		t.Fatalf("Chtimes() error = %v", err)
+	}
+
+	err := app.runScheduledBriefingOnceContext(context.Background(), window, "cron", false)
+	if !errors.Is(err, runErr) {
+		t.Fatalf("runScheduledBriefingOnceContext() error = %v, want %v", err, runErr)
+	}
+	if _, err := os.Stat(paths.failed); err != nil {
+		t.Fatalf("failed marker missing: %v", err)
+	}
+}
+
+func newScheduledOnceTestApp(t *testing.T, runErr error) *app {
+	t.Helper()
+	calls := 0
+	cfg := executeTestConfig(t, model.OutputModeOriginalOnly)
+	return &app{
+		cfg: cfg,
+		fetch: fetchDeps{
+			fetchWindowDetailedContext: func(ctx context.Context, cfg *config.Config, from, to time.Time, markSeen bool, ignoreSeen bool) (fetcher.FetchResult, error) {
+				calls++
+				if runErr != nil {
+					return fetcher.FetchResult{}, runErr
+				}
+				return fetcher.FetchResult{Articles: sampleExecuteArticles()}, nil
+			},
+		},
+		output: silentBriefingOutputDeps("body"),
+	}
+}
+
 func TestRenderBriefingUsesComposedBodyForRun(t *testing.T) {
 	articles := sampleExecuteArticles()
 	var gotPath string

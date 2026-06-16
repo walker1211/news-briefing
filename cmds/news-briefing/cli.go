@@ -27,6 +27,11 @@ type regenCommand struct {
 type fetchCommand struct{ zh bool }
 type alertsCommand struct{}
 type xRoutesCommand struct{}
+type xReadyCommand struct {
+	fromRaw string
+	toRaw   string
+	period  string
+}
 type serveCommand struct{}
 type deepCommand struct {
 	topic      string
@@ -43,6 +48,7 @@ func (regenCommand) isCommand()    {}
 func (fetchCommand) isCommand()    {}
 func (alertsCommand) isCommand()   {}
 func (xRoutesCommand) isCommand()  {}
+func (xReadyCommand) isCommand()   {}
 func (serveCommand) isCommand()    {}
 func (deepCommand) isCommand()     {}
 func (resendMDCommand) isCommand() {}
@@ -153,13 +159,57 @@ func parseXCommand(args []string) (command, error) {
 	if len(args) == 0 {
 		return nil, fmt.Errorf("missing x subcommand")
 	}
-	if args[0] != "routes" {
+	switch args[0] {
+	case "routes":
+		if len(args) > 1 {
+			return nil, fmt.Errorf("unexpected arguments for x routes: %s", strings.Join(args[1:], " "))
+		}
+		return xRoutesCommand{}, nil
+	case "ready":
+		return parseXReadyCommand(args[1:])
+	default:
 		return nil, fmt.Errorf("unsupported x subcommand: %s", args[0])
 	}
-	if len(args) > 1 {
-		return nil, fmt.Errorf("unexpected arguments for x routes: %s", strings.Join(args[1:], " "))
+}
+
+func parseXReadyCommand(args []string) (command, error) {
+	cmd := xReadyCommand{}
+	for i := 0; i < len(args); i++ {
+		token := args[i]
+		switch token {
+		case "--from", "--to", "--period":
+			if i+1 >= len(args) || strings.HasPrefix(args[i+1], "--") {
+				return nil, fmt.Errorf("%s is required", token)
+			}
+			value := args[i+1]
+			i++
+			switch token {
+			case "--from":
+				cmd.fromRaw = value
+			case "--to":
+				cmd.toRaw = value
+			case "--period":
+				cmd.period = value
+			}
+		default:
+			if strings.HasPrefix(token, "-") {
+				return nil, fmt.Errorf("unknown flag for x ready: %s", token)
+			}
+			return nil, fmt.Errorf("unexpected arguments for x ready: %s", strings.Join(args[i:], " "))
+		}
 	}
-	return xRoutesCommand{}, nil
+	if strings.TrimSpace(cmd.fromRaw) == "" {
+		return nil, fmt.Errorf("--from is required")
+	}
+	if strings.TrimSpace(cmd.toRaw) == "" {
+		return nil, fmt.Errorf("--to is required")
+	}
+	if cmd.period != "" {
+		if err := validatePeriod(cmd.period); err != nil {
+			return nil, err
+		}
+	}
+	return cmd, nil
 }
 
 func hasFlagIn(args []string, flag string) bool {
