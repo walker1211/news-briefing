@@ -17,6 +17,14 @@ func briefingTitle(date, period string) string {
 	return fmt.Sprintf("国际资讯简报 %s %s %s", date, periodPrefix(period), briefingClock(period))
 }
 
+func aiTechBriefingTitle(date, period string) string {
+	label := "早报"
+	if len(period) >= 2 && period[:2] >= "18" {
+		label = "晚报"
+	}
+	return fmt.Sprintf("AI科技%s | %s %s", label, date, briefingClock(period))
+}
+
 func briefingMarkdownHeader(date, period string) string {
 	return "# " + briefingTitle(date, period)
 }

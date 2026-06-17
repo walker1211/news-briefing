@@ -150,7 +150,7 @@ func buildCardManifest(briefing *model.Briefing, localizedImages map[string]stri
 		return manifest
 	}
 	manifest.Document = cardManifestDoc{
-		Title:   briefingTitle(briefing.Date, briefing.Period),
+		Title:   aiTechBriefingTitle(briefing.Date, briefing.Period),
 		Date:    isoBriefingDate(briefing.Date),
 		Period:  briefing.Period,
 		Summary: briefingManifestSummary(briefing.StructuredSummary),
