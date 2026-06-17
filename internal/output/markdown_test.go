@@ -165,7 +165,7 @@ func TestWriteMarkdownWritesCardManifestFromStructuredBriefing(t *testing.T) {
 	if got.SchemaVersion != "card-article-manifest/v1" || got.SourceApp != "news-briefing" {
 		t.Fatalf("manifest identity = %#v", got)
 	}
-	if got.Document.Title != "国际资讯简报 26.06.16 晚间 18:00" || got.Document.Date != "2026-06-16" || got.Document.Period != "1800" {
+	if got.Document.Title != "AI科技晚报 | 26.06.16 18:00" || got.Document.Date != "2026-06-16" || got.Document.Period != "1800" {
 		t.Fatalf("manifest document = %#v", got.Document)
 	}
 	if strings.Join(got.Document.Summary, ",") != "要点一,要点二" {

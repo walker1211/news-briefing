@@ -267,6 +267,8 @@ func isRetryableAICLIError(err error, stdout string, stderr string) bool {
 	combined := strings.ToLower(strings.Join([]string{err.Error(), stdout, stderr}, "\n"))
 	for _, marker := range []string{
 		"server_error",
+		"internal_error",
+		"stream error",
 		"status: 500",
 		"status: 502",
 		"status: 503",
