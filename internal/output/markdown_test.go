@@ -249,6 +249,53 @@ func TestWriteMarkdownManifestOmitsImageWhenDownloadFails(t *testing.T) {
 	}
 }
 
+func TestWriteMarkdownManifestOmitsCardUnusableImage(t *testing.T) {
+	outputDir := t.TempDir()
+	imageURL := "https://cdn.example.com/openai.png"
+	path, err := writeMarkdownWithImageDownloader(&model.Briefing{
+		Date:   "26.06.16",
+		Period: "0800",
+		Articles: []model.Article{{
+			Title:    "OpenAI 发布新功能",
+			Source:   "OpenAI News",
+			Category: "AI/科技",
+			Link:     "https://example.com/openai",
+		}},
+		StructuredSummary: &model.BriefingSummary{
+			OverviewGroups: []model.BriefingOverviewGroup{{Category: "AI/科技", Items: []string{"要点一"}}},
+			Stories:        []model.BriefingStory{{Category: "AI/科技", Title: "OpenAI 发布新功能", Summary: "摘要正文", Impact: "影响正文", ImageURL: imageURL, SourceArticleIDs: []int{1}}},
+		},
+		RawContent: "## 今日速览\n\n- 要点一\n\n## AI/科技\n\n### OpenAI 发布新功能\n![OpenAI 发布新功能](" + imageURL + ")\n**摘要：** 摘要正文",
+	}, outputDir, func(rawURL string, path string) error {
+		if rawURL != imageURL {
+			t.Fatalf("download URL = %q, want %q", rawURL, imageURL)
+		}
+		return writeValidatedMarkdownImage(path, testPNGBytes(t, 140, 140))
+	})
+	if err != nil {
+		t.Fatalf("writeMarkdownWithImageDownloader() error = %v", err)
+	}
+
+	markdownData, err := os.ReadFile(filepath.Clean(path))
+	if err != nil {
+		t.Fatalf("ReadFile(markdown) error = %v", err)
+	}
+	markdown := string(markdownData)
+	if strings.Contains(markdown, imageURL) || strings.Contains(markdown, "![OpenAI 发布新功能]") {
+		t.Fatalf("markdown kept card-unusable image: %s", markdown)
+	}
+
+	manifestPath := strings.TrimSuffix(path, ".md") + ".card-manifest.json"
+	manifestData, err := os.ReadFile(filepath.Clean(manifestPath))
+	if err != nil {
+		t.Fatalf("ReadFile(manifest) error = %v", err)
+	}
+	manifest := string(manifestData)
+	if strings.Contains(manifest, "\"image\"") || strings.Contains(manifest, imageURL) {
+		t.Fatalf("manifest should omit card-unusable image: %s", manifest)
+	}
+}
+
 func captureStderr(t *testing.T, run func()) string {
 	t.Helper()
 	oldStderr := os.Stderr
@@ -454,7 +501,7 @@ func TestWriteMarkdownRemovesRemoteStoryImageWhenDownloadFails(t *testing.T) {
 }
 
 func TestDownloadMarkdownImageAcceptsLargeImageAndCompressesOutput(t *testing.T) {
-	imageData := paddedImageBytes(testJPEGBytes(t, 64, 64), 12*1024*1024)
+	imageData := paddedImageBytes(testJPEGBytes(t, 640, 373), 12*1024*1024)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "image/jpeg")
 		_, _ = w.Write(imageData)
@@ -486,7 +533,7 @@ func TestDownloadMarkdownImageAcceptsLargeImageAndCompressesOutput(t *testing.T)
 }
 
 func TestDownloadMarkdownImageRejectsImageOverThirtyMegabytes(t *testing.T) {
-	imageData := paddedImageBytes(testJPEGBytes(t, 64, 64), 31*1024*1024)
+	imageData := paddedImageBytes(testJPEGBytes(t, 640, 373), 31*1024*1024)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "image/jpeg")
 		_, _ = w.Write(imageData)
@@ -504,7 +551,7 @@ func TestDownloadMarkdownImageRejectsImageOverThirtyMegabytes(t *testing.T) {
 }
 
 func TestDownloadMarkdownImageAcceptsOctetStreamForImageURL(t *testing.T) {
-	imageData := testPNGBytes(t, 64, 64)
+	imageData := testPNGBytes(t, 640, 373)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if strings.Contains(r.Header.Get("Accept"), "image/webp") {
 			t.Fatalf("Accept header = %q, want no image/webp preference", r.Header.Get("Accept"))
@@ -544,10 +591,43 @@ func TestDownloadMarkdownImageRejectsTinyImage(t *testing.T) {
 	}
 }
 
+func TestDownloadMarkdownImageRejectsCardUnusableImage(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "image/png")
+		_, _ = w.Write(testPNGBytes(t, 140, 140))
+	}))
+	t.Cleanup(server.Close)
+
+	path := filepath.Join(t.TempDir(), "image.png")
+	err := downloadMarkdownImage(server.URL+"/image.png", path)
+	if err == nil || !strings.Contains(err.Error(), "too small for card") {
+		t.Fatalf("downloadMarkdownImage() error = %v, want too small for card", err)
+	}
+	if _, statErr := os.Stat(path); !os.IsNotExist(statErr) {
+		t.Fatalf("downloaded card-unusable image exists, stat error = %v", statErr)
+	}
+}
+
+func TestDownloadMarkdownImageAcceptsMediumCardImage(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "image/png")
+		_, _ = w.Write(testPNGBytes(t, 640, 373))
+	}))
+	t.Cleanup(server.Close)
+
+	path := filepath.Join(t.TempDir(), "image.png")
+	if err := downloadMarkdownImage(server.URL+"/image.png", path); err != nil {
+		t.Fatalf("downloadMarkdownImage() error = %v", err)
+	}
+	if _, err := os.Stat(path); err != nil {
+		t.Fatalf("downloaded medium card image missing: %v", err)
+	}
+}
+
 func TestDownloadMarkdownImageConvertsMismatchedImageFormat(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "image/jpeg")
-		_, _ = w.Write(testPNGBytes(t, 64, 64))
+		_, _ = w.Write(testPNGBytes(t, 640, 373))
 	}))
 	t.Cleanup(server.Close)
 
@@ -564,13 +644,13 @@ func TestDownloadMarkdownImageConvertsMismatchedImageFormat(t *testing.T) {
 	if err != nil {
 		t.Fatalf("jpeg.DecodeConfig() error = %v", err)
 	}
-	if config.Width != 64 || config.Height != 64 {
-		t.Fatalf("decoded JPEG size = %dx%d, want 64x64", config.Width, config.Height)
+	if config.Width != 640 || config.Height != 373 {
+		t.Fatalf("decoded JPEG size = %dx%d, want 640x373", config.Width, config.Height)
 	}
 }
 
 func TestDownloadMarkdownImageFallsBackToEmbeddedImageURL(t *testing.T) {
-	imageData := testPNGBytes(t, 64, 64)
+	imageData := testPNGBytes(t, 640, 373)
 	var requested []string
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		requested = append(requested, r.URL.Path)
@@ -607,7 +687,7 @@ func TestDownloadMarkdownImageFallsBackToEmbeddedImageURL(t *testing.T) {
 }
 
 func TestDownloadMarkdownImageRetriesTemporaryFailures(t *testing.T) {
-	imageData := testPNGBytes(t, 64, 64)
+	imageData := testPNGBytes(t, 640, 373)
 	attemptTimes := make([]time.Time, 0, markdownImageDownloadAttempts)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		attemptTimes = append(attemptTimes, time.Now())
