@@ -34,6 +34,8 @@ const maxMarkdownImageBytes = 30 * 1024 * 1024
 const maxMarkdownImageOutputBytes = 5 * 1024 * 1024
 const minMarkdownImageWidth = 32
 const minMarkdownImageHeight = 32
+const minCardMarkdownImageShortEdge = 300
+const minCardMarkdownImageLongEdge = 600
 const markdownImageDownloadAttempts = 3
 const markdownImageRetryDelay = 200 * time.Millisecond
 const markdownImageResizePercent = 80
@@ -380,6 +382,9 @@ func writeValidatedMarkdownImage(path string, data []byte) error {
 	if config.Width < minMarkdownImageWidth || config.Height < minMarkdownImageHeight {
 		return fmt.Errorf("download image: dimensions %dx%d too small", config.Width, config.Height)
 	}
+	if !isCardUsableMarkdownImageSize(config.Width, config.Height) {
+		return fmt.Errorf("download image: dimensions %dx%d too small for card", config.Width, config.Height)
+	}
 	ext := strings.ToLower(filepath.Ext(path))
 	if markdownImageFormatMatchesExtension(format, ext) && len(data) <= maxMarkdownImageOutputBytes {
 		return statefile.WriteAtomicReplaceOnly(path, data, 0o644)
@@ -402,6 +407,15 @@ func writeValidatedMarkdownImage(path string, data []byte) error {
 	default:
 		return fmt.Errorf("download image: format %s does not match extension %s", format, ext)
 	}
+}
+
+func isCardUsableMarkdownImageSize(width int, height int) bool {
+	shortEdge := width
+	longEdge := height
+	if shortEdge > longEdge {
+		shortEdge, longEdge = longEdge, shortEdge
+	}
+	return shortEdge >= minCardMarkdownImageShortEdge && longEdge >= minCardMarkdownImageLongEdge
 }
 
 func markdownImageFormatMatchesExtension(format string, ext string) bool {
