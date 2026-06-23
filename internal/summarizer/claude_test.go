@@ -449,6 +449,55 @@ func TestCallClaudeRetriesInternalStreamError(t *testing.T) {
 	}
 }
 
+func TestCallClaudeRetriesGenericRetryableAPIError(t *testing.T) {
+	dir := t.TempDir()
+	oldPath := os.Getenv("PATH")
+	t.Cleanup(func() {
+		_ = os.Setenv("PATH", oldPath)
+		ResetCommandForTest()
+	})
+
+	statePath := filepath.Join(dir, "attempts.txt")
+	commandName := "generic-api-error-ai"
+	if runtime.GOOS == "windows" {
+		commandName += ".bat"
+	}
+	commandPath := filepath.Join(dir, commandName)
+	script := "#!/bin/sh\n" +
+		"COUNT=0\n" +
+		"if [ -f \"" + statePath + "\" ]; then COUNT=$(cat \"" + statePath + "\"); fi\n" +
+		"COUNT=$((COUNT+1))\n" +
+		"printf '%s' \"$COUNT\" > \"" + statePath + "\"\n" +
+		"if [ \"$COUNT\" -eq 1 ]; then\n" +
+		"  printf 'API Error: An error occurred while processing your request. You can retry your request, or contact us through our help center if the error persists.'\n" +
+		"  exit 1\n" +
+		"fi\n" +
+		"printf 'final body'\n"
+	if err := os.WriteFile(commandPath, []byte(script), 0o755); err != nil {
+		t.Fatalf("write fake cli: %v", err)
+	}
+	if err := os.Setenv("PATH", dir+string(os.PathListSeparator)+oldPath); err != nil {
+		t.Fatalf("set PATH: %v", err)
+	}
+
+	runner := NewRunner("generic-api-error-ai", nil, nil, true, "", "")
+	runner.retrySleep = func(context.Context, time.Duration) error { return nil }
+	got, err := runner.callClaudeWithKind(callKindSummarize, "hello world")
+	if err != nil {
+		t.Fatalf("callClaudeWithKind() error = %v", err)
+	}
+	if got != "final body" {
+		t.Fatalf("callClaudeWithKind() = %q, want %q", got, "final body")
+	}
+	data, err := os.ReadFile(statePath)
+	if err != nil {
+		t.Fatalf("ReadFile() attempts error = %v", err)
+	}
+	if strings.TrimSpace(string(data)) != "2" {
+		t.Fatalf("attempt count = %q, want %q", strings.TrimSpace(string(data)), "2")
+	}
+}
+
 func TestCallClaudeRetriesCCSStartupLockError(t *testing.T) {
 	dir := t.TempDir()
 	oldPath := os.Getenv("PATH")
