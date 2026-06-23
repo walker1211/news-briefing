@@ -269,6 +269,7 @@ func isRetryableAICLIError(err error, stdout string, stderr string) bool {
 		"server_error",
 		"internal_error",
 		"stream error",
+		"you can retry your request",
 		"status: 500",
 		"status: 502",
 		"status: 503",
