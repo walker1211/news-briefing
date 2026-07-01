@@ -20,15 +20,16 @@ import (
 )
 
 type app struct {
-	cfg         *config.Config
-	now         func() time.Time
-	scheduler   schedulerDeps
-	fetch       fetchDeps
-	watch       watchDeps
-	ai          aiDeps
-	output      outputDeps
-	email       emailDeps
-	publishHook func(context.Context, config.PublishHookConfig, publishHookRequest) error
+	cfg                 *config.Config
+	now                 func() time.Time
+	scheduler           schedulerDeps
+	fetch               fetchDeps
+	watch               watchDeps
+	ai                  aiDeps
+	output              outputDeps
+	email               emailDeps
+	publishHook         func(context.Context, config.PublishHookConfig, publishHookRequest) error
+	suppressPublishHook bool
 }
 
 type schedulerDeps struct {
@@ -215,6 +216,7 @@ func executeContext(ctx context.Context, app *app, cmd command) error {
 	if err := app.preflightCommand(cmd); err != nil {
 		return err
 	}
+	app.suppressPublishHook = commandSuppressesPublishHook(cmd)
 	switch c := cmd.(type) {
 	case runCommand:
 		return app.runBriefingContext(ctx, "run", currentPeriod(), c.raw, !c.noEmail)
@@ -279,6 +281,21 @@ func commandSendsEmail(cmd command) bool {
 		return c.sendEmail
 	case resendMDCommand:
 		return true
+	default:
+		return false
+	}
+}
+
+func commandSuppressesPublishHook(cmd command) bool {
+	switch c := cmd.(type) {
+	case runCommand:
+		return c.noPublish
+	case regenCommand:
+		return c.noPublish
+	case serveCommand:
+		return c.noPublish
+	case xReadyCommand:
+		return c.noPublish
 	default:
 		return false
 	}
@@ -933,7 +950,10 @@ func (app *app) renderBriefingContext(ctx context.Context, commandPath string, d
 
 func (app *app) runPostMarkdownActions(ctx context.Context, briefing *model.Briefing, markdownPath string, sendEmail bool, _ []fetcher.FailedSource) error {
 	hookDone := make(chan error, 1)
-	if app.cfg != nil && app.cfg.PublishHook.Enabled {
+	if app.suppressPublishHook {
+		logutil.Println("Skipping publish hook")
+		hookDone <- nil
+	} else if app.cfg != nil && app.cfg.PublishHook.Enabled {
 		publishMarkdownPath := markdownPath
 		if absPath, err := filepath.Abs(markdownPath); err == nil {
 			publishMarkdownPath = absPath

@@ -9,8 +9,9 @@ import (
 type command interface{ isCommand() }
 
 type runCommand struct {
-	raw     bool
-	noEmail bool
+	raw       bool
+	noEmail   bool
+	noPublish bool
 }
 
 type regenCommand struct {
@@ -20,6 +21,7 @@ type regenCommand struct {
 	ignoreSeen          bool
 	sendEmail           bool
 	raw                 bool
+	noPublish           bool
 	xVisibleHistoryDays int
 	xVisibleHistoryDir  string
 }
@@ -28,11 +30,12 @@ type fetchCommand struct{ zh bool }
 type alertsCommand struct{}
 type xRoutesCommand struct{}
 type xReadyCommand struct {
-	fromRaw string
-	toRaw   string
-	period  string
+	fromRaw   string
+	toRaw     string
+	period    string
+	noPublish bool
 }
-type serveCommand struct{}
+type serveCommand struct{ noPublish bool }
 type deepCommand struct {
 	topic      string
 	fromRaw    string
@@ -82,7 +85,7 @@ func parseArgs(args []string) (command, error) {
 	case "alerts":
 		return alertsCommand{}, nil
 	case "serve":
-		return serveCommand{}, nil
+		return serveCommand{noPublish: hasFlagIn(cmdArgs, "--no-publish")}, nil
 	case "deep":
 		return parseDeepCommand(cmdArgs)
 	case "resend-md":
@@ -95,7 +98,7 @@ func parseArgs(args []string) (command, error) {
 }
 
 func parseRunCommand(args []string) (command, error) {
-	return runCommand{raw: hasFlagIn(args, "--raw"), noEmail: hasFlagIn(args, "--no-email")}, nil
+	return runCommand{raw: hasFlagIn(args, "--raw"), noEmail: hasFlagIn(args, "--no-email"), noPublish: hasFlagIn(args, "--no-publish")}, nil
 }
 
 func parseRegenCommand(args []string) (command, error) {
@@ -127,7 +130,7 @@ func parseRegenCommand(args []string) (command, error) {
 		historyDays = parsed
 	}
 	historyDir, _ := readStringFlag(args, "--x-visible-history-dir")
-	return regenCommand{fromRaw: fromRaw, toRaw: toRaw, period: period, ignoreSeen: hasFlagIn(args, "--ignore-seen"), sendEmail: hasFlagIn(args, "--send-email"), raw: hasFlagIn(args, "--raw"), xVisibleHistoryDays: historyDays, xVisibleHistoryDir: historyDir}, nil
+	return regenCommand{fromRaw: fromRaw, toRaw: toRaw, period: period, ignoreSeen: hasFlagIn(args, "--ignore-seen"), sendEmail: hasFlagIn(args, "--send-email"), raw: hasFlagIn(args, "--raw"), noPublish: hasFlagIn(args, "--no-publish"), xVisibleHistoryDays: historyDays, xVisibleHistoryDir: historyDir}, nil
 }
 
 func parseFetchCommand(args []string) (command, error) {
@@ -177,6 +180,8 @@ func parseXReadyCommand(args []string) (command, error) {
 	for i := 0; i < len(args); i++ {
 		token := args[i]
 		switch token {
+		case "--no-publish":
+			cmd.noPublish = true
 		case "--from", "--to", "--period":
 			if i+1 >= len(args) || strings.HasPrefix(args[i+1], "--") {
 				return nil, fmt.Errorf("%s is required", token)
@@ -316,17 +321,19 @@ func preValidateCommandArgs(cmd string, args []string) error {
 func commandValidationRules(cmd string) (map[string]struct{}, map[string]struct{}, bool) {
 	switch cmd {
 	case "run":
-		return map[string]struct{}{"--raw": {}, "--no-email": {}}, nil, false
+		return map[string]struct{}{"--raw": {}, "--no-email": {}, "--no-publish": {}}, nil, false
 	case "fetch":
 		return map[string]struct{}{"--zh": {}}, nil, false
-	case "alerts", "serve", "help":
+	case "serve":
+		return map[string]struct{}{"--no-publish": {}}, nil, false
+	case "alerts", "help":
 		return nil, nil, false
 	case "deep":
 		return map[string]struct{}{"--ignore-seen": {}, "--send-email": {}}, map[string]struct{}{"--from": {}, "--to": {}}, true
 	case "resend-md":
 		return nil, map[string]struct{}{"--file": {}}, false
 	case "regen":
-		return map[string]struct{}{"--ignore-seen": {}, "--send-email": {}, "--raw": {}}, map[string]struct{}{"--from": {}, "--to": {}, "--period": {}, "--x-visible-history-days": {}, "--x-visible-history-dir": {}}, false
+		return map[string]struct{}{"--ignore-seen": {}, "--send-email": {}, "--raw": {}, "--no-publish": {}}, map[string]struct{}{"--from": {}, "--to": {}, "--period": {}, "--x-visible-history-days": {}, "--x-visible-history-dir": {}}, false
 	default:
 		return nil, nil, false
 	}
