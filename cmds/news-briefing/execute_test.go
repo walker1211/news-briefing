@@ -145,6 +145,73 @@ func TestRenderBriefingRunsPublishHookAfterMarkdownWrite(t *testing.T) {
 	}
 }
 
+func TestRenderBriefingSkipsPublishHookWhenSuppressed(t *testing.T) {
+	cfg := executeTestConfig(t, model.OutputModeOriginalOnly)
+	cfg.PublishHook = config.PublishHookConfig{
+		Enabled: true,
+		Command: "content-publisher",
+		Args:    []string{"publish-all", "--file", "{markdown_file}"},
+	}
+	hookCalled := false
+	app := &app{
+		cfg: cfg,
+		output: outputDeps{
+			printFailed:   func([]fetcher.FailedSource) {},
+			printArticles: func([]model.Article) {},
+			printCLI:      func(*model.Briefing) {},
+			composeBody: func(string, model.OutputMode, model.OutputContent) (string, error) {
+				return "body", nil
+			},
+			writeMarkdown: func(*model.Briefing, string) (string, error) {
+				return filepath.Join(cfg.Output.Dir, "briefing.md"), nil
+			},
+		},
+		publishHook: func(context.Context, config.PublishHookConfig, publishHookRequest) error {
+			hookCalled = true
+			return nil
+		},
+		suppressPublishHook: true,
+	}
+
+	if err := app.renderBriefingContext(context.Background(), "run", "26.06.04", "0800", sampleExecuteArticles(), nil, nil, nil, false, false); err != nil {
+		t.Fatalf("renderBriefingContext() error = %v", err)
+	}
+	if hookCalled {
+		t.Fatal("publish hook was called with suppressPublishHook=true")
+	}
+}
+
+func TestExecuteRegenNoPublishSuppressesConfiguredPublishHook(t *testing.T) {
+	cfg := executeTestConfig(t, model.OutputModeOriginalOnly)
+	cfg.PublishHook = config.PublishHookConfig{
+		Enabled: true,
+		Command: "content-publisher",
+		Args:    []string{"publish-all", "--file", "{markdown_file}"},
+	}
+	hookCalled := false
+	app := &app{
+		cfg: cfg,
+		fetch: fetchDeps{
+			fetchWindowDetailedContext: func(context.Context, *config.Config, time.Time, time.Time, bool, bool) (fetcher.FetchResult, error) {
+				return fetcher.FetchResult{Articles: sampleExecuteArticles()}, nil
+			},
+		},
+		output: silentBriefingOutputDeps("body"),
+		publishHook: func(context.Context, config.PublishHookConfig, publishHookRequest) error {
+			hookCalled = true
+			return nil
+		},
+	}
+
+	cmd := regenCommand{fromRaw: "2026-03-18 08:00", toRaw: "2026-03-18 14:00", period: "1400", noPublish: true}
+	if err := execute(app, cmd); err != nil {
+		t.Fatalf("execute() error = %v", err)
+	}
+	if hookCalled {
+		t.Fatal("publish hook was called for regen --no-publish")
+	}
+}
+
 func TestRenderBriefingPassesAbsoluteMarkdownPathToPublishHook(t *testing.T) {
 	cfg := executeTestConfig(t, model.OutputModeOriginalOnly)
 	cfg.PublishHook = config.PublishHookConfig{

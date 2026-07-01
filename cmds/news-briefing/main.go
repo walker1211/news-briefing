@@ -113,6 +113,7 @@ Note:
 Flags (for run):
   --raw                  同时显示原始文章列表
   --no-email             跳过邮件发送
+  --no-publish           跳过 publish_hook，即使配置已启用
 
 Flags (for regen):
   --from "YYYY-MM-DD HH:MM"   开始时间（按 schedule_timezone 解析，未配置时使用系统本地时区）
@@ -121,6 +122,7 @@ Flags (for regen):
   --ignore-seen               跳过已读状态文件（默认 <output.dir>/state/seen.json），仅做本批次内去重
   --send-email                发送邮件
   --raw                       同时显示原始文章列表
+  --no-publish                跳过 publish_hook，即使配置已启用
   --x-visible-history-days N   可选，从 X visible 历史归档读取，最多扫描 N 天窗口
   --x-visible-history-dir DIR  可选，覆盖 x_accounts.history_dir
   默认不发邮件，默认仍会写出 Markdown 文件
@@ -135,7 +137,11 @@ Flags (for x ready):
   --from "YYYY-MM-DD HH:MM" 或 RFC3339  开始时间（人工格式按 schedule_timezone 解析）
   --to "YYYY-MM-DD HH:MM" 或 RFC3339    结束时间（人工格式按 schedule_timezone 解析）
   --period HHMM                         可选，默认取 --to 在 schedule_timezone 下的 HHMM
+  --no-publish                          跳过 publish_hook，即使配置已启用
   该命令供上游 X visible 数据落地后回调用；cron 仍按 schedule_delay 兜底
+
+Flags (for serve):
+  --no-publish                跳过 publish_hook，即使配置已启用
 
 Flags (for deep):
   --from "YYYY-MM-DD HH:MM"   可选开始时间（按 schedule_timezone 解析，未配置时使用系统本地时区）
@@ -150,6 +156,7 @@ Examples:
   news-briefing run --raw
   news-briefing run --no-email
   news-briefing regen --from "2026-03-18 08:00" --to "2026-03-18 14:00"
+  news-briefing regen --from "2026-03-18 08:00" --to "2026-03-18 14:00" --no-publish
   news-briefing regen --from "2026-03-18 08:00" --to "2026-03-18 14:00" --period 1400 --ignore-seen --send-email
   news-briefing regen --from "2026-05-19 08:00" --to "2026-05-21 08:00" --ignore-seen --x-visible-history-days 2
   news-briefing fetch
@@ -157,6 +164,7 @@ Examples:
   news-briefing x routes
   news-briefing x routes > ../rsshub-stack/routes/x-accounts.txt
   news-briefing x ready --from "2026-06-16T08:00:00+08:00" --to "2026-06-16T18:00:00+08:00"
+  news-briefing x ready --from "2026-06-16T08:00:00+08:00" --to "2026-06-16T18:00:00+08:00" --no-publish
   news-briefing deep "OpenAI"
   news-briefing deep "Claude" --send-email
   news-briefing deep "Claude" --ignore-seen

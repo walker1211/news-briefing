@@ -6,7 +6,7 @@ import (
 )
 
 func TestParseArgsRun(t *testing.T) {
-	cmd, err := parseArgs([]string{"run", "--raw", "--no-email"})
+	cmd, err := parseArgs([]string{"run", "--raw", "--no-email", "--no-publish"})
 	if err != nil {
 		t.Fatalf("parseArgs() error = %v", err)
 	}
@@ -14,13 +14,13 @@ func TestParseArgsRun(t *testing.T) {
 	if !ok {
 		t.Fatalf("command type = %T", cmd)
 	}
-	if !run.raw || !run.noEmail {
+	if !run.raw || !run.noEmail || !run.noPublish {
 		t.Fatalf("run command = %#v", run)
 	}
 }
 
 func TestParseArgsRegen(t *testing.T) {
-	cmd, err := parseArgs([]string{"regen", "--from", "2026-03-18 08:00", "--to", "2026-03-18 14:00", "--period", "1400", "--ignore-seen", "--send-email", "--raw", "--x-visible-history-days", "2", "--x-visible-history-dir", "/tmp/x-visible/history"})
+	cmd, err := parseArgs([]string{"regen", "--from", "2026-03-18 08:00", "--to", "2026-03-18 14:00", "--period", "1400", "--ignore-seen", "--send-email", "--raw", "--no-publish", "--x-visible-history-days", "2", "--x-visible-history-dir", "/tmp/x-visible/history"})
 	if err != nil {
 		t.Fatalf("parseArgs() error = %v", err)
 	}
@@ -31,7 +31,7 @@ func TestParseArgsRegen(t *testing.T) {
 	if regen.fromRaw != "2026-03-18 08:00" || regen.toRaw != "2026-03-18 14:00" {
 		t.Fatalf("regen raw window = %#v", regen)
 	}
-	if regen.period != "1400" || !regen.ignoreSeen || !regen.sendEmail || !regen.raw {
+	if regen.period != "1400" || !regen.ignoreSeen || !regen.sendEmail || !regen.raw || !regen.noPublish {
 		t.Fatalf("regen command = %#v", regen)
 	}
 	if regen.xVisibleHistoryDays != 2 || regen.xVisibleHistoryDir != "/tmp/x-visible/history" {
@@ -74,7 +74,7 @@ func TestParseArgsXRoutes(t *testing.T) {
 }
 
 func TestParseArgsXReady(t *testing.T) {
-	cmd, err := parseArgs([]string{"x", "ready", "--from", "2026-06-16T08:00:00+08:00", "--to", "2026-06-16T18:00:00+08:00", "--period", "1800"})
+	cmd, err := parseArgs([]string{"x", "ready", "--from", "2026-06-16T08:00:00+08:00", "--to", "2026-06-16T18:00:00+08:00", "--period", "1800", "--no-publish"})
 	if err != nil {
 		t.Fatalf("parseArgs() error = %v", err)
 	}
@@ -82,7 +82,7 @@ func TestParseArgsXReady(t *testing.T) {
 	if !ok {
 		t.Fatalf("command type = %T", cmd)
 	}
-	if ready.fromRaw != "2026-06-16T08:00:00+08:00" || ready.toRaw != "2026-06-16T18:00:00+08:00" || ready.period != "1800" {
+	if ready.fromRaw != "2026-06-16T08:00:00+08:00" || ready.toRaw != "2026-06-16T18:00:00+08:00" || ready.period != "1800" || !ready.noPublish {
 		t.Fatalf("x ready command = %#v", ready)
 	}
 }
@@ -141,12 +141,16 @@ func TestParseArgsXRoutesRejects(t *testing.T) {
 }
 
 func TestParseArgsServe(t *testing.T) {
-	cmd, err := parseArgs([]string{"serve"})
+	cmd, err := parseArgs([]string{"serve", "--no-publish"})
 	if err != nil {
 		t.Fatalf("parseArgs() error = %v", err)
 	}
-	if _, ok := cmd.(serveCommand); !ok {
+	serve, ok := cmd.(serveCommand)
+	if !ok {
 		t.Fatalf("command type = %T", cmd)
+	}
+	if !serve.noPublish {
+		t.Fatalf("serve command = %#v", serve)
 	}
 }
 
