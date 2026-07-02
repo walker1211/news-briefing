@@ -276,6 +276,7 @@ func isRetryableAICLIError(err error, stdout string, stderr string) bool {
 		"status: 504",
 		"context canceled",
 		"timeout",
+		"timed out",
 		"i/o timeout",
 		"connection reset",
 		"lock file is already being held",
