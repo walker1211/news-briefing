@@ -174,6 +174,7 @@ type OutputCfg struct {
 	Dir                     string           `yaml:"dir"`
 	Mode                    model.OutputMode `yaml:"mode"`
 	IncludeFilteredArticles bool             `yaml:"include_filtered_articles"`
+	MaxArticlesByCategory   map[string]int   `yaml:"max_articles"`
 }
 
 type PublishHookConfig struct {
@@ -480,6 +481,14 @@ func (cfg *Config) Validate() error {
 	}
 	if err := cfg.Output.Mode.Validate(); err != nil {
 		return fmt.Errorf("validate output.mode: %w", err)
+	}
+	for category, limit := range cfg.Output.MaxArticlesByCategory {
+		if strings.TrimSpace(category) == "" {
+			return fmt.Errorf("validate output.max_articles: category must not be empty")
+		}
+		if limit <= 0 {
+			return fmt.Errorf("validate output.max_articles[%q]: must be greater than 0", category)
+		}
 	}
 	if strings.TrimSpace(cfg.AI.Command) == "" {
 		return fmt.Errorf("validate ai.command: must not be empty")

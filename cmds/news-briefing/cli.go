@@ -15,15 +15,16 @@ type runCommand struct {
 }
 
 type regenCommand struct {
-	fromRaw             string
-	toRaw               string
-	period              string
-	ignoreSeen          bool
-	sendEmail           bool
-	raw                 bool
-	noPublish           bool
-	xVisibleHistoryDays int
-	xVisibleHistoryDir  string
+	fromRaw               string
+	toRaw                 string
+	period                string
+	ignoreSeen            bool
+	sendEmail             bool
+	raw                   bool
+	noPublish             bool
+	xVisibleHistoryDays   int
+	xVisibleHistoryDir    string
+	maxArticlesByCategory map[string]int
 }
 
 type fetchCommand struct{ zh bool }
@@ -130,7 +131,15 @@ func parseRegenCommand(args []string) (command, error) {
 		historyDays = parsed
 	}
 	historyDir, _ := readStringFlag(args, "--x-visible-history-dir")
-	return regenCommand{fromRaw: fromRaw, toRaw: toRaw, period: period, ignoreSeen: hasFlagIn(args, "--ignore-seen"), sendEmail: hasFlagIn(args, "--send-email"), raw: hasFlagIn(args, "--raw"), noPublish: hasFlagIn(args, "--no-publish"), xVisibleHistoryDays: historyDays, xVisibleHistoryDir: historyDir}, nil
+	maxArticlesByCategory := map[string]int(nil)
+	if rawMaxArticles, ok := readStringFlag(args, "--max-articles"); ok {
+		parsed, err := parseCategoryArticleLimits(rawMaxArticles)
+		if err != nil {
+			return nil, err
+		}
+		maxArticlesByCategory = parsed
+	}
+	return regenCommand{fromRaw: fromRaw, toRaw: toRaw, period: period, ignoreSeen: hasFlagIn(args, "--ignore-seen"), sendEmail: hasFlagIn(args, "--send-email"), raw: hasFlagIn(args, "--raw"), noPublish: hasFlagIn(args, "--no-publish"), xVisibleHistoryDays: historyDays, xVisibleHistoryDir: historyDir, maxArticlesByCategory: maxArticlesByCategory}, nil
 }
 
 func parseFetchCommand(args []string) (command, error) {
@@ -255,6 +264,30 @@ func parsePositiveIntFlag(value string, flag string) (int, error) {
 	return parsed, nil
 }
 
+func parseCategoryArticleLimits(value string) (map[string]int, error) {
+	limits := make(map[string]int)
+	for _, item := range strings.Split(value, ",") {
+		item = strings.TrimSpace(item)
+		if item == "" {
+			continue
+		}
+		category, rawLimit, ok := strings.Cut(item, "=")
+		category = strings.TrimSpace(category)
+		if !ok || category == "" {
+			return nil, fmt.Errorf("--max-articles item %q must be CATEGORY=N", item)
+		}
+		limit, err := parsePositiveIntFlag(rawLimit, "--max-articles")
+		if err != nil {
+			return nil, err
+		}
+		limits[category] = limit
+	}
+	if len(limits) == 0 {
+		return nil, fmt.Errorf("--max-articles must include at least one CATEGORY=N item")
+	}
+	return limits, nil
+}
+
 func collectDeepTopicArgs(args []string) string {
 	var parts []string
 	for i := 0; i < len(args); i++ {
@@ -333,7 +366,7 @@ func commandValidationRules(cmd string) (map[string]struct{}, map[string]struct{
 	case "resend-md":
 		return nil, map[string]struct{}{"--file": {}}, false
 	case "regen":
-		return map[string]struct{}{"--ignore-seen": {}, "--send-email": {}, "--raw": {}, "--no-publish": {}}, map[string]struct{}{"--from": {}, "--to": {}, "--period": {}, "--x-visible-history-days": {}, "--x-visible-history-dir": {}}, false
+		return map[string]struct{}{"--ignore-seen": {}, "--send-email": {}, "--raw": {}, "--no-publish": {}}, map[string]struct{}{"--from": {}, "--to": {}, "--period": {}, "--x-visible-history-days": {}, "--x-visible-history-dir": {}, "--max-articles": {}}, false
 	default:
 		return nil, nil, false
 	}

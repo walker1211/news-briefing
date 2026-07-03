@@ -603,6 +603,10 @@ func (app *app) runBriefingContext(ctx context.Context, commandPath string, peri
 	if err != nil {
 		return err
 	}
+	result.articles, result.filteredArticles, err = applyBriefingArticleLimits(result.articles, result.filteredArticles, app.configuredArticleLimits())
+	if err != nil {
+		return err
+	}
 	return app.renderBriefingContext(ctx, commandPath, date, period, result.articles, result.filteredArticles, result.seenArticles, result.failed, showRaw, sendEmail, result.watchSiteErrorNotices...)
 }
 
@@ -617,6 +621,10 @@ func (app *app) runScheduledBriefingContext(ctx context.Context, window schedule
 	result, err := app.fetchBriefingArticlesWithWatch(ctx, window.To, date, window.Period, func(ctx context.Context) (fetcher.FetchResult, error) {
 		return app.fetchWindowArticlesDetailed(ctx, window.From, window.To, false, false)
 	})
+	if err != nil {
+		return err
+	}
+	result.articles, result.filteredArticles, err = applyBriefingArticleLimits(result.articles, result.filteredArticles, app.configuredArticleLimits())
 	if err != nil {
 		return err
 	}
@@ -847,7 +855,51 @@ func (app *app) runRegenContext(ctx context.Context, cmd regenCommand) error {
 	if err != nil {
 		return err
 	}
+	limits := app.configuredArticleLimits()
+	if len(cmd.maxArticlesByCategory) > 0 {
+		limits = cmd.maxArticlesByCategory
+	}
+	result.Articles, result.FilteredArticles, err = applyBriefingArticleLimits(result.Articles, result.FilteredArticles, limits)
+	if err != nil {
+		return err
+	}
 	return app.renderBriefingContext(ctx, "regen", to.Format("06.01.02"), period, result.Articles, result.FilteredArticles, nil, result.Failed, cmd.raw, cmd.sendEmail)
+}
+
+func (app *app) configuredArticleLimits() map[string]int {
+	if app == nil || app.cfg == nil {
+		return nil
+	}
+	return app.cfg.Output.MaxArticlesByCategory
+}
+
+func applyBriefingArticleLimits(articles []model.Article, filteredArticles []model.Article, limits map[string]int) ([]model.Article, []model.Article, error) {
+	if len(limits) == 0 {
+		return articles, filteredArticles, nil
+	}
+	before := len(articles)
+	articles = filterArticlesByCategoryLimits(articles, limits)
+	filteredArticles = nil
+	logutil.Printf("Filtered briefing articles before AI: %d -> %d", before, len(articles))
+	if len(articles) == 0 {
+		return nil, nil, fmt.Errorf("no articles remain after article limits")
+	}
+	return articles, filteredArticles, nil
+}
+
+func filterArticlesByCategoryLimits(articles []model.Article, limits map[string]int) []model.Article {
+	out := make([]model.Article, 0, len(articles))
+	counts := make(map[string]int, len(limits))
+	for _, article := range articles {
+		category := strings.TrimSpace(article.Category)
+		limit, ok := limits[category]
+		if !ok || counts[category] >= limit {
+			continue
+		}
+		out = append(out, article)
+		counts[category]++
+	}
+	return out
 }
 
 func (app *app) renderBriefing(commandPath string, date string, period string, articles []model.Article, filteredArticles []model.Article, seenArticles []model.Article, failed []fetcher.FailedSource, showRaw bool, sendEmail bool) error {

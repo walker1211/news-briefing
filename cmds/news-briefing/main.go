@@ -123,8 +123,9 @@ Flags (for regen):
   --send-email                发送邮件
   --raw                       同时显示原始文章列表
   --no-publish                跳过 publish_hook，即使配置已启用
-  --x-visible-history-days N   可选，从 X visible 历史归档读取，最多扫描 N 天窗口
-  --x-visible-history-dir DIR  可选，覆盖 x_accounts.history_dir
+  --x-visible-history-days N      可选，从 X visible 历史归档读取，最多扫描 N 天窗口
+  --x-visible-history-dir DIR     可选，覆盖 x_accounts.history_dir
+  --max-articles "分类=N,..."     可选，按分类设置进入本次简报的文章上限，例如 "AI/科技=70,国际政治=30"
   默认不发邮件，默认仍会写出 Markdown 文件
 
 Flags (for fetch):

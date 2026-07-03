@@ -52,6 +52,37 @@ proxy: {}
 	}
 }
 
+func TestLoadParsesOutputMaxArticles(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	content := `sources: []
+keywords: []
+email:
+  smtp_host: smtp.example.com
+  smtp_port: 465
+  from: from@example.com
+  to: to@example.com
+schedule: []
+output:
+  max_articles:
+    "AI/科技": 70
+    "国际政治": 30
+proxy: {}
+`
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	want := map[string]int{"AI/科技": 70, "国际政治": 30}
+	if !reflect.DeepEqual(cfg.Output.MaxArticlesByCategory, want) {
+		t.Fatalf("Output.MaxArticlesByCategory = %v, want %v", cfg.Output.MaxArticlesByCategory, want)
+	}
+}
+
 func TestLoadParsesFetchRedditSourceDelayRange(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.yaml")
