@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -81,6 +82,7 @@ type emailDeps struct {
 	sendEmail           func(*model.Briefing, *config.Config, []fetcher.FailedSource) error
 	sendDeepEmail       func(string, *model.Briefing, *config.Config, []fetcher.FailedSource) error
 	resendMarkdownEmail func(string, *config.Config) error
+	sendAlertEmail      func(string, string, *config.Config) error
 }
 
 func newApp(cfg *config.Config) *app {
@@ -148,6 +150,7 @@ func newApp(cfg *config.Config) *app {
 			sendEmail:           emailSender.SendEmail,
 			sendDeepEmail:       emailSender.SendDeepEmail,
 			resendMarkdownEmail: emailSender.SendMarkdownFile,
+			sendAlertEmail:      emailSender.SendAlertEmail,
 		},
 		publishHook: runPublishHook,
 	}
@@ -597,16 +600,20 @@ func (app *app) runBriefingContext(ctx context.Context, commandPath string, peri
 	logutil.Println("Fetching news...")
 	now := app.currentTime()
 	date := now.Format("06.01.02")
+	fetchStarted := time.Now()
 	result, err := app.fetchBriefingArticlesWithWatch(ctx, now, date, period, func(ctx context.Context) (fetcher.FetchResult, error) {
 		return app.fetchAllArticlesDetailed(ctx, false)
 	})
 	if err != nil {
 		return err
 	}
+	logutil.Printf("Stage fetch completed in %s", time.Since(fetchStarted).Round(time.Second))
+	limitStarted := time.Now()
 	result.articles, result.filteredArticles, err = applyBriefingArticleLimits(result.articles, result.filteredArticles, app.configuredArticleLimits())
 	if err != nil {
 		return err
 	}
+	logutil.Printf("Stage article_limit completed in %s", time.Since(limitStarted).Round(time.Second))
 	return app.renderBriefingContext(ctx, commandPath, date, period, result.articles, result.filteredArticles, result.seenArticles, result.failed, showRaw, sendEmail, result.watchSiteErrorNotices...)
 }
 
@@ -615,20 +622,28 @@ func (app *app) runScheduledBriefing(window scheduler.Window, sendEmail bool) er
 }
 
 func (app *app) runScheduledBriefingContext(ctx context.Context, window scheduler.Window, sendEmail bool) error {
+	return app.runScheduledBriefingContextWithReporter(ctx, window, sendEmail, nil)
+}
+
+func (app *app) runScheduledBriefingContextWithReporter(ctx context.Context, window scheduler.Window, sendEmail bool, reporter *scheduledRunReporter) error {
 	logutil.Println("Fetching news...")
 	loc := app.displayLocation()
 	date := window.To.In(loc).Format("06.01.02")
+	fetchStarted := time.Now()
 	result, err := app.fetchBriefingArticlesWithWatch(ctx, window.To, date, window.Period, func(ctx context.Context) (fetcher.FetchResult, error) {
 		return app.fetchWindowArticlesDetailed(ctx, window.From, window.To, false, false)
 	})
 	if err != nil {
 		return err
 	}
+	logutil.Printf("Stage fetch completed in %s", time.Since(fetchStarted).Round(time.Second))
+	limitStarted := time.Now()
 	result.articles, result.filteredArticles, err = applyBriefingArticleLimits(result.articles, result.filteredArticles, app.configuredArticleLimits())
 	if err != nil {
 		return err
 	}
-	return app.renderBriefingContext(ctx, "serve", date, window.Period, result.articles, result.filteredArticles, result.seenArticles, result.failed, false, sendEmail, result.watchSiteErrorNotices...)
+	logutil.Printf("Stage article_limit completed in %s", time.Since(limitStarted).Round(time.Second))
+	return app.renderBriefingContextWithReporter(ctx, "serve", date, window.Period, result.articles, result.filteredArticles, result.seenArticles, result.failed, false, sendEmail, reporter, result.watchSiteErrorNotices...)
 }
 
 const scheduledRunRunningTTL = 2 * time.Hour
@@ -682,7 +697,8 @@ func (app *app) runScheduledBriefingOnceContext(ctx context.Context, window sche
 	if !acquired {
 		return nil
 	}
-	err = app.runScheduledBriefingContext(ctx, window, sendEmail)
+	reporter := &scheduledRunReporter{paths: paths, trigger: trigger, window: window}
+	err = app.runScheduledBriefingContextWithReporter(ctx, window, sendEmail, reporter)
 	if err != nil {
 		if markErr := markScheduledRunFailed(paths, trigger, window, err); markErr != nil {
 			logutil.Errorf("mark scheduled run failed: %v", markErr)
@@ -696,6 +712,33 @@ type scheduledRunPaths struct {
 	running string
 	done    string
 	failed  string
+}
+
+type scheduledRunReporter struct {
+	paths   scheduledRunPaths
+	trigger string
+	window  scheduler.Window
+}
+
+func (r *scheduledRunReporter) updateAIStage(attempt aiBriefingAttempt, stage string, elapsed time.Duration) {
+	if r == nil || strings.TrimSpace(r.paths.running) == "" {
+		return
+	}
+	fields := map[string]string{
+		"stage":         stage,
+		"ai_attempt":    attempt.name,
+		"ai_articles":   fmt.Sprintf("%d", len(attempt.articles)),
+		"ai_categories": articleCategoryCountsString(attempt.articles),
+	}
+	if attempt.fallback {
+		fields["ai_fallback"] = "true"
+	}
+	if elapsed > 0 {
+		fields["ai_elapsed"] = elapsed.Round(time.Second).String()
+	}
+	if err := os.WriteFile(r.paths.running, []byte(scheduledRunStateContentWithFields("running", r.trigger, r.window, nil, fields)), 0o644); err != nil {
+		logutil.Errorf("update scheduled run marker: %v", err)
+	}
 }
 
 func (app *app) acquireScheduledRunWindow(window scheduler.Window, trigger string) (scheduledRunPaths, bool, error) {
@@ -781,6 +824,10 @@ func markScheduledRunFailed(paths scheduledRunPaths, trigger string, window sche
 }
 
 func scheduledRunStateContent(status string, trigger string, window scheduler.Window, runErr error) string {
+	return scheduledRunStateContentWithFields(status, trigger, window, runErr, nil)
+}
+
+func scheduledRunStateContentWithFields(status string, trigger string, window scheduler.Window, runErr error, fields map[string]string) string {
 	var builder strings.Builder
 	builder.WriteString("status: ")
 	builder.WriteString(status)
@@ -800,6 +847,12 @@ func scheduledRunStateContent(status string, trigger string, window scheduler.Wi
 	builder.WriteString("updated_at: ")
 	builder.WriteString(time.Now().Format(time.RFC3339))
 	builder.WriteByte('\n')
+	for key, value := range fields {
+		builder.WriteString(key)
+		builder.WriteString(": ")
+		builder.WriteString(value)
+		builder.WriteByte('\n')
+	}
 	if runErr != nil {
 		builder.WriteString("error: ")
 		builder.WriteString(runErr.Error())
@@ -846,6 +899,7 @@ func (app *app) runRegenContext(ctx context.Context, cmd regenCommand) error {
 	}
 
 	logutil.Printf("Fetching news for window %s ~ %s...", from.Format("2006-01-02 15:04"), to.Format("2006-01-02 15:04"))
+	fetchStarted := time.Now()
 	var result fetcher.FetchResult
 	if cmd.xVisibleHistoryDays > 0 {
 		result, err = app.fetchWindowArticlesDetailedWithXVisibleHistory(ctx, from, to, false, cmd.ignoreSeen, historyDir)
@@ -855,14 +909,17 @@ func (app *app) runRegenContext(ctx context.Context, cmd regenCommand) error {
 	if err != nil {
 		return err
 	}
+	logutil.Printf("Stage fetch completed in %s", time.Since(fetchStarted).Round(time.Second))
 	limits := app.configuredArticleLimits()
 	if len(cmd.maxArticlesByCategory) > 0 {
 		limits = cmd.maxArticlesByCategory
 	}
+	limitStarted := time.Now()
 	result.Articles, result.FilteredArticles, err = applyBriefingArticleLimits(result.Articles, result.FilteredArticles, limits)
 	if err != nil {
 		return err
 	}
+	logutil.Printf("Stage article_limit completed in %s", time.Since(limitStarted).Round(time.Second))
 	return app.renderBriefingContext(ctx, "regen", to.Format("06.01.02"), period, result.Articles, result.FilteredArticles, nil, result.Failed, cmd.raw, cmd.sendEmail)
 }
 
@@ -902,6 +959,178 @@ func filterArticlesByCategoryLimits(articles []model.Article, limits map[string]
 	return out
 }
 
+type aiBriefingAttempt struct {
+	name     string
+	articles []model.Article
+	fallback bool
+}
+
+type aiBriefingResult struct {
+	articles          []model.Article
+	structuredSummary *model.BriefingSummary
+	summary           string
+}
+
+func (app *app) summarizeBriefingWithFallback(ctx context.Context, articles []model.Article, categoryOrder []string, loc *time.Location, alertEnabled bool, reporter *scheduledRunReporter) (aiBriefingResult, error) {
+	attempts, err := app.aiBriefingAttempts(articles)
+	if err != nil {
+		return aiBriefingResult{}, err
+	}
+	timeout := app.aiTimeoutConfig()
+	aiCtx := ctx
+	cancelTotal := func() {}
+	aiStarted := time.Now()
+	if timeout.TotalBudget > 0 {
+		aiCtx, cancelTotal = context.WithTimeout(ctx, timeout.TotalBudget)
+	}
+	defer cancelTotal()
+
+	var lastErr error
+	for index, attempt := range attempts {
+		if err := aiCtx.Err(); err != nil {
+			return aiBriefingResult{}, app.wrapAITotalBudgetError(err, aiStarted, timeout.TotalBudget)
+		}
+		structuredSummary, summary, err := app.runAISummaryAttempt(aiCtx, attempt, categoryOrder, loc, timeout, reporter)
+		if err == nil {
+			return aiBriefingResult{articles: attempt.articles, structuredSummary: structuredSummary, summary: summary}, nil
+		}
+		lastErr = err
+		if index == len(attempts)-1 {
+			break
+		}
+		next := attempts[index+1]
+		app.sendAIFallbackAlert(alertEnabled, attempt, next, err)
+		logutil.Warnf("AI summary attempt %q failed; retrying with fallback %q: %v", attempt.name, next.name, err)
+	}
+	if err := aiCtx.Err(); err != nil {
+		return aiBriefingResult{}, app.wrapAITotalBudgetError(err, aiStarted, timeout.TotalBudget)
+	}
+	app.sendAIFinalFailureAlert(alertEnabled, lastErr)
+	return aiBriefingResult{}, lastErr
+}
+
+func (app *app) aiBriefingAttempts(articles []model.Article) ([]aiBriefingAttempt, error) {
+	attempts := []aiBriefingAttempt{{name: "primary", articles: articles}}
+	if app == nil || app.cfg == nil || !app.cfg.Output.Fallback.Enabled {
+		return attempts, nil
+	}
+	for _, level := range app.cfg.Output.Fallback.Levels {
+		limited := filterArticlesByCategoryLimits(articles, level.MaxArticlesByCategory)
+		if len(limited) == 0 {
+			return nil, fmt.Errorf("fallback %q leaves no articles", level.Name)
+		}
+		attempts = append(attempts, aiBriefingAttempt{name: level.Name, articles: limited, fallback: true})
+	}
+	return attempts, nil
+}
+
+func (app *app) aiTimeoutConfig() config.AITimeoutCfg {
+	if app == nil || app.cfg == nil {
+		return config.AITimeoutCfg{}
+	}
+	return app.cfg.AI.Timeout
+}
+
+func (app *app) runAISummaryAttempt(ctx context.Context, attempt aiBriefingAttempt, categoryOrder []string, loc *time.Location, timeout config.AITimeoutCfg, reporter *scheduledRunReporter) (*model.BriefingSummary, string, error) {
+	attemptCtx := ctx
+	cancelAttempt := func() {}
+	if timeout.AttemptTimeout > 0 {
+		attemptCtx, cancelAttempt = context.WithTimeout(ctx, timeout.AttemptTimeout)
+	}
+	defer cancelAttempt()
+	reporter.updateAIStage(attempt, "ai_summary", 0)
+	stopWarning := app.startAIWarningTimer(attemptCtx, attempt, timeout.WarningAfter, reporter)
+	defer stopWarning()
+
+	started := time.Now()
+	logutil.Printf("AI summary attempt %q started: articles=%d categories=%s", attempt.name, len(attempt.articles), articleCategoryCountsString(attempt.articles))
+	structuredSummary, summary, err := app.summarizeBriefing(attemptCtx, attempt.articles, categoryOrder, loc)
+	duration := time.Since(started).Round(time.Second)
+	if err != nil {
+		if errors.Is(attemptCtx.Err(), context.DeadlineExceeded) && timeout.AttemptTimeout > 0 {
+			logutil.Warnf("AI summary attempt %q timed out after %s", attempt.name, duration)
+			return nil, "", fmt.Errorf("ai summary attempt %q timed out after %s: %w", attempt.name, timeout.AttemptTimeout, attemptCtx.Err())
+		}
+		logutil.Warnf("AI summary attempt %q failed after %s: %v", attempt.name, duration, err)
+		return nil, "", err
+	}
+	logutil.Printf("AI summary attempt %q completed in %s", attempt.name, duration)
+	return structuredSummary, summary, nil
+}
+
+func (app *app) startAIWarningTimer(ctx context.Context, attempt aiBriefingAttempt, warningAfter time.Duration, reporter *scheduledRunReporter) func() {
+	if warningAfter <= 0 {
+		return func() {}
+	}
+	done := make(chan struct{})
+	timer := time.NewTimer(warningAfter)
+	go func() {
+		select {
+		case <-timer.C:
+			reporter.updateAIStage(attempt, "ai_summary_warning", warningAfter)
+			logutil.Warnf("AI summary attempt %q still running after %s: articles=%d categories=%s", attempt.name, warningAfter, len(attempt.articles), articleCategoryCountsString(attempt.articles))
+		case <-ctx.Done():
+		case <-done:
+		}
+	}()
+	return func() {
+		if !timer.Stop() {
+			select {
+			case <-timer.C:
+			default:
+			}
+		}
+		close(done)
+	}
+}
+
+func (app *app) wrapAITotalBudgetError(err error, started time.Time, budget time.Duration) error {
+	if errors.Is(err, context.DeadlineExceeded) && budget > 0 {
+		return fmt.Errorf("ai summary total budget exceeded after %s: %w", time.Since(started).Round(time.Second), err)
+	}
+	return err
+}
+
+func articleCategoryCountsString(articles []model.Article) string {
+	counts := make(map[string]int)
+	for _, article := range articles {
+		category := strings.TrimSpace(article.Category)
+		if category == "" {
+			category = "未分类"
+		}
+		counts[category]++
+	}
+	parts := make([]string, 0, len(counts))
+	for category, count := range counts {
+		parts = append(parts, fmt.Sprintf("%s=%d", category, count))
+	}
+	return strings.Join(parts, ",")
+}
+
+func (app *app) sendAIFallbackAlert(enabled bool, failed aiBriefingAttempt, next aiBriefingAttempt, runErr error) {
+	if !enabled {
+		return
+	}
+	body := fmt.Sprintf("AI summary attempt %q failed and fallback %q is starting.\n\nFailed articles: %d\nFallback articles: %d\nError: %v", failed.name, next.name, len(failed.articles), len(next.articles), runErr)
+	app.sendAIAlert("[news-briefing] AI summary fallback started", body)
+}
+
+func (app *app) sendAIFinalFailureAlert(enabled bool, runErr error) {
+	if !enabled {
+		return
+	}
+	app.sendAIAlert("[news-briefing] AI summary failed", fmt.Sprintf("AI summary failed after all configured attempts.\n\nError: %v", runErr))
+}
+
+func (app *app) sendAIAlert(subject string, body string) {
+	if app == nil || app.email.sendAlertEmail == nil || app.cfg == nil || strings.TrimSpace(app.cfg.Email.SMTPHost) == "" {
+		return
+	}
+	if err := app.email.sendAlertEmail(subject, body, app.cfg); err != nil {
+		logutil.Errorf("send AI alert email failed: %v", err)
+	}
+}
+
 func (app *app) renderBriefing(commandPath string, date string, period string, articles []model.Article, filteredArticles []model.Article, seenArticles []model.Article, failed []fetcher.FailedSource, showRaw bool, sendEmail bool) error {
 	return app.renderBriefingContext(context.Background(), commandPath, date, period, articles, filteredArticles, seenArticles, failed, showRaw, sendEmail)
 }
@@ -926,6 +1155,10 @@ func (app *app) appendFilteredArticlesAppendix(ctx context.Context, body string,
 }
 
 func (app *app) renderBriefingContext(ctx context.Context, commandPath string, date string, period string, articles []model.Article, filteredArticles []model.Article, seenArticles []model.Article, failed []fetcher.FailedSource, showRaw bool, sendEmail bool, watchSiteErrorNotices ...string) error {
+	return app.renderBriefingContextWithReporter(ctx, commandPath, date, period, articles, filteredArticles, seenArticles, failed, showRaw, sendEmail, nil, watchSiteErrorNotices...)
+}
+
+func (app *app) renderBriefingContextWithReporter(ctx context.Context, commandPath string, date string, period string, articles []model.Article, filteredArticles []model.Article, seenArticles []model.Article, failed []fetcher.FailedSource, showRaw bool, sendEmail bool, reporter *scheduledRunReporter, watchSiteErrorNotices ...string) error {
 	logutil.Printf("Found %d articles after filtering.", len(articles))
 	app.output.printFailed(failed)
 	app.ensureBriefingOutputDeps()
@@ -945,11 +1178,16 @@ func (app *app) renderBriefingContext(ctx context.Context, commandPath string, d
 	var structuredSummary *model.BriefingSummary
 	if outputNeedsTranslatedContent(app.cfg.Output.Mode) {
 		logutil.Println("Generating summary with AI CLI...")
-		var err error
-		structuredSummary, summary, err = app.summarizeBriefing(ctx, articles, categoryOrder, app.displayLocation())
+		aiStarted := time.Now()
+		result, err := app.summarizeBriefingWithFallback(ctx, articles, categoryOrder, app.displayLocation(), sendEmail, reporter)
 		if err != nil {
 			return err
 		}
+		logutil.Printf("Stage ai_summary completed in %s", time.Since(aiStarted).Round(time.Second))
+		articles = result.articles
+		structuredSummary = result.structuredSummary
+		summary = result.summary
+		content.Original = output.GroupedArticleListView(articles, categoryOrder, app.displayLocation())
 		content.Translated = summary
 	}
 	body, err := app.output.composeBody(commandPath, app.cfg.Output.Mode, content)

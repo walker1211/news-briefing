@@ -138,6 +138,20 @@ func (s *EmailSender) SendDeepEmail(topic string, briefing *model.Briefing, cfg 
 	return s.sendHTMLEmailWithContent(cfg, deepEmailSubject(topic), buildDeepEmailBody(topic, briefing, failed))
 }
 
+func SendAlertEmail(subject string, body string, cfg *config.Config) error {
+	return NewEmailSender().SendAlertEmail(subject, body, cfg)
+}
+
+func (s *EmailSender) SendAlertEmail(subject string, body string, cfg *config.Config) error {
+	if cfg == nil {
+		return fmt.Errorf("config is nil")
+	}
+	if strings.TrimSpace(subject) == "" {
+		return fmt.Errorf("alert email subject must not be empty")
+	}
+	return s.sendHTMLEmailWithContent(cfg, subject, body)
+}
+
 func validateEmailInputs(briefing *model.Briefing, cfg *config.Config) error {
 	if cfg == nil {
 		return fmt.Errorf("config is nil")

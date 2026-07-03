@@ -900,6 +900,87 @@ func TestExecuteRegenFiltersArticlesBeforeSummary(t *testing.T) {
 	}
 }
 
+func TestRunScheduledBriefingFallsBackThroughConfiguredArticleLevels(t *testing.T) {
+	cfg := executeTestConfigWithEmail(t, model.OutputModeTranslatedOnly)
+	cfg.Output.MaxArticlesByCategory = map[string]int{"AI/科技": 2, "国际政治": 2}
+	cfg.Output.Fallback = config.OutputFallbackCfg{
+		Enabled: true,
+		Levels: []config.ArticleLimitLevel{
+			{Name: "reduced", MaxArticlesByCategory: map[string]int{"AI/科技": 1, "国际政治": 1}},
+			{Name: "minimal", MaxArticlesByCategory: map[string]int{"AI/科技": 1}},
+		},
+	}
+	window := scheduler.Window{Period: "0800", From: time.Date(2026, 3, 18, 0, 0, 0, 0, time.UTC), To: time.Date(2026, 3, 18, 8, 0, 0, 0, time.UTC)}
+	attempts := make([][]string, 0)
+	alerts := 0
+	var rendered []model.Article
+	app := &app{
+		cfg: cfg,
+		fetch: fetchDeps{
+			fetchWindowDetailedContext: func(ctx context.Context, cfg *config.Config, from, to time.Time, markSeen bool, ignoreSeen bool) (fetcher.FetchResult, error) {
+				return fetcher.FetchResult{Articles: []model.Article{
+					{Title: "first ai", Category: "AI/科技"},
+					{Title: "first politics", Category: "国际政治"},
+					{Title: "second ai", Category: "AI/科技"},
+					{Title: "second politics", Category: "国际政治"},
+					{Title: "third ai", Category: "AI/科技"},
+				}}, nil
+			},
+		},
+		ai: aiDeps{
+			summarizeBriefingContext: func(ctx context.Context, articles []model.Article, categoryOrder []string, loc *time.Location) (model.BriefingSummary, string, error) {
+				titles := make([]string, 0, len(articles))
+				for _, article := range articles {
+					titles = append(titles, article.Title)
+				}
+				attempts = append(attempts, titles)
+				if len(attempts) < 3 {
+					return model.BriefingSummary{}, "", errors.New("ai timeout")
+				}
+				return model.BriefingSummary{}, "summary", nil
+			},
+		},
+		output: outputDeps{
+			printFailed: func([]fetcher.FailedSource) {},
+			printCLI:    func(*model.Briefing) {},
+			composeBody: func(string, model.OutputMode, model.OutputContent) (string, error) {
+				return "body", nil
+			},
+			writeMarkdown: func(briefing *model.Briefing, outputDir string) (string, error) {
+				rendered = append([]model.Article(nil), briefing.Articles...)
+				return filepath.Join(outputDir, "briefing.md"), nil
+			},
+		},
+		email: emailDeps{
+			sendEmail: func(*model.Briefing, *config.Config, []fetcher.FailedSource) error {
+				return nil
+			},
+			sendAlertEmail: func(subject string, body string, cfg *config.Config) error {
+				alerts++
+				return nil
+			},
+		},
+	}
+
+	if err := app.runScheduledBriefingContext(context.Background(), window, true); err != nil {
+		t.Fatalf("runScheduledBriefingContext() error = %v", err)
+	}
+	wantAttempts := [][]string{
+		{"first ai", "first politics", "second ai", "second politics"},
+		{"first ai", "first politics"},
+		{"first ai"},
+	}
+	if !reflect.DeepEqual(attempts, wantAttempts) {
+		t.Fatalf("attempt titles = %#v, want %#v", attempts, wantAttempts)
+	}
+	if gotTitles := articleTitles(rendered); !reflect.DeepEqual(gotTitles, []string{"first ai"}) {
+		t.Fatalf("rendered titles = %#v, want minimal fallback article", gotTitles)
+	}
+	if alerts != 2 {
+		t.Fatalf("alerts = %d, want 2 fallback alerts", alerts)
+	}
+}
+
 func TestExecuteRegenUsesXVisibleHistoryOptions(t *testing.T) {
 	loc, err := time.LoadLocation("Asia/Shanghai")
 	if err != nil {
@@ -1106,6 +1187,41 @@ func TestScheduledBriefingOnceSkipsDoneAndFreshRunning(t *testing.T) {
 	}
 	if err := app.runScheduledBriefingOnceContext(context.Background(), window, "cron", false); err != nil {
 		t.Fatalf("runScheduledBriefingOnceContext(running) error = %v", err)
+	}
+}
+
+func TestScheduledBriefingOnceUpdatesRunningMarkerDuringAI(t *testing.T) {
+	window := scheduler.Window{Expr: "0 18 * * *", Period: "1800", From: time.Date(2026, 6, 16, 8, 0, 0, 0, time.UTC), To: time.Date(2026, 6, 16, 18, 0, 0, 0, time.UTC)}
+	cfg := executeTestConfig(t, model.OutputModeTranslatedOnly)
+	var marker string
+	var testApp *app
+	testApp = &app{
+		cfg: cfg,
+		fetch: fetchDeps{
+			fetchWindowDetailedContext: func(ctx context.Context, cfg *config.Config, from, to time.Time, markSeen bool, ignoreSeen bool) (fetcher.FetchResult, error) {
+				return fetcher.FetchResult{Articles: sampleExecuteArticles()}, nil
+			},
+		},
+		ai: aiDeps{
+			summarizeContext: func(ctx context.Context, articles []model.Article, categoryOrder []string, loc *time.Location) (string, error) {
+				data, err := os.ReadFile(testApp.scheduledRunPaths(window).running)
+				if err != nil {
+					t.Fatalf("ReadFile(running) error = %v", err)
+				}
+				marker = string(data)
+				return "summary", nil
+			},
+		},
+		output: silentBriefingOutputDeps("body"),
+	}
+
+	if err := testApp.runScheduledBriefingOnceContext(context.Background(), window, "x-ready-callback", false); err != nil {
+		t.Fatalf("runScheduledBriefingOnceContext() error = %v", err)
+	}
+	for _, want := range []string{"stage: ai_summary", "ai_attempt: primary", "ai_articles: 1"} {
+		if !strings.Contains(marker, want) {
+			t.Fatalf("running marker = %q, want substring %q", marker, want)
+		}
 	}
 }
 

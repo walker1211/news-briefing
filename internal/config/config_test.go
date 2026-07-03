@@ -83,6 +83,71 @@ proxy: {}
 	}
 }
 
+func TestLoadParsesAIDurationsAndFallbackLevels(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	content := `sources: []
+keywords: []
+email:
+  smtp_host: smtp.example.com
+  smtp_port: 465
+  from: from@example.com
+  to: to@example.com
+schedule: []
+output:
+  max_articles:
+    "AI/科技": 70
+    "国际政治": 30
+  fallback:
+    enabled: true
+    levels:
+      - name: reduced
+        max_articles:
+          "AI/科技": 50
+          "国际政治": 20
+      - name: minimal
+        max_articles:
+          "AI/科技": 30
+          "国际政治": 10
+proxy: {}
+ai:
+  timeout:
+    warning_after: 20m
+    attempt_timeout: 30m
+    total_budget: 75m
+`
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if cfg.AI.Timeout.WarningAfter != 20*time.Minute {
+		t.Fatalf("AI.Timeout.WarningAfter = %v, want 20m", cfg.AI.Timeout.WarningAfter)
+	}
+	if cfg.AI.Timeout.AttemptTimeout != 30*time.Minute {
+		t.Fatalf("AI.Timeout.AttemptTimeout = %v, want 30m", cfg.AI.Timeout.AttemptTimeout)
+	}
+	if cfg.AI.Timeout.TotalBudget != 75*time.Minute {
+		t.Fatalf("AI.Timeout.TotalBudget = %v, want 75m", cfg.AI.Timeout.TotalBudget)
+	}
+	if !cfg.Output.Fallback.Enabled {
+		t.Fatalf("Output.Fallback.Enabled = false, want true")
+	}
+	if len(cfg.Output.Fallback.Levels) != 2 {
+		t.Fatalf("Output.Fallback.Levels length = %d, want 2", len(cfg.Output.Fallback.Levels))
+	}
+	if cfg.Output.Fallback.Levels[0].Name != "reduced" {
+		t.Fatalf("first fallback level name = %q, want reduced", cfg.Output.Fallback.Levels[0].Name)
+	}
+	wantReduced := map[string]int{"AI/科技": 50, "国际政治": 20}
+	if !reflect.DeepEqual(cfg.Output.Fallback.Levels[0].MaxArticlesByCategory, wantReduced) {
+		t.Fatalf("first fallback max articles = %v, want %v", cfg.Output.Fallback.Levels[0].MaxArticlesByCategory, wantReduced)
+	}
+}
+
 func TestLoadParsesFetchRedditSourceDelayRange(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.yaml")
