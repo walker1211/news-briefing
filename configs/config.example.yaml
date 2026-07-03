@@ -259,6 +259,18 @@ output:
   max_articles:
     AI/科技: 70
     国际政治: 30
+  # Optional. If AI summary generation fails or times out, retry once per fallback level.
+  fallback:
+    enabled: true
+    levels:
+      - name: reduced
+        max_articles:
+          AI/科技: 50
+          国际政治: 20
+      - name: minimal
+        max_articles:
+          AI/科技: 30
+          国际政治: 10
 
 publish_hook:
   enabled: false
@@ -292,6 +304,13 @@ ai:
     - --bare
     - --disable-slash-commands
   append_system_prompt: true
+  timeout:
+    # Warn but keep waiting when one AI attempt is still running after this duration.
+    warning_after: 20m
+    # Stop one AI attempt after this duration and move to retry or fallback.
+    attempt_timeout: 30m
+    # Stop the whole AI summary stage after this total duration across retries and fallbacks.
+    total_budget: 75m
   retry:
     delays:
       - 1s

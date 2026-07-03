@@ -68,3 +68,11 @@ func sampleExecuteArticles() []model.Article {
 		Published: time.Date(2026, 3, 18, 14, 0, 0, 0, time.UTC),
 	}}
 }
+
+func articleTitles(articles []model.Article) []string {
+	titles := make([]string, 0, len(articles))
+	for _, article := range articles {
+		titles = append(titles, article.Title)
+	}
+	return titles
+}

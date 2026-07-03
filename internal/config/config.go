@@ -171,10 +171,21 @@ type Email struct {
 type Schedule []string
 
 type OutputCfg struct {
-	Dir                     string           `yaml:"dir"`
-	Mode                    model.OutputMode `yaml:"mode"`
-	IncludeFilteredArticles bool             `yaml:"include_filtered_articles"`
-	MaxArticlesByCategory   map[string]int   `yaml:"max_articles"`
+	Dir                     string            `yaml:"dir"`
+	Mode                    model.OutputMode  `yaml:"mode"`
+	IncludeFilteredArticles bool              `yaml:"include_filtered_articles"`
+	MaxArticlesByCategory   map[string]int    `yaml:"max_articles"`
+	Fallback                OutputFallbackCfg `yaml:"fallback"`
+}
+
+type OutputFallbackCfg struct {
+	Enabled bool                `yaml:"enabled"`
+	Levels  []ArticleLimitLevel `yaml:"levels"`
+}
+
+type ArticleLimitLevel struct {
+	Name                  string         `yaml:"name"`
+	MaxArticlesByCategory map[string]int `yaml:"max_articles"`
 }
 
 type PublishHookConfig struct {
@@ -189,15 +200,22 @@ type Proxy struct {
 }
 
 type AICfg struct {
-	Command            string     `yaml:"command"`
-	Args               []string   `yaml:"args"`
-	ExtraFlags         []string   `yaml:"extra_flags"`
-	AppendSystemPrompt *bool      `yaml:"append_system_prompt"`
-	Retry              AIRetryCfg `yaml:"retry"`
+	Command            string       `yaml:"command"`
+	Args               []string     `yaml:"args"`
+	ExtraFlags         []string     `yaml:"extra_flags"`
+	AppendSystemPrompt *bool        `yaml:"append_system_prompt"`
+	Retry              AIRetryCfg   `yaml:"retry"`
+	Timeout            AITimeoutCfg `yaml:"timeout"`
 }
 
 type AIRetryCfg struct {
 	Delays []time.Duration `yaml:"delays"`
+}
+
+type AITimeoutCfg struct {
+	WarningAfter   time.Duration `yaml:"warning_after"`
+	AttemptTimeout time.Duration `yaml:"attempt_timeout"`
+	TotalBudget    time.Duration `yaml:"total_budget"`
 }
 
 func (cfg AICfg) ShouldAppendSystemPrompt() bool {
@@ -482,13 +500,11 @@ func (cfg *Config) Validate() error {
 	if err := cfg.Output.Mode.Validate(); err != nil {
 		return fmt.Errorf("validate output.mode: %w", err)
 	}
-	for category, limit := range cfg.Output.MaxArticlesByCategory {
-		if strings.TrimSpace(category) == "" {
-			return fmt.Errorf("validate output.max_articles: category must not be empty")
-		}
-		if limit <= 0 {
-			return fmt.Errorf("validate output.max_articles[%q]: must be greater than 0", category)
-		}
+	if err := validateArticleLimits("output.max_articles", cfg.Output.MaxArticlesByCategory, false); err != nil {
+		return err
+	}
+	if err := validateOutputFallback(cfg.Output.Fallback); err != nil {
+		return err
 	}
 	if strings.TrimSpace(cfg.AI.Command) == "" {
 		return fmt.Errorf("validate ai.command: must not be empty")
@@ -507,6 +523,9 @@ func (cfg *Config) Validate() error {
 		if delay <= 0 {
 			return fmt.Errorf("validate ai.retry.delays[%d]: must be > 0", i)
 		}
+	}
+	if err := validateAITimeout(cfg.AI.Timeout); err != nil {
+		return err
 	}
 	for i, expr := range cfg.Schedule {
 		trimmed := strings.TrimSpace(expr)
@@ -541,6 +560,65 @@ func (cfg *Config) Validate() error {
 	}
 	if err := validateProxy(cfg.Proxy); err != nil {
 		return err
+	}
+	return nil
+}
+
+func validateArticleLimits(field string, limits map[string]int, requireNonEmpty bool) error {
+	if len(limits) == 0 {
+		if requireNonEmpty {
+			return fmt.Errorf("validate %s: must not be empty", field)
+		}
+		return nil
+	}
+	for category, limit := range limits {
+		if strings.TrimSpace(category) == "" {
+			return fmt.Errorf("validate %s: category must not be empty", field)
+		}
+		if limit <= 0 {
+			return fmt.Errorf("validate %s[%q]: must be greater than 0", field, category)
+		}
+	}
+	return nil
+}
+
+func validateOutputFallback(fallback OutputFallbackCfg) error {
+	if !fallback.Enabled && len(fallback.Levels) == 0 {
+		return nil
+	}
+	if fallback.Enabled && len(fallback.Levels) == 0 {
+		return fmt.Errorf("validate output.fallback.levels: must not be empty when fallback is enabled")
+	}
+	for i, level := range fallback.Levels {
+		field := fmt.Sprintf("output.fallback.levels[%d]", i)
+		if strings.TrimSpace(level.Name) == "" {
+			return fmt.Errorf("validate %s.name: must not be empty", field)
+		}
+		if err := validateArticleLimits(field+".max_articles", level.MaxArticlesByCategory, true); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func validateAITimeout(timeout AITimeoutCfg) error {
+	if timeout.WarningAfter < 0 {
+		return fmt.Errorf("validate ai.timeout.warning_after: must be zero or greater")
+	}
+	if timeout.AttemptTimeout < 0 {
+		return fmt.Errorf("validate ai.timeout.attempt_timeout: must be zero or greater")
+	}
+	if timeout.TotalBudget < 0 {
+		return fmt.Errorf("validate ai.timeout.total_budget: must be zero or greater")
+	}
+	if timeout.WarningAfter > 0 && timeout.AttemptTimeout > 0 && timeout.WarningAfter >= timeout.AttemptTimeout {
+		return fmt.Errorf("validate ai.timeout.warning_after: must be less than attempt_timeout")
+	}
+	if timeout.AttemptTimeout > 0 && timeout.TotalBudget > 0 && timeout.AttemptTimeout > timeout.TotalBudget {
+		return fmt.Errorf("validate ai.timeout.attempt_timeout: must be less than or equal to total_budget")
+	}
+	if timeout.WarningAfter > 0 && timeout.TotalBudget > 0 && timeout.WarningAfter >= timeout.TotalBudget {
+		return fmt.Errorf("validate ai.timeout.warning_after: must be less than total_budget")
 	}
 	return nil
 }
