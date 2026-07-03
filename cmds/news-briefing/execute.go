@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 	"unicode"
@@ -609,7 +610,7 @@ func (app *app) runBriefingContext(ctx context.Context, commandPath string, peri
 	}
 	logutil.Printf("Stage fetch completed in %s", time.Since(fetchStarted).Round(time.Second))
 	limitStarted := time.Now()
-	result.articles, result.filteredArticles, err = applyBriefingArticleLimits(result.articles, result.filteredArticles, app.configuredArticleLimits())
+	result.articles, result.filteredArticles, _, err = applyBriefingArticleLimits(result.articles, result.filteredArticles, app.configuredArticleLimits())
 	if err != nil {
 		return err
 	}
@@ -638,7 +639,11 @@ func (app *app) runScheduledBriefingContextWithReporter(ctx context.Context, win
 	}
 	logutil.Printf("Stage fetch completed in %s", time.Since(fetchStarted).Round(time.Second))
 	limitStarted := time.Now()
-	result.articles, result.filteredArticles, err = applyBriefingArticleLimits(result.articles, result.filteredArticles, app.configuredArticleLimits())
+	var limitReport articleLimitReport
+	result.articles, result.filteredArticles, limitReport, err = applyBriefingArticleLimits(result.articles, result.filteredArticles, app.configuredArticleLimits())
+	if reporter != nil {
+		reporter.updateArticleLimits(limitReport)
+	}
 	if err != nil {
 		return err
 	}
@@ -705,7 +710,7 @@ func (app *app) runScheduledBriefingOnceContext(ctx context.Context, window sche
 		}
 		return err
 	}
-	return markScheduledRunDone(paths, trigger, window)
+	return markScheduledRunDone(paths, trigger, window, reporter.stateFields())
 }
 
 type scheduledRunPaths struct {
@@ -718,6 +723,14 @@ type scheduledRunReporter struct {
 	paths   scheduledRunPaths
 	trigger string
 	window  scheduler.Window
+	fields  map[string]string
+}
+
+func (r *scheduledRunReporter) updateArticleLimits(report articleLimitReport) {
+	if r == nil || strings.TrimSpace(r.paths.running) == "" || !report.applied {
+		return
+	}
+	r.updateFields("article_limit", report.stateFields())
 }
 
 func (r *scheduledRunReporter) updateAIStage(attempt aiBriefingAttempt, stage string, elapsed time.Duration) {
@@ -725,7 +738,6 @@ func (r *scheduledRunReporter) updateAIStage(attempt aiBriefingAttempt, stage st
 		return
 	}
 	fields := map[string]string{
-		"stage":         stage,
 		"ai_attempt":    attempt.name,
 		"ai_articles":   fmt.Sprintf("%d", len(attempt.articles)),
 		"ai_categories": articleCategoryCountsString(attempt.articles),
@@ -736,9 +748,31 @@ func (r *scheduledRunReporter) updateAIStage(attempt aiBriefingAttempt, stage st
 	if elapsed > 0 {
 		fields["ai_elapsed"] = elapsed.Round(time.Second).String()
 	}
-	if err := os.WriteFile(r.paths.running, []byte(scheduledRunStateContentWithFields("running", r.trigger, r.window, nil, fields)), 0o644); err != nil {
+	r.updateFields(stage, fields)
+}
+
+func (r *scheduledRunReporter) updateFields(stage string, fields map[string]string) {
+	if r.fields == nil {
+		r.fields = make(map[string]string)
+	}
+	for key, value := range fields {
+		r.fields[key] = value
+	}
+	r.fields["stage"] = stage
+	if err := os.WriteFile(r.paths.running, []byte(scheduledRunStateContentWithFields("running", r.trigger, r.window, nil, r.fields)), 0o644); err != nil {
 		logutil.Errorf("update scheduled run marker: %v", err)
 	}
+}
+
+func (r *scheduledRunReporter) stateFields() map[string]string {
+	if r == nil || len(r.fields) == 0 {
+		return nil
+	}
+	fields := make(map[string]string, len(r.fields))
+	for key, value := range r.fields {
+		fields[key] = value
+	}
+	return fields
 }
 
 func (app *app) acquireScheduledRunWindow(window scheduler.Window, trigger string) (scheduledRunPaths, bool, error) {
@@ -803,8 +837,8 @@ func scheduledRunWindowKey(window scheduler.Window) string {
 	return window.From.UTC().Format("20060102T150405Z") + "_" + window.To.UTC().Format("20060102T150405Z")
 }
 
-func markScheduledRunDone(paths scheduledRunPaths, trigger string, window scheduler.Window) error {
-	if err := os.WriteFile(paths.done, []byte(scheduledRunStateContent("done", trigger, window, nil)), 0o644); err != nil {
+func markScheduledRunDone(paths scheduledRunPaths, trigger string, window scheduler.Window, fields map[string]string) error {
+	if err := os.WriteFile(paths.done, []byte(scheduledRunStateContentWithFields("done", trigger, window, nil, fields)), 0o644); err != nil {
 		return err
 	}
 	if err := os.Remove(paths.running); err != nil && !os.IsNotExist(err) {
@@ -915,7 +949,7 @@ func (app *app) runRegenContext(ctx context.Context, cmd regenCommand) error {
 		limits = cmd.maxArticlesByCategory
 	}
 	limitStarted := time.Now()
-	result.Articles, result.FilteredArticles, err = applyBriefingArticleLimits(result.Articles, result.FilteredArticles, limits)
+	result.Articles, result.FilteredArticles, _, err = applyBriefingArticleLimits(result.Articles, result.FilteredArticles, limits)
 	if err != nil {
 		return err
 	}
@@ -930,25 +964,116 @@ func (app *app) configuredArticleLimits() map[string]int {
 	return app.cfg.Output.MaxArticlesByCategory
 }
 
-func applyBriefingArticleLimits(articles []model.Article, filteredArticles []model.Article, limits map[string]int) ([]model.Article, []model.Article, error) {
+type articleLimitCategoryReport struct {
+	category string
+	before   int
+	after    int
+	limit    int
+	hasLimit bool
+}
+
+type articleLimitReport struct {
+	applied     bool
+	totalBefore int
+	totalAfter  int
+	categories  []articleLimitCategoryReport
+}
+
+func applyBriefingArticleLimits(articles []model.Article, filteredArticles []model.Article, limits map[string]int) ([]model.Article, []model.Article, articleLimitReport, error) {
 	if len(limits) == 0 {
-		return articles, filteredArticles, nil
+		return articles, filteredArticles, articleLimitReport{}, nil
 	}
-	before := len(articles)
+	original := articles
 	articles = filterArticlesByCategoryLimits(articles, limits)
 	filteredArticles = nil
-	logutil.Printf("Filtered briefing articles before AI: %d -> %d", before, len(articles))
+	report := buildArticleLimitReport(original, articles, limits)
+	logutil.Printf("Article limits by category: %s", report.summaryString())
 	if len(articles) == 0 {
-		return nil, nil, fmt.Errorf("no articles remain after article limits")
+		return nil, nil, report, fmt.Errorf("no articles remain after article limits")
 	}
-	return articles, filteredArticles, nil
+	return articles, filteredArticles, report, nil
+}
+
+func buildArticleLimitReport(original []model.Article, limited []model.Article, limits map[string]int) articleLimitReport {
+	beforeCounts := make(map[string]int)
+	afterCounts := make(map[string]int)
+	categories := make(map[string]struct{})
+	for _, article := range original {
+		category := normalizedArticleCategory(article.Category)
+		beforeCounts[category]++
+		categories[category] = struct{}{}
+	}
+	for _, article := range limited {
+		category := normalizedArticleCategory(article.Category)
+		afterCounts[category]++
+		categories[category] = struct{}{}
+	}
+	for category := range limits {
+		categories[normalizedArticleCategory(category)] = struct{}{}
+	}
+	return articleLimitReport{applied: true, totalBefore: len(original), totalAfter: len(limited), categories: articleLimitCategoryReports(beforeCounts, afterCounts, categories, limits)}
+}
+
+func articleLimitCategoryReports(beforeCounts map[string]int, afterCounts map[string]int, categories map[string]struct{}, limits map[string]int) []articleLimitCategoryReport {
+	names := make([]string, 0, len(categories))
+	for category := range categories {
+		names = append(names, category)
+	}
+	sort.Strings(names)
+	reports := make([]articleLimitCategoryReport, 0, len(names))
+	for _, category := range names {
+		limit, hasLimit := limits[category]
+		reports = append(reports, articleLimitCategoryReport{category: category, before: beforeCounts[category], after: afterCounts[category], limit: limit, hasLimit: hasLimit})
+	}
+	return reports
+}
+
+func (r articleLimitReport) summaryString() string {
+	if !r.applied {
+		return ""
+	}
+	parts := make([]string, 0, len(r.categories)+1)
+	for _, category := range r.categories {
+		limitText := "no limit"
+		if category.hasLimit {
+			limitText = fmt.Sprintf("limit %d", category.limit)
+		}
+		parts = append(parts, fmt.Sprintf("%s %d -> %d (%s)", category.category, category.before, category.after, limitText))
+	}
+	parts = append(parts, fmt.Sprintf("total %d -> %d", r.totalBefore, r.totalAfter))
+	return strings.Join(parts, ", ")
+}
+
+func (r articleLimitReport) stateFields() map[string]string {
+	if !r.applied {
+		return nil
+	}
+	fields := map[string]string{
+		"article_limit_total_before": fmt.Sprintf("%d", r.totalBefore),
+		"article_limit_total_after":  fmt.Sprintf("%d", r.totalAfter),
+	}
+	categorySummary := r.summaryString()
+	if prefix, ok := strings.CutSuffix(categorySummary, fmt.Sprintf(", total %d -> %d", r.totalBefore, r.totalAfter)); ok {
+		fields["article_limit_categories"] = prefix
+	} else {
+		fields["article_limit_categories"] = categorySummary
+	}
+	return fields
+}
+
+func normalizedArticleCategory(category string) string {
+	category = strings.TrimSpace(category)
+	if category == "" {
+		return "未分类"
+	}
+	return category
 }
 
 func filterArticlesByCategoryLimits(articles []model.Article, limits map[string]int) []model.Article {
 	out := make([]model.Article, 0, len(articles))
 	counts := make(map[string]int, len(limits))
 	for _, article := range articles {
-		category := strings.TrimSpace(article.Category)
+		category := normalizedArticleCategory(article.Category)
 		limit, ok := limits[category]
 		if !ok || counts[category] >= limit {
 			continue

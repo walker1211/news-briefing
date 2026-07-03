@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -1190,37 +1191,95 @@ func TestScheduledBriefingOnceSkipsDoneAndFreshRunning(t *testing.T) {
 	}
 }
 
+func TestApplyBriefingArticleLimitsReturnsCategoryReport(t *testing.T) {
+	articles := []model.Article{
+		{Title: "ai-1", Category: "AI/科技"},
+		{Title: "politics-1", Category: "国际政治"},
+		{Title: "politics-2", Category: "国际政治"},
+		{Title: "uncategorized"},
+	}
+	limits := map[string]int{"AI/科技": 2, "国际政治": 1}
+
+	limited, filtered, report, err := applyBriefingArticleLimits(articles, []model.Article{{Title: "filtered"}}, limits)
+	if err != nil {
+		t.Fatalf("applyBriefingArticleLimits() error = %v", err)
+	}
+	if got, want := articleTitles(limited), []string{"ai-1", "politics-1"}; !slices.Equal(got, want) {
+		t.Fatalf("limited titles = %v, want %v", got, want)
+	}
+	if filtered != nil {
+		t.Fatalf("filtered = %#v, want nil", filtered)
+	}
+	if got, want := report.summaryString(), "AI/科技 1 -> 1 (limit 2), 国际政治 2 -> 1 (limit 1), 未分类 1 -> 0 (no limit), total 4 -> 2"; got != want {
+		t.Fatalf("summaryString() = %q, want %q", got, want)
+	}
+	fields := report.stateFields()
+	for key, want := range map[string]string{
+		"article_limit_total_before": "4",
+		"article_limit_total_after":  "2",
+		"article_limit_categories":   "AI/科技 1 -> 1 (limit 2), 国际政治 2 -> 1 (limit 1), 未分类 1 -> 0 (no limit)",
+	} {
+		if got := fields[key]; got != want {
+			t.Fatalf("fields[%q] = %q, want %q", key, got, want)
+		}
+	}
+}
+
 func TestScheduledBriefingOnceUpdatesRunningMarkerDuringAI(t *testing.T) {
 	window := scheduler.Window{Expr: "0 18 * * *", Period: "1800", From: time.Date(2026, 6, 16, 8, 0, 0, 0, time.UTC), To: time.Date(2026, 6, 16, 18, 0, 0, 0, time.UTC)}
-	cfg := executeTestConfig(t, model.OutputModeTranslatedOnly)
 	var marker string
-	var testApp *app
-	testApp = &app{
-		cfg: cfg,
-		fetch: fetchDeps{
-			fetchWindowDetailedContext: func(ctx context.Context, cfg *config.Config, from, to time.Time, markSeen bool, ignoreSeen bool) (fetcher.FetchResult, error) {
-				return fetcher.FetchResult{Articles: sampleExecuteArticles()}, nil
-			},
+	testApp := newScheduledOnceTestApp(t, nil)
+	testApp.cfg.Output.Mode = model.OutputModeTranslatedOnly
+	testApp.cfg.Output.MaxArticlesByCategory = map[string]int{"AI/科技": 1, "国际政治": 1}
+	testApp.fetch = fetchDeps{
+		fetchWindowDetailedContext: func(ctx context.Context, cfg *config.Config, from, to time.Time, markSeen bool, ignoreSeen bool) (fetcher.FetchResult, error) {
+			return fetcher.FetchResult{Articles: []model.Article{
+				{Title: "ai-1", Category: "AI/科技"},
+				{Title: "ai-2", Category: "AI/科技"},
+				{Title: "politics-1", Category: "国际政治"},
+			}}, nil
 		},
-		ai: aiDeps{
-			summarizeContext: func(ctx context.Context, articles []model.Article, categoryOrder []string, loc *time.Location) (string, error) {
-				data, err := os.ReadFile(testApp.scheduledRunPaths(window).running)
-				if err != nil {
-					t.Fatalf("ReadFile(running) error = %v", err)
-				}
-				marker = string(data)
-				return "summary", nil
-			},
-		},
-		output: silentBriefingOutputDeps("body"),
 	}
+	testApp.ai = aiDeps{
+		summarizeContext: func(ctx context.Context, articles []model.Article, categoryOrder []string, loc *time.Location) (string, error) {
+			data, err := os.ReadFile(testApp.scheduledRunPaths(window).running)
+			if err != nil {
+				t.Fatalf("ReadFile(running) error = %v", err)
+			}
+			marker = string(data)
+			return "summary", nil
+		},
+	}
+	testApp.output = silentBriefingOutputDeps("body")
 
 	if err := testApp.runScheduledBriefingOnceContext(context.Background(), window, "x-ready-callback", false); err != nil {
 		t.Fatalf("runScheduledBriefingOnceContext() error = %v", err)
 	}
-	for _, want := range []string{"stage: ai_summary", "ai_attempt: primary", "ai_articles: 1"} {
+	for _, want := range []string{
+		"stage: ai_summary",
+		"ai_attempt: primary",
+		"ai_articles: 2",
+		"article_limit_total_before: 3",
+		"article_limit_total_after: 2",
+		"article_limit_categories: AI/科技 2 -> 1 (limit 1), 国际政治 1 -> 1 (limit 1)",
+	} {
 		if !strings.Contains(marker, want) {
 			t.Fatalf("running marker = %q, want substring %q", marker, want)
+		}
+	}
+	doneData, err := os.ReadFile(testApp.scheduledRunPaths(window).done)
+	if err != nil {
+		t.Fatalf("ReadFile(done) error = %v", err)
+	}
+	done := string(doneData)
+	for _, want := range []string{
+		"status: done",
+		"article_limit_total_before: 3",
+		"article_limit_total_after: 2",
+		"article_limit_categories: AI/科技 2 -> 1 (limit 1), 国际政治 1 -> 1 (limit 1)",
+	} {
+		if !strings.Contains(done, want) {
+			t.Fatalf("done marker = %q, want substring %q", done, want)
 		}
 	}
 }
