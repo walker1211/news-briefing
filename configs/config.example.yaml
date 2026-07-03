@@ -255,6 +255,10 @@ output:
   dir: output
   mode: translated_only
   include_filtered_articles: false
+  # Optional. Limits articles sent into briefing AI by category; omitted categories are excluded when set.
+  max_articles:
+    AI/科技: 70
+    国际政治: 30
 
 publish_hook:
   enabled: false

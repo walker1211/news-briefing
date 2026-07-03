@@ -821,6 +821,85 @@ func TestExecuteRegenUsesParsedWindowAndFlags(t *testing.T) {
 	}
 }
 
+func TestRunScheduledBriefingUsesConfiguredArticleLimits(t *testing.T) {
+	cfg := executeTestConfig(t, model.OutputModeTranslatedOnly)
+	cfg.Output.MaxArticlesByCategory = map[string]int{"AI/科技": 2, "国际政治": 1}
+	var summarized []model.Article
+	window := scheduler.Window{Period: "0800", From: time.Date(2026, 3, 18, 0, 0, 0, 0, time.UTC), To: time.Date(2026, 3, 18, 8, 0, 0, 0, time.UTC)}
+	app := &app{
+		cfg: cfg,
+		fetch: fetchDeps{
+			fetchWindowDetailedContext: func(ctx context.Context, cfg *config.Config, from, to time.Time, markSeen bool, ignoreSeen bool) (fetcher.FetchResult, error) {
+				return fetcher.FetchResult{Articles: []model.Article{
+					{Title: "first ai", Category: "AI/科技"},
+					{Title: "first politics", Category: "国际政治"},
+					{Title: "second ai", Category: "AI/科技"},
+					{Title: "second politics", Category: "国际政治"},
+					{Title: "business", Category: "商业"},
+				}}, nil
+			},
+		},
+		ai: aiDeps{
+			summarizeContext: func(ctx context.Context, articles []model.Article, categoryOrder []string, loc *time.Location) (string, error) {
+				summarized = append([]model.Article(nil), articles...)
+				return "summary", nil
+			},
+		},
+		output: silentBriefingOutputDeps("body"),
+	}
+
+	if err := app.runScheduledBriefingContext(context.Background(), window, false); err != nil {
+		t.Fatalf("runScheduledBriefingContext() error = %v", err)
+	}
+	wantTitles := []string{"first ai", "first politics", "second ai"}
+	gotTitles := make([]string, 0, len(summarized))
+	for _, article := range summarized {
+		gotTitles = append(gotTitles, article.Title)
+	}
+	if !reflect.DeepEqual(gotTitles, wantTitles) {
+		t.Fatalf("summarized titles = %#v, want %#v", gotTitles, wantTitles)
+	}
+}
+
+func TestExecuteRegenFiltersArticlesBeforeSummary(t *testing.T) {
+	cfg := executeTestConfig(t, model.OutputModeTranslatedOnly)
+	var summarized []model.Article
+	app := &app{
+		cfg: cfg,
+		fetch: fetchDeps{
+			fetchWindowDetailedContext: func(ctx context.Context, cfg *config.Config, gotFrom, gotTo time.Time, markSeen bool, ignoreSeen bool) (fetcher.FetchResult, error) {
+				return fetcher.FetchResult{Articles: []model.Article{
+					{Title: "first ai", Category: "AI/科技"},
+					{Title: "first politics", Category: "国际政治"},
+					{Title: "second ai", Category: "AI/科技"},
+					{Title: "second politics", Category: "国际政治"},
+					{Title: "business", Category: "商业"},
+				}}, nil
+			},
+		},
+		ai: aiDeps{
+			summarizeContext: func(ctx context.Context, articles []model.Article, categoryOrder []string, loc *time.Location) (string, error) {
+				summarized = append([]model.Article(nil), articles...)
+				return "summary", nil
+			},
+		},
+		output: silentBriefingOutputDeps("body"),
+	}
+
+	cmd := regenCommand{fromRaw: "2026-03-18 08:00", toRaw: "2026-03-18 14:00", maxArticlesByCategory: map[string]int{"AI/科技": 2, "国际政治": 1}}
+	if err := execute(app, cmd); err != nil {
+		t.Fatalf("execute() error = %v", err)
+	}
+	wantTitles := []string{"first ai", "first politics", "second ai"}
+	gotTitles := make([]string, 0, len(summarized))
+	for _, article := range summarized {
+		gotTitles = append(gotTitles, article.Title)
+	}
+	if !reflect.DeepEqual(gotTitles, wantTitles) {
+		t.Fatalf("summarized titles = %#v, want %#v", gotTitles, wantTitles)
+	}
+}
+
 func TestExecuteRegenUsesXVisibleHistoryOptions(t *testing.T) {
 	loc, err := time.LoadLocation("Asia/Shanghai")
 	if err != nil {
