@@ -140,10 +140,8 @@ sources:
 
 ```yaml
 ai:
-  command: ccs
+  command: claude
   args:
-    - codex
-  extra_flags:
     - --bare
     - --disable-slash-commands
   append_system_prompt: true
@@ -154,8 +152,9 @@ ai:
 ```yaml
 ai:
   command: claude
-  args: []
-  extra_flags:
+  args:
+    - --model
+    - claude-opus-4-6
     - --bare
     - --disable-slash-commands
   append_system_prompt: true

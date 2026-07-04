@@ -202,7 +202,6 @@ type Proxy struct {
 type AICfg struct {
 	Command            string       `yaml:"command"`
 	Args               []string     `yaml:"args"`
-	ExtraFlags         []string     `yaml:"extra_flags"`
 	AppendSystemPrompt *bool        `yaml:"append_system_prompt"`
 	Retry              AIRetryCfg   `yaml:"retry"`
 	Timeout            AITimeoutCfg `yaml:"timeout"`
@@ -512,11 +511,6 @@ func (cfg *Config) Validate() error {
 	for i, arg := range cfg.AI.Args {
 		if strings.TrimSpace(arg) == "" {
 			return fmt.Errorf("validate ai.args[%d]: must not be empty", i)
-		}
-	}
-	for i, flag := range cfg.AI.ExtraFlags {
-		if strings.TrimSpace(flag) == "" {
-			return fmt.Errorf("validate ai.extra_flags[%d]: must not be empty", i)
 		}
 	}
 	for i, delay := range cfg.AI.Retry.Delays {
@@ -832,10 +826,10 @@ func Load(configPath string) (*Config, error) {
 		cfg.Output.Mode = model.OutputModeTranslatedOnly
 	}
 	if cfg.AI.Command == "" {
-		cfg.AI.Command = "ccs"
+		cfg.AI.Command = "claude"
 	}
 	if len(cfg.AI.Args) == 0 {
-		cfg.AI.Args = []string{"codex"}
+		cfg.AI.Args = []string{"--bare", "--disable-slash-commands"}
 	}
 	if cfg.AI.Retry.Delays == nil {
 		cfg.AI.Retry.Delays = cloneDurations(DefaultAIRetryDelays)

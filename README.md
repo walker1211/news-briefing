@@ -140,10 +140,8 @@ Make sure the AI CLI configured in `configs/config.yaml` is available and alread
 
 ```yaml
 ai:
-  command: ccs
+  command: claude
   args:
-    - codex
-  extra_flags:
     - --bare
     - --disable-slash-commands
   append_system_prompt: true
@@ -154,8 +152,9 @@ If you only have `claude` installed, you can usually switch to:
 ```yaml
 ai:
   command: claude
-  args: []
-  extra_flags:
+  args:
+    - --model
+    - claude-opus-4-6
     - --bare
     - --disable-slash-commands
   append_system_prompt: true

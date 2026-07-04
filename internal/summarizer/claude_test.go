@@ -218,7 +218,7 @@ func TestRunnerSummarizeValidatesImagesUsingPromptArticleOrder(t *testing.T) {
 	const aiImage = "https://example.com/ai.jpg"
 	const politicsImage = "https://example.com/politics.jpg"
 	setupFakeCLIOutput(t, "claude", `{"overview_groups":[],"stories":[{"category":"AI/科技","title":"AI story","image_url":"https://example.com/ai.jpg","summary":"AI summary.","impact":"AI impact.","source_article_ids":[1],"source_line":"来源: AI Source | 2026-03-18 14:00"}],"situation":"","directions":[]}`)
-	runner := NewRunner("claude", nil, nil, false, "", "")
+	runner := NewRunner("claude", nil, false, "", "")
 	articles := []model.Article{
 		{
 			Title:     "Politics story",
@@ -264,9 +264,9 @@ func TestDeepDivePromptUsesTopicDeepDivePackWording(t *testing.T) {
 	}
 }
 
-func TestRunnerUsesConfiguredExtraFlagsForDeepDive(t *testing.T) {
+func TestRunnerUsesConfiguredArgsForDeepDive(t *testing.T) {
 	setupFakeCLI(t, "claude")
-	runner := NewRunner("claude", []string{"--model", "claude-opus-4-6"}, []string{"--bare", "--disable-slash-commands"}, true, "", "")
+	runner := NewRunner("claude", []string{"--model", "claude-opus-4-6", "--bare", "--disable-slash-commands"}, true, "", "")
 
 	articles := sampleArticles()
 	got, err := runner.DeepDive("OpenAI", articles, time.Local)
@@ -290,15 +290,15 @@ func TestRunnerUsesConfiguredExtraFlagsForDeepDive(t *testing.T) {
 }
 
 func TestRunnerUsesDefaultConfiguredCommand(t *testing.T) {
-	setupFakeCLI(t, "ccs")
-	runner := NewRunner("", nil, nil, true, "", "")
+	setupFakeCLI(t, "claude")
+	runner := NewRunner("", nil, true, "", "")
 
 	got, err := runner.callClaude("hello world")
 	if err != nil {
 		t.Fatalf("callClaude() error = %v", err)
 	}
 
-	want := []string{"codex", "-p", "hello world"}
+	want := []string{"--bare", "--disable-slash-commands", "-p", "hello world"}
 	if args := splitArgs(got); !reflect.DeepEqual(args, want) {
 		t.Fatalf("callClaude() args = %#v, want %#v", args, want)
 	}
@@ -306,7 +306,7 @@ func TestRunnerUsesDefaultConfiguredCommand(t *testing.T) {
 
 func TestRunnerUsesConfiguredCommandAndArgs(t *testing.T) {
 	setupFakeCLI(t, "my-ai")
-	runner := NewRunner("my-ai", []string{"foo", "bar"}, nil, true, "", "")
+	runner := NewRunner("my-ai", []string{"foo", "bar"}, true, "", "")
 
 	got, err := runner.callClaude("hello world", "--model", "haiku")
 	if err != nil {
@@ -339,7 +339,7 @@ func TestCallClaudeIncludesStdoutAndStderrOnExitError(t *testing.T) {
 		t.Fatalf("set PATH: %v", err)
 	}
 
-	runner := NewRunner("failing-ai", nil, nil, true, "", "")
+	runner := NewRunner("failing-ai", nil, true, "", "")
 	_, err := runner.callClaude("hello world")
 	if err == nil {
 		t.Fatal("callClaude() error = nil, want exit error")
@@ -382,7 +382,7 @@ func TestCallClaudeRetriesRetryableFailureAndEventuallySucceeds(t *testing.T) {
 		t.Fatalf("set PATH: %v", err)
 	}
 
-	runner := NewRunner("flaky-ai", nil, nil, true, "", "")
+	runner := NewRunner("flaky-ai", nil, true, "", "")
 	runner.retrySleep = func(context.Context, time.Duration) error { return nil }
 	got, err := runner.callClaudeWithKind(callKindSummarize, "hello world")
 	if err != nil {
@@ -431,7 +431,7 @@ func TestCallClaudeRetriesInternalStreamError(t *testing.T) {
 		t.Fatalf("set PATH: %v", err)
 	}
 
-	runner := NewRunner("stream-error-ai", nil, nil, true, "", "")
+	runner := NewRunner("stream-error-ai", nil, true, "", "")
 	runner.retrySleep = func(context.Context, time.Duration) error { return nil }
 	got, err := runner.callClaudeWithKind(callKindSummarize, "hello world")
 	if err != nil {
@@ -480,7 +480,7 @@ func TestCallClaudeRetriesStreamingTimedOutError(t *testing.T) {
 		t.Fatalf("set PATH: %v", err)
 	}
 
-	runner := NewRunner("streaming-timeout-ai", nil, nil, true, "", "")
+	runner := NewRunner("streaming-timeout-ai", nil, true, "", "")
 	runner.retrySleep = func(context.Context, time.Duration) error { return nil }
 	got, err := runner.callClaudeWithKind(callKindSummarize, "hello world")
 	if err != nil {
@@ -529,7 +529,7 @@ func TestCallClaudeRetriesGenericRetryableAPIError(t *testing.T) {
 		t.Fatalf("set PATH: %v", err)
 	}
 
-	runner := NewRunner("generic-api-error-ai", nil, nil, true, "", "")
+	runner := NewRunner("generic-api-error-ai", nil, true, "", "")
 	runner.retrySleep = func(context.Context, time.Duration) error { return nil }
 	got, err := runner.callClaudeWithKind(callKindSummarize, "hello world")
 	if err != nil {
@@ -578,7 +578,7 @@ func TestCallClaudeRetriesCCSStartupLockError(t *testing.T) {
 		t.Fatalf("set PATH: %v", err)
 	}
 
-	runner := NewRunner("locked-ai", nil, nil, true, "", "")
+	runner := NewRunner("locked-ai", nil, true, "", "")
 	runner.retrySleep = func(context.Context, time.Duration) error { return nil }
 	got, err := runner.callClaudeWithKind(callKindSummarize, "hello world")
 	if err != nil {
@@ -627,7 +627,7 @@ func TestCallClaudeUsesConfiguredRetryDelays(t *testing.T) {
 		t.Fatalf("set PATH: %v", err)
 	}
 
-	runner := NewRunnerWithRetryDelays("configured-delay-ai", nil, nil, true, "", "", []time.Duration{2 * time.Second, 5 * time.Second})
+	runner := NewRunnerWithRetryDelays("configured-delay-ai", nil, true, "", "", []time.Duration{2 * time.Second, 5 * time.Second})
 	var slept []time.Duration
 	runner.retrySleep = func(ctx context.Context, d time.Duration) error {
 		slept = append(slept, d)
@@ -647,7 +647,7 @@ func TestCallClaudeUsesConfiguredRetryDelays(t *testing.T) {
 }
 
 func TestCallClaudeWithKindContextReturnsContextErrorWithoutRetry(t *testing.T) {
-	runner := NewRunner("unused-ai", nil, nil, true, "", "")
+	runner := NewRunner("unused-ai", nil, true, "", "")
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
@@ -678,7 +678,7 @@ func TestCallClaudeWithKindContextStopsDuringRetrySleep(t *testing.T) {
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
-	runner := NewRunner("cancel-retry-ai", nil, nil, true, "", "")
+	runner := NewRunner("cancel-retry-ai", nil, true, "", "")
 	runner.retrySleep = func(ctx context.Context, d time.Duration) error {
 		cancel()
 		return ctx.Err()
@@ -725,7 +725,7 @@ func TestCallClaudeReturnsAggregatedErrorAfterRetryExhaustion(t *testing.T) {
 		t.Fatalf("set PATH: %v", err)
 	}
 
-	runner := NewRunner("always-fail-ai", nil, nil, true, "", "")
+	runner := NewRunner("always-fail-ai", nil, true, "", "")
 	runner.retrySleep = func(context.Context, time.Duration) error { return nil }
 	_, err := runner.callClaudeWithKind(callKindSummarize, "hello world")
 	if err == nil {
@@ -768,7 +768,7 @@ func TestCallClaudeWritesFailureLogAfterRetryExhaustion(t *testing.T) {
 		t.Fatalf("set PATH: %v", err)
 	}
 
-	runner := NewRunner("log-fail-ai", nil, nil, true, "", "")
+	runner := NewRunner("log-fail-ai", nil, true, "", "")
 	runner.retrySleep = func(context.Context, time.Duration) error { return nil }
 	runner.failureLogPath = logPath
 	_, err := runner.callClaudeWithKind(callKindTranslate, "hello world")
@@ -817,7 +817,7 @@ func TestCallClaudeRetrySuccessStillSanitizesCCSOutput(t *testing.T) {
 		t.Fatalf("set PATH: %v", err)
 	}
 
-	runner := NewRunner("ccs", []string{"codex"}, nil, true, "", "")
+	runner := NewRunner("ccs", []string{"codex"}, true, "", "")
 	runner.retrySleep = func(context.Context, time.Duration) error { return nil }
 	got, err := runner.callClaudeWithKind(callKindSummarize, "hello world")
 	if err != nil {
@@ -859,7 +859,7 @@ func TestCallClaudeRetriesWhenSanitizedOutputIsEmpty(t *testing.T) {
 		t.Fatalf("set PATH: %v", err)
 	}
 
-	runner := NewRunner("ccs", []string{"codex"}, nil, true, "", "")
+	runner := NewRunner("ccs", []string{"codex"}, true, "", "")
 	runner.retrySleep = func(context.Context, time.Duration) error { return nil }
 	got, err := runner.callClaudeWithKind(callKindSummarize, "hello world")
 	if err != nil {
@@ -905,7 +905,7 @@ func TestTranslateWritesFailureLogWhenSanitizedOutputStaysEmpty(t *testing.T) {
 		t.Fatalf("set PATH: %v", err)
 	}
 
-	runner := NewRunner("ccs", []string{"codex"}, nil, true, "", "")
+	runner := NewRunner("ccs", []string{"codex"}, true, "", "")
 	runner.retrySleep = func(context.Context, time.Duration) error { return nil }
 	runner.failureLogPath = logPath
 	_, err := runner.Translate(sampleArticles(), []string{"AI/科技"}, time.Local)
@@ -963,7 +963,7 @@ func TestSummarizeWritesFailureLogWhenSanitizedOutputStaysEmpty(t *testing.T) {
 		t.Fatalf("set PATH: %v", err)
 	}
 
-	runner := NewRunner("ccs", []string{"codex"}, nil, true, "", "")
+	runner := NewRunner("ccs", []string{"codex"}, true, "", "")
 	runner.retrySleep = func(context.Context, time.Duration) error { return nil }
 	runner.failureLogPath = logPath
 	_, err := runner.Summarize(sampleArticles(), []string{"AI/科技"}, time.Local)
@@ -1021,7 +1021,7 @@ func TestDeepDiveWritesFailureLogWhenSanitizedOutputStaysEmpty(t *testing.T) {
 		t.Fatalf("set PATH: %v", err)
 	}
 
-	runner := NewRunner("ccs", []string{"codex"}, nil, true, "", "")
+	runner := NewRunner("ccs", []string{"codex"}, true, "", "")
 	runner.retrySleep = func(context.Context, time.Duration) error { return nil }
 	runner.failureLogPath = logPath
 	_, err := runner.DeepDive("OpenAI", sampleArticles(), time.Local)
@@ -1051,9 +1051,9 @@ func TestDeepDiveWritesFailureLogWhenSanitizedOutputStaysEmpty(t *testing.T) {
 	}
 }
 
-func TestRunnerUsesConfiguredExtraFlagsForSummarize(t *testing.T) {
+func TestRunnerUsesConfiguredArgsForSummarize(t *testing.T) {
 	argsPath := setupFakeCLIOutput(t, "claude", validBriefingJSON())
-	runner := NewRunner("claude", []string{"--model", "claude-opus-4-6"}, []string{"--bare", "--disable-slash-commands"}, true, "", "")
+	runner := NewRunner("claude", []string{"--model", "claude-opus-4-6", "--bare", "--disable-slash-commands"}, true, "", "")
 
 	articles := sampleArticles()
 	if _, err := runner.Summarize(articles, []string{"AI/科技", "国际政治"}, time.Local); err != nil {
@@ -1075,9 +1075,9 @@ func TestRunnerUsesConfiguredExtraFlagsForSummarize(t *testing.T) {
 	}
 }
 
-func TestRunnerUsesConfiguredExtraFlagsForTranslate(t *testing.T) {
+func TestRunnerUsesConfiguredArgsForTranslate(t *testing.T) {
 	setupFakeCLI(t, "claude")
-	runner := NewRunner("claude", []string{"--model", "claude-opus-4-6"}, []string{"--bare", "--disable-slash-commands"}, true, "", "")
+	runner := NewRunner("claude", []string{"--model", "claude-opus-4-6", "--bare", "--disable-slash-commands"}, true, "", "")
 
 	articles := sampleArticles()
 	got, err := runner.Translate(articles, []string{"AI/科技", "国际政治"}, time.Local)
@@ -1104,8 +1104,8 @@ func TestRunnerInstancesDoNotShareCommandOrProxyState(t *testing.T) {
 	ccsArgsPath := setupFakeCLIOutput(t, "ccs", validBriefingJSON())
 	otherArgsPath := setupFakeCLIOutput(t, "my-ai", validBriefingJSON())
 
-	ccsRunner := NewRunner("ccs", []string{"codex"}, []string{"--bare"}, true, "http://127.0.0.1:7897", "")
-	otherRunner := NewRunner("my-ai", []string{"foo"}, nil, false, "", "")
+	ccsRunner := NewRunner("ccs", []string{"codex", "--bare"}, true, "http://127.0.0.1:7897", "")
+	otherRunner := NewRunner("my-ai", []string{"foo"}, false, "", "")
 
 	articles := sampleArticles()
 	if _, err := ccsRunner.Summarize(articles, []string{"AI/科技", "国际政治"}, time.Local); err != nil {
@@ -1146,13 +1146,13 @@ func TestSanitizeCLIOutputStripsCCSInfraLogs(t *testing.T) {
 }
 
 func TestRunnerShouldSanitizeCLIOutputOnlyForCCSCodex(t *testing.T) {
-	if !NewRunner("ccs", []string{"codex"}, nil, true, "", "").shouldSanitizeCLIOutput() {
+	if !NewRunner("ccs", []string{"codex"}, true, "", "").shouldSanitizeCLIOutput() {
 		t.Fatalf("shouldSanitizeCLIOutput() = false, want true for ccs codex")
 	}
-	if NewRunner("ccs", []string{"gemini"}, nil, true, "", "").shouldSanitizeCLIOutput() {
+	if NewRunner("ccs", []string{"gemini"}, true, "", "").shouldSanitizeCLIOutput() {
 		t.Fatalf("shouldSanitizeCLIOutput() = true, want false for ccs gemini")
 	}
-	if NewRunner("my-ai", []string{"codex"}, nil, true, "", "").shouldSanitizeCLIOutput() {
+	if NewRunner("my-ai", []string{"codex"}, true, "", "").shouldSanitizeCLIOutput() {
 		t.Fatalf("shouldSanitizeCLIOutput() = true, want false for non-ccs command")
 	}
 }
@@ -1161,8 +1161,8 @@ func TestLegacyShouldSanitizeCLIOutputUsesDefaultConfig(t *testing.T) {
 	ResetCommandForTest()
 	t.Cleanup(ResetCommandForTest)
 
-	if !shouldSanitizeCLIOutput() {
-		t.Fatalf("shouldSanitizeCLIOutput() = false, want true for default ccs codex")
+	if shouldSanitizeCLIOutput() {
+		t.Fatalf("shouldSanitizeCLIOutput() = true, want false for default claude")
 	}
 }
 
@@ -1189,8 +1189,8 @@ func TestResetCommandForTestRestoresDefaultConfig(t *testing.T) {
 	ResetCommandForTest()
 	t.Cleanup(ResetCommandForTest)
 
-	if !shouldSanitizeCLIOutput() {
-		t.Fatalf("shouldSanitizeCLIOutput() = false, want true after reset")
+	if shouldSanitizeCLIOutput() {
+		t.Fatalf("shouldSanitizeCLIOutput() = true, want false after reset")
 	}
 	if runner := legacyDefaultRunner(); len(runner.proxyEnv) != 0 {
 		t.Fatalf("proxy env after reset = %#v, want empty", runner.proxyEnv)
@@ -1200,6 +1200,7 @@ func TestResetCommandForTestRestoresDefaultConfig(t *testing.T) {
 func TestDefaultRunnerConcurrentMutationDoesNotRace(t *testing.T) {
 	ResetCommandForTest()
 	t.Cleanup(ResetCommandForTest)
+	setupFakeCLI(t, "claude")
 	setupFakeCLI(t, "ccs")
 	setupFakeCLI(t, "my-ai")
 
