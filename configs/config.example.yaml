@@ -297,10 +297,8 @@ proxy:
   socks5: socks5://127.0.0.1:7897
 
 ai:
-  command: ccs
+  command: claude
   args:
-    - codex
-  extra_flags:
     - --bare
     - --disable-slash-commands
   append_system_prompt: true

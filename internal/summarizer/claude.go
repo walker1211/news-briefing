@@ -98,7 +98,6 @@ const deepDivePrompt = `你是一个资深新闻调研员和话题研究助手�
 type Runner struct {
 	commandName        string
 	commandArgs        []string
-	extraFlags         []string
 	appendSystemPrompt bool
 	proxyEnv           []string
 	retrySleep         sleepFunc
@@ -115,9 +114,8 @@ const (
 )
 
 var (
-	defaultCommand            = "ccs"
-	defaultCommandArgs        = []string{"codex"}
-	defaultExtraFlags         []string
+	defaultCommand            = "claude"
+	defaultCommandArgs        = []string{"--bare", "--disable-slash-commands"}
 	defaultAppendSystemPrompt = true
 	defaultFailureLogPath     = filepath.Join("logs", "ai-cli-failures.log")
 	defaultRetryDelays        = []time.Duration{time.Second, 2 * time.Second, 5 * time.Second, 9 * time.Second, 17 * time.Second}
@@ -129,7 +127,6 @@ var (
 type runnerConfig struct {
 	command            string
 	args               []string
-	extraFlags         []string
 	appendSystemPrompt bool
 	httpProxy          string
 	socks5Proxy        string
@@ -141,7 +138,6 @@ func newDefaultRunnerConfig() runnerConfig {
 	return runnerConfig{
 		command:            defaultCommand,
 		args:               cloneStrings(defaultCommandArgs),
-		extraFlags:         cloneStrings(defaultExtraFlags),
 		appendSystemPrompt: defaultAppendSystemPrompt,
 		retryDelays:        cloneDurations(defaultRetryDelays),
 		failureLogPath:     defaultFailureLogPath,
@@ -152,7 +148,6 @@ func (c runnerConfig) clone() runnerConfig {
 	return runnerConfig{
 		command:            c.command,
 		args:               cloneStrings(c.args),
-		extraFlags:         cloneStrings(c.extraFlags),
 		appendSystemPrompt: c.appendSystemPrompt,
 		httpProxy:          c.httpProxy,
 		socks5Proxy:        c.socks5Proxy,
@@ -170,7 +165,7 @@ func cloneDurations(values []time.Duration) []time.Duration {
 }
 
 func (c runnerConfig) newRunner() *Runner {
-	runner := NewRunnerWithRetryDelays(c.command, c.args, c.extraFlags, c.appendSystemPrompt, c.httpProxy, c.socks5Proxy, c.retryDelays)
+	runner := NewRunnerWithRetryDelays(c.command, c.args, c.appendSystemPrompt, c.httpProxy, c.socks5Proxy, c.retryDelays)
 	runner.failureLogPath = c.failureLogPath
 	return runner
 }
@@ -190,11 +185,11 @@ func legacyDefaultRunner() *Runner {
 	return legacyDefaultRunnerConfig().newRunner()
 }
 
-func NewRunner(command string, args []string, extraFlags []string, appendSystemPrompt bool, httpProxy, socks5Proxy string) *Runner {
-	return NewRunnerWithRetryDelays(command, args, extraFlags, appendSystemPrompt, httpProxy, socks5Proxy, nil)
+func NewRunner(command string, args []string, appendSystemPrompt bool, httpProxy, socks5Proxy string) *Runner {
+	return NewRunnerWithRetryDelays(command, args, appendSystemPrompt, httpProxy, socks5Proxy, nil)
 }
 
-func NewRunnerWithRetryDelays(command string, args []string, extraFlags []string, appendSystemPrompt bool, httpProxy, socks5Proxy string, retryDelays []time.Duration) *Runner {
+func NewRunnerWithRetryDelays(command string, args []string, appendSystemPrompt bool, httpProxy, socks5Proxy string, retryDelays []time.Duration) *Runner {
 	name := command
 	if name == "" {
 		name = defaultCommand
@@ -223,7 +218,6 @@ func NewRunnerWithRetryDelays(command string, args []string, extraFlags []string
 	return &Runner{
 		commandName:        name,
 		commandArgs:        runnerArgs,
-		extraFlags:         cloneStrings(extraFlags),
 		appendSystemPrompt: appendSystemPrompt,
 		proxyEnv:           proxyEnv,
 		retrySleep:         retrySleep,
@@ -307,11 +301,11 @@ func retrySleep(ctx context.Context, d time.Duration) error {
 	}
 }
 
-func (r *Runner) callClaudeWithKind(kind callKind, prompt string, extraFlags ...string) (string, error) {
-	return r.callClaudeWithKindContext(context.Background(), kind, prompt, extraFlags...)
+func (r *Runner) callClaudeWithKind(kind callKind, prompt string, runtimeArgs ...string) (string, error) {
+	return r.callClaudeWithKindContext(context.Background(), kind, prompt, runtimeArgs...)
 }
 
-func (r *Runner) callClaudeWithKindContext(ctx context.Context, kind callKind, prompt string, extraFlags ...string) (string, error) {
+func (r *Runner) callClaudeWithKindContext(ctx context.Context, kind callKind, prompt string, runtimeArgs ...string) (string, error) {
 	var lastErr error
 	for attempt := 0; attempt <= len(r.retryDelays); attempt++ {
 		if err := ctx.Err(); err != nil {
@@ -325,7 +319,7 @@ func (r *Runner) callClaudeWithKindContext(ctx context.Context, kind callKind, p
 				}
 			}
 		}
-		out, stdoutText, stderrText, err := r.runClaudeCommandContext(ctx, prompt, extraFlags...)
+		out, stdoutText, stderrText, err := r.runClaudeCommandContext(ctx, prompt, runtimeArgs...)
 		if err == nil {
 			body := strings.TrimSpace(out)
 			if r.shouldSanitizeCLIOutput() {
@@ -350,21 +344,21 @@ func (r *Runner) callClaudeWithKindContext(ctx context.Context, kind callKind, p
 	return "", lastErr
 }
 
-func (r *Runner) callClaude(prompt string, extraFlags ...string) (string, error) {
-	return r.callClaudeWithKind(callKindSummarize, prompt, extraFlags...)
+func (r *Runner) callClaude(prompt string, runtimeArgs ...string) (string, error) {
+	return r.callClaudeWithKind(callKindSummarize, prompt, runtimeArgs...)
 }
 
-func (r *Runner) callClaudeContext(ctx context.Context, prompt string, extraFlags ...string) (string, error) {
-	return r.callClaudeWithKindContext(ctx, callKindSummarize, prompt, extraFlags...)
+func (r *Runner) callClaudeContext(ctx context.Context, prompt string, runtimeArgs ...string) (string, error) {
+	return r.callClaudeWithKindContext(ctx, callKindSummarize, prompt, runtimeArgs...)
 }
 
-func (r *Runner) runClaudeCommand(prompt string, extraFlags ...string) (string, string, string, error) {
-	return r.runClaudeCommandContext(context.Background(), prompt, extraFlags...)
+func (r *Runner) runClaudeCommand(prompt string, runtimeArgs ...string) (string, string, string, error) {
+	return r.runClaudeCommandContext(context.Background(), prompt, runtimeArgs...)
 }
 
-func (r *Runner) runClaudeCommandContext(ctx context.Context, prompt string, extraFlags ...string) (string, string, string, error) {
+func (r *Runner) runClaudeCommandContext(ctx context.Context, prompt string, runtimeArgs ...string) (string, string, string, error) {
 	args := append([]string{}, r.commandArgs...)
-	args = append(args, extraFlags...)
+	args = append(args, runtimeArgs...)
 	args = append(args, "-p", prompt)
 	cmd := exec.CommandContext(ctx, r.commandName, args...)
 	env := filterEnv(os.Environ(), "CLAUDECODE")
@@ -493,7 +487,7 @@ func (r *Runner) SummarizeBriefingContext(ctx context.Context, articles []model.
 	input := output.GroupedArticleListView(promptArticles, categoryOrder, loc)
 	prompt := briefingPrompt + "\n\n---\n以下是今日新闻条目：\n\n" + input
 
-	raw, err := r.callClaudeContext(ctx, prompt, r.summarizeExtraFlags()...)
+	raw, err := r.callClaudeContext(ctx, prompt, r.summarizeRuntimeArgs()...)
 	if err != nil {
 		return model.BriefingSummary{}, "", err
 	}
@@ -607,12 +601,12 @@ func usableArticleImage(article model.Article) string {
 	return image
 }
 
-func (r *Runner) summarizeExtraFlags() []string {
-	flags := append([]string(nil), r.extraFlags...)
+func (r *Runner) summarizeRuntimeArgs() []string {
+	var args []string
 	if r.appendSystemPrompt {
-		flags = append(flags, "--append-system-prompt", nonInteractiveBriefingSystemPrompt)
+		args = append(args, "--append-system-prompt", nonInteractiveBriefingSystemPrompt)
 	}
-	return flags
+	return args
 }
 
 func shouldSanitizeCLIOutput() bool {
@@ -631,15 +625,15 @@ func (r *Runner) DeepDiveContext(ctx context.Context, topic string, articles []m
 	input := output.ArticleListView(articles, loc)
 	prompt := fmt.Sprintf(deepDivePrompt, topic) + "\n\n---\n话题: " + topic + "\n\n相关新闻:\n" + input
 
-	return r.callClaudeWithKindContext(ctx, callKindDeepDive, prompt, r.deepDiveExtraFlags()...)
+	return r.callClaudeWithKindContext(ctx, callKindDeepDive, prompt, r.deepDiveRuntimeArgs()...)
 }
 
-func (r *Runner) deepDiveExtraFlags() []string {
-	flags := append([]string(nil), r.extraFlags...)
+func (r *Runner) deepDiveRuntimeArgs() []string {
+	var args []string
 	if r.appendSystemPrompt {
-		flags = append(flags, "--append-system-prompt", nonInteractiveDeepDiveSystemPrompt)
+		args = append(args, "--append-system-prompt", nonInteractiveDeepDiveSystemPrompt)
 	}
-	return flags
+	return args
 }
 
 const translatePrompt = `将以下新闻列表翻译成中文。要求：
@@ -661,15 +655,15 @@ func (r *Runner) TranslateContext(ctx context.Context, articles []model.Article,
 	}
 	input := output.GroupedArticleListView(articles, categoryOrder, loc)
 	prompt := translatePrompt + "\n\n" + input
-	return r.callClaudeWithKindContext(ctx, callKindTranslate, prompt, r.translateExtraFlags()...)
+	return r.callClaudeWithKindContext(ctx, callKindTranslate, prompt, r.translateRuntimeArgs()...)
 }
 
-func (r *Runner) translateExtraFlags() []string {
-	flags := append([]string(nil), r.extraFlags...)
+func (r *Runner) translateRuntimeArgs() []string {
+	var args []string
 	if r.appendSystemPrompt {
-		flags = append(flags, "--append-system-prompt", nonInteractiveBriefingSystemPrompt)
+		args = append(args, "--append-system-prompt", nonInteractiveBriefingSystemPrompt)
 	}
-	return flags
+	return args
 }
 
 func filterEnv(env []string, exclude string) []string {

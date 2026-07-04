@@ -34,14 +34,11 @@ proxy: {}
 		t.Fatalf("Load() error = %v", err)
 	}
 
-	if cfg.AI.Command != "ccs" {
-		t.Fatalf("AI.Command = %q, want %q", cfg.AI.Command, "ccs")
+	if cfg.AI.Command != "claude" {
+		t.Fatalf("AI.Command = %q, want %q", cfg.AI.Command, "claude")
 	}
-	if len(cfg.AI.Args) != 1 || cfg.AI.Args[0] != "codex" {
-		t.Fatalf("AI.Args = %v, want %v", cfg.AI.Args, []string{"codex"})
-	}
-	if len(cfg.AI.ExtraFlags) != 0 {
-		t.Fatalf("AI.ExtraFlags = %v, want empty", cfg.AI.ExtraFlags)
+	if !reflect.DeepEqual(cfg.AI.Args, []string{"--bare", "--disable-slash-commands"}) {
+		t.Fatalf("AI.Args = %v, want %v", cfg.AI.Args, []string{"--bare", "--disable-slash-commands"})
 	}
 	if !cfg.AI.ShouldAppendSystemPrompt() {
 		t.Fatalf("AI.ShouldAppendSystemPrompt() = false, want true")
@@ -265,7 +262,6 @@ ai:
   args:
     - --model
     - claude-opus-4-6
-  extra_flags:
     - --bare
     - --disable-slash-commands
   append_system_prompt: false
@@ -282,11 +278,8 @@ ai:
 	if cfg.AI.Command != "claude" {
 		t.Fatalf("AI.Command = %q, want %q", cfg.AI.Command, "claude")
 	}
-	if !reflect.DeepEqual(cfg.AI.Args, []string{"--model", "claude-opus-4-6"}) {
+	if !reflect.DeepEqual(cfg.AI.Args, []string{"--model", "claude-opus-4-6", "--bare", "--disable-slash-commands"}) {
 		t.Fatalf("AI.Args = %v", cfg.AI.Args)
-	}
-	if !reflect.DeepEqual(cfg.AI.ExtraFlags, []string{"--bare", "--disable-slash-commands"}) {
-		t.Fatalf("AI.ExtraFlags = %v", cfg.AI.ExtraFlags)
 	}
 	if cfg.AI.ShouldAppendSystemPrompt() {
 		t.Fatalf("AI.ShouldAppendSystemPrompt() = true, want false")
@@ -1469,7 +1462,6 @@ func TestLoadRejectsInvalidAIConfig(t *testing.T) {
 	}{
 		{name: "blank command", ai: "command: \" \"", wantErr: "ai.command"},
 		{name: "blank arg", ai: "command: ccs\nargs:\n  - \" \"", wantErr: "ai.args[0]"},
-		{name: "blank extra flag", ai: "command: ccs\nextra_flags:\n  - \" \"", wantErr: "ai.extra_flags[0]"},
 	}
 
 	for _, tt := range tests {
