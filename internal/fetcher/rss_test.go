@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/PuerkitoBio/goquery"
 	"github.com/mmcdole/gofeed"
 	"github.com/walker1211/news-briefing/internal/config"
 )
@@ -17,6 +18,15 @@ type roundTripFunc func(*http.Request) (*http.Response, error)
 
 func (f roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
 	return f(req)
+}
+
+func mustRSSHTMLDoc(t *testing.T, html string) *goquery.Document {
+	t.Helper()
+	doc, err := goquery.NewDocumentFromReader(strings.NewReader(html))
+	if err != nil {
+		t.Fatalf("parse html: %v", err)
+	}
+	return doc
 }
 
 func TestFetchRSSFallsBackToCurlForReddit403(t *testing.T) {
@@ -212,6 +222,77 @@ func TestFetchRSSExtractsOpenGraphImageFromArticlePage(t *testing.T) {
 		"https://spacenews.com/uk-startup-neworbit-raises-18-5-million-in-series-a-round/",
 	}, "\n") {
 		t.Fatalf("requested URLs = %#v", requested)
+	}
+}
+
+func TestFetchRSSExtractsArticleBodyImageFromArticlePage(t *testing.T) {
+	client := NewClient(&http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		body := `<!doctype html>
+<html>
+<body>
+  <header><img src="/site-logo.png"></header>
+  <div class="left_zw">
+    <p>Story text before image.</p>
+    <div><img class="thumb-selected" src="//i2.example.com/simg/ypt/2026/260708/story_zsite.jpg" alt=""></div>
+  </div>
+  <aside><img src="/recommendation.jpg"></aside>
+</body>
+</html>`
+		if req.URL.Path == "/feed.xml" {
+			body = `<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0">
+  <channel>
+    <title>Example Finance</title>
+    <item>
+      <title>European heat drives cooling economy</title>
+      <link>https://example.com/cj/2026/07-08/story.shtml</link>
+      <description>Cooling economy grows during heat wave</description>
+      <pubDate>Wed, 8 Jul 2026 08:00:00 GMT</pubDate>
+    </item>
+  </channel>
+</rss>`
+		}
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Status:     "200 OK",
+			Body:       io.NopCloser(strings.NewReader(body)),
+			Header:     make(http.Header),
+			Request:    req,
+		}, nil
+	})})
+
+	result, err := client.FetchRSS(config.Source{
+		Name:     "Example Finance",
+		URL:      "https://example.com/feed.xml",
+		Type:     config.SourceTypeRSS,
+		Category: "新闻财经",
+	}, []string{"economy"}, time.Date(2026, 7, 8, 0, 0, 0, 0, time.UTC))
+	if err != nil {
+		t.Fatalf("FetchRSS() error = %v", err)
+	}
+	if len(result.Candidates) != 1 {
+		t.Fatalf("len(result.Candidates) = %d, want 1", len(result.Candidates))
+	}
+	want := "https://i2.example.com/simg/ypt/2026/260708/story_zsite.jpg"
+	if got := result.Candidates[0].Article.ImageURL; got != want {
+		t.Fatalf("Article.ImageURL = %q, want article body image %q", got, want)
+	}
+}
+
+func TestFetchRSSArticleBodyImageSkipsDecorativeImages(t *testing.T) {
+	got := articleBodyImage(mustRSSHTMLDoc(t, `<!doctype html>
+<html>
+<body>
+  <article>
+    <img class="logo" src="/logo.png">
+    <img width="32" height="32" src="/icon.png">
+    <img data-src="/photos/story.jpg">
+  </article>
+</body>
+</html>`), "https://example.com/story")
+
+	if got != "https://example.com/photos/story.jpg" {
+		t.Fatalf("articleBodyImage() = %q, want first non-decorative article image", got)
 	}
 }
 
