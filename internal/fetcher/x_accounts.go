@@ -198,7 +198,7 @@ func collectXVisibleNDJSON(ctx context.Context, cfg config.XAccountsConfig, keyw
 					}
 				}
 			}
-			candidate, ok := xVisibleArticleCandidate(item, cfg.Category, keywords, from, to, allowedAccounts)
+			candidate, ok := xVisibleArticleCandidate(item, cfg.Category, keywords, from, to, allowedAccounts, cfg.OriginalOnly)
 			if !ok {
 				continue
 			}
@@ -742,8 +742,11 @@ func xVisibleCoverageWarning(item xVisibleArticle, from, to time.Time) *FailedSo
 	}
 }
 
-func xVisibleArticleCandidate(item xVisibleArticle, category string, keywords []string, from time.Time, to time.Time, allowedAccounts map[string]struct{}) (fetchedCandidate, bool) {
+func xVisibleArticleCandidate(item xVisibleArticle, category string, keywords []string, from time.Time, to time.Time, allowedAccounts map[string]struct{}, originalOnly bool) (fetchedCandidate, bool) {
 	if item.Kind != "x-visible-article" || item.SchemaVersion != 1 || strings.TrimSpace(item.Text) == "" {
+		return fetchedCandidate{}, false
+	}
+	if originalOnly && xVisibleArticleIsRepost(item) {
 		return fetchedCandidate{}, false
 	}
 	published, err := time.Parse(time.RFC3339, item.Datetime)
@@ -774,6 +777,20 @@ func xVisibleArticleCandidate(item xVisibleArticle, category string, keywords []
 		},
 		MatchedKeywords: matchedKeywords(item.Text, keywords),
 	}, true
+}
+
+func xVisibleArticleIsRepost(item xVisibleArticle) bool {
+	text := strings.TrimSpace(item.Text)
+	if text == "" {
+		return false
+	}
+	lower := strings.ToLower(text)
+	return strings.Contains(text, "已转帖") ||
+		strings.Contains(text, "转帖") ||
+		strings.Contains(text, "转发") ||
+		strings.Contains(lower, "rt @") ||
+		containsASCIIWord(lower, "reposted") ||
+		containsASCIIWord(lower, "retweeted")
 }
 
 func xVisibleLimitTarget(item xVisibleArticle) string {

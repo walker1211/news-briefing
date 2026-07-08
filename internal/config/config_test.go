@@ -306,6 +306,7 @@ x_accounts:
   history_dir: /tmp/rsshub-stack/history
   lookback: 24h
   max_posts_per_target: 10
+  original_only: true
   category: AI/科技
   accounts:
     - handle: OpenAIDevs
@@ -337,6 +338,9 @@ x_accounts:
 	}
 	if cfg.XAccounts.MaxPostsPerTarget != 10 {
 		t.Fatalf("XAccounts.MaxPostsPerTarget = %d, want 10", cfg.XAccounts.MaxPostsPerTarget)
+	}
+	if !cfg.XAccounts.OriginalOnly {
+		t.Fatalf("XAccounts.OriginalOnly = false, want true")
 	}
 	if cfg.XAccounts.Category != "AI/科技" {
 		t.Fatalf("XAccounts.Category = %q, want AI/科技", cfg.XAccounts.Category)

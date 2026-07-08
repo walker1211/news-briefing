@@ -159,6 +159,7 @@ type XAccountsConfig struct {
 	RefreshWaitTimeoutRaw  string           `yaml:"refresh_wait_timeout"`
 	RefreshWaitIntervalRaw string           `yaml:"refresh_wait_interval"`
 	MaxPostsPerTarget      int              `yaml:"max_posts_per_target"`
+	OriginalOnly           bool             `yaml:"original_only"`
 	Category               string           `yaml:"category"`
 	Accounts               []XAccountConfig `yaml:"accounts"`
 	Lookback               time.Duration    `yaml:"-"`
