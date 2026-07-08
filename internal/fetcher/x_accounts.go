@@ -190,10 +190,12 @@ func collectXVisibleNDJSON(ctx context.Context, cfg config.XAccountsConfig, keyw
 		}
 		for _, item := range items {
 			if warning := xVisibleCoverageWarning(item, from, to); warning != nil {
-				key := warning.Name + "\n" + warning.Err.Error()
-				if _, exists := coverageWarnings[key]; !exists {
-					coverageWarnings[key] = struct{}{}
-					failed = append(failed, *warning)
+				if xVisibleWarningTargetAllowed(item, allowedAccounts) {
+					key := warning.Name + "\n" + warning.Err.Error()
+					if _, exists := coverageWarnings[key]; !exists {
+						coverageWarnings[key] = struct{}{}
+						failed = append(failed, *warning)
+					}
 				}
 			}
 			candidate, ok := xVisibleArticleCandidate(item, cfg.Category, keywords, from, to, allowedAccounts)
@@ -220,6 +222,15 @@ func collectXVisibleNDJSON(ctx context.Context, cfg config.XAccountsConfig, keyw
 		return nil, failed, nil
 	}
 	return []sourceFetchResult{{Source: config.Source{Name: xVisibleSourceName, Category: cfg.Category}, Candidates: candidates}}, failed, nil
+}
+
+func xVisibleWarningTargetAllowed(item xVisibleArticle, allowedAccounts map[string]struct{}) bool {
+	if item.TargetType != "account" {
+		return true
+	}
+	handle := strings.ToLower(xVisibleHandle(item))
+	_, ok := allowedAccounts[handle]
+	return ok
 }
 
 func readXVisibleNDJSONFile(path string) ([]xVisibleArticle, error) {

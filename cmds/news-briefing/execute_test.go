@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"os"
 	"os/exec"
@@ -179,6 +180,61 @@ func TestRenderBriefingSkipsPublishHookWhenSuppressed(t *testing.T) {
 	}
 	if hookCalled {
 		t.Fatal("publish hook was called with suppressPublishHook=true")
+	}
+}
+
+func TestRenderBriefingWritesSourceStatsSidecar(t *testing.T) {
+	cfg := executeTestConfig(t, model.OutputModeTranslatedOnly)
+	markdownPath := filepath.Join(cfg.Output.Dir, "briefing.md")
+	articles := sampleExecuteArticles()
+	stats := model.SourceStatsReport{
+		SchemaVersion: "source-stats/v1",
+		SourceApp:     "news-briefing",
+		Sources: []model.SourceStatsEntry{{
+			Source:   "Example",
+			Type:     "rss",
+			Category: "AI/科技",
+			Fetched:  3,
+		}},
+	}
+	stats.RecalculateTotals()
+	app := &app{
+		cfg: cfg,
+		output: outputDeps{
+			printFailed:   func([]fetcher.FailedSource) {},
+			printArticles: func([]model.Article) {},
+			printCLI:      func(*model.Briefing) {},
+			composeBody: func(string, model.OutputMode, model.OutputContent) (string, error) {
+				return "body", nil
+			},
+			writeMarkdown: func(*model.Briefing, string) (string, error) {
+				return markdownPath, nil
+			},
+		},
+		ai: aiDeps{
+			summarizeBriefingContext: func(context.Context, []model.Article, []string, *time.Location) (model.BriefingSummary, string, error) {
+				return model.BriefingSummary{}, "summary", nil
+			},
+		},
+		suppressPublishHook: true,
+	}
+
+	if err := app.renderBriefingContextWithSourceStats(context.Background(), "run", "26.07.08", "0800", articles, nil, nil, nil, false, false, &stats); err != nil {
+		t.Fatalf("renderBriefingContextWithSourceStats() error = %v", err)
+	}
+	data, err := os.ReadFile(output.SourceStatsPath(markdownPath))
+	if err != nil {
+		t.Fatalf("ReadFile(source stats) error = %v", err)
+	}
+	var got model.SourceStatsReport
+	if err := json.Unmarshal(data, &got); err != nil {
+		t.Fatalf("Unmarshal(source stats) error = %v", err)
+	}
+	if got.Date != "26.07.08" || got.Period != "0800" {
+		t.Fatalf("date/period = %s/%s", got.Date, got.Period)
+	}
+	if got.Totals.EnteredAI != 1 || len(got.Sources) != 1 || got.Sources[0].EnteredAI != 1 {
+		t.Fatalf("source stats = %#v", got)
 	}
 }
 

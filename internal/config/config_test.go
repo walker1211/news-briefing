@@ -1758,6 +1758,93 @@ func TestProjectConfigDoesNotIncludeRemovedCognitionRSS(t *testing.T) {
 	}
 }
 
+func TestLoadParsesFilters(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	content := `sources: []
+keywords:
+  - AI
+filters:
+  categories:
+    新闻财经:
+      include_keywords:
+        - 央行
+        - IPO
+      exclude_keywords:
+        - 体育
+  sources:
+    Hacker News:
+      max_articles: 12
+      exclude_keywords:
+        - Show HN
+email: {}
+schedule: []
+output: {}
+proxy: {}
+ai: {}
+`
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	category := cfg.Filters.Categories["新闻财经"]
+	if !reflect.DeepEqual(category.IncludeKeywords, []string{"央行", "IPO"}) {
+		t.Fatalf("IncludeKeywords = %#v", category.IncludeKeywords)
+	}
+	if !reflect.DeepEqual(category.ExcludeKeywords, []string{"体育"}) {
+		t.Fatalf("ExcludeKeywords = %#v", category.ExcludeKeywords)
+	}
+	source := cfg.Filters.Sources["Hacker News"]
+	if source.MaxArticles != 12 {
+		t.Fatalf("MaxArticles = %d, want 12", source.MaxArticles)
+	}
+	if !reflect.DeepEqual(source.ExcludeKeywords, []string{"Show HN"}) {
+		t.Fatalf("Source ExcludeKeywords = %#v", source.ExcludeKeywords)
+	}
+}
+
+func TestLoadRejectsInvalidFilters(t *testing.T) {
+	tests := []struct {
+		name    string
+		filter  string
+		wantErr string
+	}{
+		{
+			name:    "empty category keyword",
+			filter:  "filters:\n  categories:\n    AI/科技:\n      include_keywords:\n        - ''\n",
+			wantErr: "filters.categories",
+		},
+		{
+			name:    "negative source max",
+			filter:  "filters:\n  sources:\n    Hacker News:\n      max_articles: -1\n",
+			wantErr: "max_articles",
+		},
+		{
+			name:    "duplicate source keyword",
+			filter:  "filters:\n  sources:\n    Hacker News:\n      exclude_keywords:\n        - Sport\n        - sport\n",
+			wantErr: "duplicate keyword",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dir := t.TempDir()
+			path := filepath.Join(dir, "config.yaml")
+			content := "sources: []\nkeywords: []\n" + tt.filter + "email: {}\nschedule: []\noutput: {}\nproxy: {}\nai: {}\n"
+			if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+				t.Fatalf("write config: %v", err)
+			}
+			_, err := Load(path)
+			if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
+				t.Fatalf("Load() error = %v, want %q", err, tt.wantErr)
+			}
+		})
+	}
+}
+
 func TestProjectConfigDoesNotIncludeRemovedAllenAIRSS(t *testing.T) {
 	cfg, err := Load(filepath.Join("..", "..", "configs", "config.example.yaml"))
 	if err != nil {

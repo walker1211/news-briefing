@@ -288,9 +288,64 @@ func matchedKeywords(text string, keywords []string) []string {
 	lower := strings.ToLower(text)
 	var matched []string
 	for _, kw := range keywords {
-		if strings.Contains(lower, strings.ToLower(kw)) {
-			matched = append(matched, kw)
+		trimmed := strings.TrimSpace(kw)
+		if trimmed == "" {
+			continue
+		}
+		if keywordMatches(lower, trimmed) {
+			matched = append(matched, trimmed)
 		}
 	}
 	return matched
+}
+
+func keywordMatches(lowerText string, keyword string) bool {
+	lowerKeyword := strings.ToLower(keyword)
+	if isASCIIAlnumKeyword(lowerKeyword) {
+		return containsASCIIWord(lowerText, lowerKeyword)
+	}
+	return strings.Contains(lowerText, lowerKeyword)
+}
+
+func isASCIIAlnumKeyword(value string) bool {
+	if value == "" {
+		return false
+	}
+	for _, r := range value {
+		if r > 127 || !isASCIIAlnum(byte(r)) {
+			return false
+		}
+	}
+	return true
+}
+
+func containsASCIIWord(lowerText string, lowerKeyword string) bool {
+	offset := 0
+	for {
+		index := strings.Index(lowerText[offset:], lowerKeyword)
+		if index < 0 {
+			return false
+		}
+		start := offset + index
+		end := start + len(lowerKeyword)
+		if isASCIIBoundary(lowerText, start-1) && (isASCIIBoundary(lowerText, end) || isSimpleASCIIPluralBoundary(lowerText, lowerKeyword, end)) {
+			return true
+		}
+		offset = end
+	}
+}
+
+func isSimpleASCIIPluralBoundary(value string, lowerKeyword string, end int) bool {
+	return len(lowerKeyword) > 3 && end < len(value) && value[end] == 's' && isASCIIBoundary(value, end+1)
+}
+
+func isASCIIBoundary(value string, index int) bool {
+	if index < 0 || index >= len(value) {
+		return true
+	}
+	return !isASCIIAlnum(value[index])
+}
+
+func isASCIIAlnum(b byte) bool {
+	return (b >= 'a' && b <= 'z') || (b >= 'A' && b <= 'Z') || (b >= '0' && b <= '9')
 }

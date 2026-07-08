@@ -46,6 +46,49 @@ func TestMatchedKeywordsReturnsEmptySliceWhenNoMatches(t *testing.T) {
 	}
 }
 
+func TestMatchedKeywordsUsesASCIIWordBoundaries(t *testing.T) {
+	tests := []struct {
+		name string
+		text string
+		want []string
+	}{
+		{
+			name: "matches standalone acronym",
+			text: "AI-generated code ships",
+			want: []string{"AI"},
+		},
+		{
+			name: "matches acronym next to chinese",
+			text: "企业AI硬件发布",
+			want: []string{"AI"},
+		},
+		{
+			name: "does not match inside english word",
+			text: "Git hash chain malleability and raise events",
+			want: nil,
+		},
+		{
+			name: "openai matches own keyword",
+			text: "OpenAI confirms outage",
+			want: []string{"OpenAI"},
+		},
+		{
+			name: "long ascii keyword matches simple plural",
+			text: "Vision models improve",
+			want: []string{"model"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := matchedKeywords(tt.text, []string{"AI", "OpenAI", "model"})
+			if !reflect.DeepEqual(got, tt.want) {
+				t.Fatalf("matchedKeywords() = %#v, want %#v", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestMatchKeywordsMatchesRSSOpenClawText(t *testing.T) {
 	keywords := loadKeywordsForTest(t)
 	source := config.Source{

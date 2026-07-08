@@ -29,7 +29,8 @@ func FetchXAlertsContext(ctx context.Context, cfg *config.Config, now time.Time)
 		return FetchResult{}, nil
 	}
 	from := now.Add(-xAlertLookback)
-	results, failed, err := fetchXVisibleNDJSON(ctx, cfg.XAccounts, cfg.Keywords, from, now)
+	filters := newFilterContext(cfg)
+	results, failed, err := fetchXVisibleNDJSON(ctx, cfg.XAccounts, filters.includeKeywords(model.Article{Category: cfg.XAccounts.Category}, config.Source{Name: xVisibleSourceName, Category: cfg.XAccounts.Category}), from, now)
 	if err != nil {
 		return FetchResult{}, err
 	}
@@ -37,7 +38,11 @@ func FetchXAlertsContext(ctx context.Context, cfg *config.Config, now time.Time)
 	alerts := make([]model.Article, 0)
 	for _, result := range results {
 		for _, candidate := range result.Candidates {
-			if len(candidate.MatchedKeywords) == 0 {
+			matched, excluded := filterCandidate(candidate.Article, result.Source, filters)
+			if len(matched) == 0 && len(candidate.MatchedKeywords) > 0 && len(filters.includeKeywords(candidate.Article, result.Source)) == 0 {
+				matched = candidate.MatchedKeywords
+			}
+			if len(matched) == 0 || len(excluded) > 0 {
 				continue
 			}
 			if !isXAlertCandidate(candidate.Article) {
