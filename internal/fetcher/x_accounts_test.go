@@ -340,6 +340,41 @@ func TestFetchXVisibleNDJSONIgnoresWeakChallengeSignalAfterArticlesReady(t *test
 	}
 }
 
+func TestFetchXVisibleNDJSONOriginalOnlyDropsReposts(t *testing.T) {
+	dir := t.TempDir()
+	accountsPath := filepath.Join(dir, "accounts.ndjson")
+	content := `{"kind":"x-visible-article","schemaVersion":1,"targetRaw":"/twitter/user/merettm","targetType":"account","targetUrl":"https://x.com/merettm","sourceUrl":"https://x.com/merettm","finalUrl":"https://x.com/merettm","text":"Jakub Pachocki reposted OpenAI Codex update","datetime":"2026-05-20T19:06:41.000Z","statusUrl":"https://x.com/OpenAI/status/repost","statusLinks":["https://x.com/OpenAI/status/repost"],"linkCount":1,"imageCount":0,"videoCount":0}
+{"kind":"x-visible-article","schemaVersion":1,"targetRaw":"/twitter/user/merettm","targetType":"account","targetUrl":"https://x.com/merettm","sourceUrl":"https://x.com/merettm","finalUrl":"https://x.com/merettm","text":"Jakub Pachocki shares an original OpenAI Codex update","datetime":"2026-05-20T20:06:41.000Z","statusUrl":"https://x.com/merettm/status/original","statusLinks":["https://x.com/merettm/status/original"],"linkCount":1,"imageCount":0,"videoCount":0}
+{"kind":"x-visible-article","schemaVersion":1,"targetRaw":"/twitter/user/merettm","targetType":"account","targetUrl":"https://x.com/merettm","sourceUrl":"https://x.com/merettm","finalUrl":"https://x.com/merettm","text":"Jakub Pachocki 已转帖 OpenAI Codex update","datetime":"2026-05-20T21:06:41.000Z","statusUrl":"https://x.com/OpenAI/status/repost-cn","statusLinks":["https://x.com/OpenAI/status/repost-cn"],"linkCount":1,"imageCount":0,"videoCount":0}
+`
+	if err := os.WriteFile(accountsPath, []byte(content), 0o644); err != nil {
+		t.Fatalf("write accounts ndjson: %v", err)
+	}
+	cfg := config.XAccountsConfig{
+		Enabled:      true,
+		AccountsPath: accountsPath,
+		Category:     "AI/科技",
+		OriginalOnly: true,
+		Accounts:     []config.XAccountConfig{{Handle: "merettm"}},
+	}
+	from := time.Date(2026, 5, 20, 10, 0, 0, 0, time.UTC)
+	to := time.Date(2026, 5, 21, 0, 0, 0, 0, time.UTC)
+
+	results, failed, err := fetchXVisibleNDJSON(context.Background(), cfg, []string{"OpenAI", "Codex"}, from, to)
+	if err != nil {
+		t.Fatalf("fetchXVisibleNDJSON() error = %v", err)
+	}
+	if len(failed) != 0 {
+		t.Fatalf("failed = %#v, want none", failed)
+	}
+	if len(results) != 1 || len(results[0].Candidates) != 1 {
+		t.Fatalf("results = %#v, want one original X candidate", results)
+	}
+	if got := results[0].Candidates[0].Article.Link; got != "https://x.com/merettm/status/original" {
+		t.Fatalf("candidate link = %q, want original status", got)
+	}
+}
+
 func TestFetchXVisibleNDJSONIgnoresWeakLoginSignalAfterArticlesReady(t *testing.T) {
 	dir := t.TempDir()
 	searchesPath := filepath.Join(dir, "searches.ndjson")

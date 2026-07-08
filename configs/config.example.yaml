@@ -90,6 +90,7 @@ x_accounts:
   refresh_wait_timeout: 10m
   refresh_wait_interval: 5s
   max_posts_per_target: 10
+  original_only: true
   category: AI/科技
   accounts:
     - handle: example_ai_company # Replace with the X account handle to track.
@@ -211,7 +212,7 @@ filters:
         - soccer
   sources:
     Hacker News:
-      max_articles: 15
+      max_articles: 8
       exclude_keywords:
         - mermaid
         - debit-card
@@ -232,6 +233,14 @@ filters:
         - iOS
         - iPadOS
         - Win11
+        - SSD
+        - 企业级 SSD
+        - 存储
+        - MB/s
+    Reddit Singularity:
+      max_articles: 8
+    X Search/search:OpenAI outage:
+      max_articles: 4
 
 fetch:
   timeout: 30s
