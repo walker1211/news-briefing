@@ -774,6 +774,35 @@ func TestFetchXVisibleNDJSONIgnoresAccountStableCoverageWarning(t *testing.T) {
 	}
 }
 
+func TestFetchXVisibleNDJSONIgnoresCoverageWarningForUntrackedAccount(t *testing.T) {
+	dir := t.TempDir()
+	accountsPath := filepath.Join(dir, "accounts.ndjson")
+	content := `{"kind":"x-visible-article","schemaVersion":1,"targetRaw":"/twitter/user/NASASpaceflight","targetType":"account","targetUrl":"https://x.com/NASASpaceflight","sourceUrl":"https://x.com/NASASpaceflight","finalUrl":"https://x.com/NASASpaceflight","windowFrom":"2026-05-19T00:00:00.000Z","windowTo":"2026-05-20T00:00:00.000Z","scrollStopReason":"limit-reached","text":"NASA rocket update","datetime":"2026-05-19T07:00:00.000Z","statusUrl":"https://x.com/NASASpaceflight/status/limit","statusLinks":["https://x.com/NASASpaceflight/status/limit"],"linkCount":1,"imageCount":0,"videoCount":0}
+`
+	if err := os.WriteFile(accountsPath, []byte(content), 0o644); err != nil {
+		t.Fatalf("write accounts ndjson: %v", err)
+	}
+	cfg := config.XAccountsConfig{
+		Enabled:      true,
+		AccountsPath: accountsPath,
+		Category:     "AI/科技",
+		Accounts:     []config.XAccountConfig{{Handle: "OpenAI"}},
+	}
+	from := time.Date(2026, 5, 19, 0, 0, 0, 0, time.UTC)
+	to := time.Date(2026, 5, 20, 0, 0, 0, 0, time.UTC)
+
+	results, failed, err := fetchXVisibleNDJSON(context.Background(), cfg, []string{"NASA"}, from, to)
+	if err != nil {
+		t.Fatalf("fetchXVisibleNDJSON() error = %v", err)
+	}
+	if len(results) != 0 {
+		t.Fatalf("results = %#v, want no candidates for untracked account", results)
+	}
+	if len(failed) != 0 {
+		t.Fatalf("failed = %#v, want no coverage warning for untracked account", failed)
+	}
+}
+
 func TestFetchXVisibleNDJSONIgnoresSearchStableCoverageWarning(t *testing.T) {
 	dir := t.TempDir()
 	searchesPath := filepath.Join(dir, "searches.ndjson")

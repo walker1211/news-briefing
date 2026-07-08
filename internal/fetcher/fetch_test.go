@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -14,6 +15,14 @@ import (
 	"github.com/walker1211/news-briefing/internal/config"
 	"github.com/walker1211/news-briefing/internal/model"
 )
+
+func fetchTestArticleTitles(articles []model.Article) []string {
+	titles := make([]string, 0, len(articles))
+	for _, article := range articles {
+		titles = append(titles, article.Title)
+	}
+	return titles
+}
 
 func TestFilterArticlesByWindowUsesHalfOpenInterval(t *testing.T) {
 	loc := time.FixedZone("CST", 8*3600)
@@ -207,6 +216,76 @@ func TestFetchWindowDetailedReturnsFilteredCandidates(t *testing.T) {
 	}
 	if len(result.Failed) != 1 || result.Failed[0].Name != "HN" {
 		t.Fatalf("result.Failed = %#v, want HN failure preserved", result.Failed)
+	}
+}
+
+func TestFetchWindowDetailedAppliesCategoryFiltersExcludesSourceLimitsAndStats(t *testing.T) {
+	from := time.Date(2026, 3, 18, 8, 0, 0, 0, time.UTC)
+	to := from.Add(6 * time.Hour)
+	cfg := &config.Config{
+		Output:   config.OutputCfg{Dir: "output"},
+		Keywords: []string{"AI"},
+		Sources: []config.Source{
+			{Name: "Hacker News", Type: config.SourceTypeHackerNews, Category: "AI/科技"},
+			{Name: "中新网财经", Type: config.SourceTypeRSS, Category: "新闻财经"},
+		},
+		Filters: config.FiltersConfig{
+			Categories: map[string]config.CategoryFilterConfig{
+				"新闻财经": {
+					IncludeKeywords: []string{"央行"},
+					ExcludeKeywords: []string{"台风"},
+				},
+			},
+			Sources: map[string]config.SourceFilterConfig{
+				"Hacker News": {MaxArticles: 1},
+			},
+		},
+	}
+	fetchAll := func(ctx context.Context, cfg *config.Config, since time.Time) ([]sourceFetchResult, []FailedSource, error) {
+		return []sourceFetchResult{
+			{
+				Source: config.Source{Name: "Hacker News", Type: config.SourceTypeHackerNews, Category: "AI/科技"},
+				Candidates: []fetchedCandidate{
+					{Article: model.Article{Title: "AI older", Link: "https://example.com/old", Source: "Hacker News", Category: "AI/科技", Published: from.Add(time.Hour)}},
+					{Article: model.Article{Title: "AI newer", Link: "https://example.com/new", Source: "Hacker News", Category: "AI/科技", Published: from.Add(2 * time.Hour)}},
+				},
+			},
+			{
+				Source: config.Source{Name: "中新网财经", Type: config.SourceTypeRSS, Category: "新闻财经"},
+				Candidates: []fetchedCandidate{
+					{Article: model.Article{Title: "央行释放流动性", Link: "https://example.com/pbc", Source: "中新网财经", Category: "新闻财经", Published: from.Add(3 * time.Hour)}},
+					{Article: model.Article{Title: "OpenAI 公司动态", Link: "https://example.com/ai", Source: "中新网财经", Category: "新闻财经", Published: from.Add(4 * time.Hour)}},
+					{Article: model.Article{Title: "央行回应台风影响", Link: "https://example.com/storm", Source: "中新网财经", Category: "新闻财经", Published: from.Add(5 * time.Hour)}},
+				},
+			},
+		}, nil, nil
+	}
+
+	result, err := fetchWindowDetailedContext(context.Background(), cfg, from, to, false, true, fetchAll)
+	if err != nil {
+		t.Fatalf("fetchWindowDetailedContext() error = %v", err)
+	}
+	if got := fetchTestArticleTitles(result.Articles); !reflect.DeepEqual(got, []string{"央行释放流动性", "AI newer"}) {
+		t.Fatalf("Articles titles = %#v", got)
+	}
+	if got := fetchTestArticleTitles(result.FilteredArticles); !reflect.DeepEqual(got, []string{"央行回应台风影响", "OpenAI 公司动态", "AI older"}) {
+		t.Fatalf("Filtered titles = %#v", got)
+	}
+
+	statsBySource := map[string]model.SourceStatsEntry{}
+	for _, entry := range result.SourceStats.Sources {
+		statsBySource[entry.Source] = entry
+	}
+	hn := statsBySource["Hacker News"]
+	if hn.Fetched != 2 || hn.KeywordMatched != 2 || hn.FilteredSourceLimit != 1 || hn.AcceptedBeforeDedup != 1 || hn.AcceptedAfterDedup != 1 {
+		t.Fatalf("Hacker News stats = %#v", hn)
+	}
+	finance := statsBySource["中新网财经"]
+	if finance.Fetched != 3 || finance.KeywordMatched != 2 || finance.FilteredKeywordMiss != 1 || finance.FilteredExcluded != 1 || finance.AcceptedBeforeDedup != 1 {
+		t.Fatalf("finance stats = %#v", finance)
+	}
+	if result.SourceStats.Totals.Fetched != 5 || result.SourceStats.Totals.Filtered != 3 || result.SourceStats.Totals.AcceptedAfterDedup != 2 {
+		t.Fatalf("totals = %#v", result.SourceStats.Totals)
 	}
 }
 

@@ -17,6 +17,7 @@ import (
 type Config struct {
 	Sources          []Source          `yaml:"sources"`
 	Keywords         []string          `yaml:"keywords"`
+	Filters          FiltersConfig     `yaml:"filters"`
 	Fetch            FetchConfig       `yaml:"fetch"`
 	Watch            WatchConfig       `yaml:"watch"`
 	XAccounts        XAccountsConfig   `yaml:"x_accounts"`
@@ -77,6 +78,22 @@ type Source struct {
 	Keywords []string `yaml:"keywords"`
 	PageKind string   `yaml:"page_kind"`
 	TimeHint string   `yaml:"time_hint"`
+}
+
+type FiltersConfig struct {
+	Categories map[string]CategoryFilterConfig `yaml:"categories"`
+	Sources    map[string]SourceFilterConfig   `yaml:"sources"`
+}
+
+type CategoryFilterConfig struct {
+	IncludeKeywords []string `yaml:"include_keywords"`
+	ExcludeKeywords []string `yaml:"exclude_keywords"`
+}
+
+type SourceFilterConfig struct {
+	IncludeKeywords []string `yaml:"include_keywords"`
+	ExcludeKeywords []string `yaml:"exclude_keywords"`
+	MaxArticles     int      `yaml:"max_articles"`
 }
 
 type FetchConfig struct {
@@ -505,6 +522,9 @@ func (cfg *Config) Validate() error {
 	if err := validateOutputFallback(cfg.Output.Fallback); err != nil {
 		return err
 	}
+	if err := validateFilters(cfg.Filters); err != nil {
+		return err
+	}
 	if strings.TrimSpace(cfg.AI.Command) == "" {
 		return fmt.Errorf("validate ai.command: must not be empty")
 	}
@@ -591,6 +611,53 @@ func validateOutputFallback(fallback OutputFallbackCfg) error {
 		if err := validateArticleLimits(field+".max_articles", level.MaxArticlesByCategory, true); err != nil {
 			return err
 		}
+	}
+	return nil
+}
+
+func validateFilters(filters FiltersConfig) error {
+	for category, filter := range filters.Categories {
+		field := fmt.Sprintf("filters.categories[%q]", category)
+		if strings.TrimSpace(category) == "" {
+			return fmt.Errorf("validate filters.categories: category must not be empty")
+		}
+		if err := validateKeywordList(field+".include_keywords", filter.IncludeKeywords); err != nil {
+			return err
+		}
+		if err := validateKeywordList(field+".exclude_keywords", filter.ExcludeKeywords); err != nil {
+			return err
+		}
+	}
+	for source, filter := range filters.Sources {
+		field := fmt.Sprintf("filters.sources[%q]", source)
+		if strings.TrimSpace(source) == "" {
+			return fmt.Errorf("validate filters.sources: source must not be empty")
+		}
+		if filter.MaxArticles < 0 {
+			return fmt.Errorf("validate %s.max_articles: must be zero or greater", field)
+		}
+		if err := validateKeywordList(field+".include_keywords", filter.IncludeKeywords); err != nil {
+			return err
+		}
+		if err := validateKeywordList(field+".exclude_keywords", filter.ExcludeKeywords); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func validateKeywordList(field string, keywords []string) error {
+	seen := make(map[string]struct{}, len(keywords))
+	for i, keyword := range keywords {
+		trimmed := strings.TrimSpace(keyword)
+		if trimmed == "" {
+			return fmt.Errorf("validate %s[%d]: must not be empty", field, i)
+		}
+		key := strings.ToLower(trimmed)
+		if _, ok := seen[key]; ok {
+			return fmt.Errorf("validate %s[%d]: duplicate keyword %q", field, i, keyword)
+		}
+		seen[key] = struct{}{}
 	}
 	return nil
 }

@@ -403,6 +403,7 @@ type briefingFetchResult struct {
 	filteredArticles      []model.Article
 	seenArticles          []model.Article
 	failed                []fetcher.FailedSource
+	sourceStats           model.SourceStatsReport
 	watchSiteErrorNotices []string
 }
 
@@ -453,7 +454,7 @@ func (app *app) fetchBriefingArticlesWithWatch(ctx context.Context, watchTime ti
 	if err != nil {
 		return briefingFetchResult{}, err
 	}
-	return briefingFetchResult{articles: result.Articles, filteredArticles: result.FilteredArticles, seenArticles: seenArticles, failed: result.Failed, watchSiteErrorNotices: watchSiteErrorNotices}, nil
+	return briefingFetchResult{articles: result.Articles, filteredArticles: result.FilteredArticles, seenArticles: seenArticles, failed: result.Failed, sourceStats: result.SourceStats, watchSiteErrorNotices: watchSiteErrorNotices}, nil
 }
 
 func (app *app) summarizeArticles(ctx context.Context, articles []model.Article, categoryOrder []string, loc *time.Location) (string, error) {
@@ -615,7 +616,7 @@ func (app *app) runBriefingContext(ctx context.Context, commandPath string, peri
 		return err
 	}
 	logutil.Printf("Stage article_limit completed in %s", time.Since(limitStarted).Round(time.Second))
-	return app.renderBriefingContext(ctx, commandPath, date, period, result.articles, result.filteredArticles, result.seenArticles, result.failed, showRaw, sendEmail, result.watchSiteErrorNotices...)
+	return app.renderBriefingContextWithSourceStats(ctx, commandPath, date, period, result.articles, result.filteredArticles, result.seenArticles, result.failed, showRaw, sendEmail, &result.sourceStats, result.watchSiteErrorNotices...)
 }
 
 func (app *app) runScheduledBriefing(window scheduler.Window, sendEmail bool) error {
@@ -648,7 +649,7 @@ func (app *app) runScheduledBriefingContextWithReporter(ctx context.Context, win
 		return err
 	}
 	logutil.Printf("Stage article_limit completed in %s", time.Since(limitStarted).Round(time.Second))
-	return app.renderBriefingContextWithReporter(ctx, "serve", date, window.Period, result.articles, result.filteredArticles, result.seenArticles, result.failed, false, sendEmail, reporter, result.watchSiteErrorNotices...)
+	return app.renderBriefingContextWithReporterAndSourceStats(ctx, "serve", date, window.Period, result.articles, result.filteredArticles, result.seenArticles, result.failed, false, sendEmail, reporter, &result.sourceStats, result.watchSiteErrorNotices...)
 }
 
 const scheduledRunRunningTTL = 2 * time.Hour
@@ -954,7 +955,7 @@ func (app *app) runRegenContext(ctx context.Context, cmd regenCommand) error {
 		return err
 	}
 	logutil.Printf("Stage article_limit completed in %s", time.Since(limitStarted).Round(time.Second))
-	return app.renderBriefingContext(ctx, "regen", to.Format("06.01.02"), period, result.Articles, result.FilteredArticles, nil, result.Failed, cmd.raw, cmd.sendEmail)
+	return app.renderBriefingContextWithSourceStats(ctx, "regen", to.Format("06.01.02"), period, result.Articles, result.FilteredArticles, nil, result.Failed, cmd.raw, cmd.sendEmail, &result.SourceStats)
 }
 
 func (app *app) configuredArticleLimits() map[string]int {
@@ -1280,10 +1281,18 @@ func (app *app) appendFilteredArticlesAppendix(ctx context.Context, body string,
 }
 
 func (app *app) renderBriefingContext(ctx context.Context, commandPath string, date string, period string, articles []model.Article, filteredArticles []model.Article, seenArticles []model.Article, failed []fetcher.FailedSource, showRaw bool, sendEmail bool, watchSiteErrorNotices ...string) error {
-	return app.renderBriefingContextWithReporter(ctx, commandPath, date, period, articles, filteredArticles, seenArticles, failed, showRaw, sendEmail, nil, watchSiteErrorNotices...)
+	return app.renderBriefingContextWithReporterAndSourceStats(ctx, commandPath, date, period, articles, filteredArticles, seenArticles, failed, showRaw, sendEmail, nil, nil, watchSiteErrorNotices...)
+}
+
+func (app *app) renderBriefingContextWithSourceStats(ctx context.Context, commandPath string, date string, period string, articles []model.Article, filteredArticles []model.Article, seenArticles []model.Article, failed []fetcher.FailedSource, showRaw bool, sendEmail bool, sourceStats *model.SourceStatsReport, watchSiteErrorNotices ...string) error {
+	return app.renderBriefingContextWithReporterAndSourceStats(ctx, commandPath, date, period, articles, filteredArticles, seenArticles, failed, showRaw, sendEmail, nil, sourceStats, watchSiteErrorNotices...)
 }
 
 func (app *app) renderBriefingContextWithReporter(ctx context.Context, commandPath string, date string, period string, articles []model.Article, filteredArticles []model.Article, seenArticles []model.Article, failed []fetcher.FailedSource, showRaw bool, sendEmail bool, reporter *scheduledRunReporter, watchSiteErrorNotices ...string) error {
+	return app.renderBriefingContextWithReporterAndSourceStats(ctx, commandPath, date, period, articles, filteredArticles, seenArticles, failed, showRaw, sendEmail, reporter, nil, watchSiteErrorNotices...)
+}
+
+func (app *app) renderBriefingContextWithReporterAndSourceStats(ctx context.Context, commandPath string, date string, period string, articles []model.Article, filteredArticles []model.Article, seenArticles []model.Article, failed []fetcher.FailedSource, showRaw bool, sendEmail bool, reporter *scheduledRunReporter, sourceStats *model.SourceStatsReport, watchSiteErrorNotices ...string) error {
 	logutil.Printf("Found %d articles after filtering.", len(articles))
 	app.output.printFailed(failed)
 	app.ensureBriefingOutputDeps()
@@ -1301,6 +1310,7 @@ func (app *app) renderBriefingContextWithReporter(ctx context.Context, commandPa
 	}
 	summary := ""
 	var structuredSummary *model.BriefingSummary
+	var aiArticles []model.Article
 	if outputNeedsTranslatedContent(app.cfg.Output.Mode) {
 		logutil.Println("Generating summary with AI CLI...")
 		aiStarted := time.Now()
@@ -1314,6 +1324,7 @@ func (app *app) renderBriefingContextWithReporter(ctx context.Context, commandPa
 		summary = result.summary
 		content.Original = output.GroupedArticleListView(articles, categoryOrder, app.displayLocation())
 		content.Translated = summary
+		aiArticles = articles
 	}
 	body, err := app.output.composeBody(commandPath, app.cfg.Output.Mode, content)
 	if err != nil {
@@ -1351,6 +1362,18 @@ func (app *app) renderBriefingContextWithReporter(ctx context.Context, commandPa
 		return fmt.Errorf("write markdown: %w", err)
 	}
 	logutil.Printf("Markdown saved: %s", path)
+
+	if sourceStats != nil && sourceStats.SchemaVersion != "" {
+		stats := *sourceStats
+		stats.Date = date
+		stats.Period = period
+		stats.SetEnteredAI(aiArticles)
+		statsPath, err := output.WriteSourceStatsSidecar(stats, path)
+		if err != nil {
+			return err
+		}
+		logutil.Printf("Source stats saved: %s", statsPath)
+	}
 
 	if app.fetch.markSeen != nil && len(seenArticles) > 0 {
 		if err := runIfActive(ctx, func() error {

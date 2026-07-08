@@ -187,6 +187,52 @@ type FetchResult struct {
 	Articles         []model.Article
 	FilteredArticles []model.Article
 	Failed           []FailedSource
+	SourceStats      model.SourceStatsReport
+}
+
+type sourceStatsAccumulator struct {
+	entries          map[string]*model.SourceStatsEntry
+	sourceTypes      map[string]string
+	sourceCategories map[string]string
+	sourceURLs       map[string]string
+	from             time.Time
+	to               time.Time
+}
+
+type filterContext struct {
+	cfg     *config.Config
+	sources map[string]config.Source
+}
+
+func newFilterContext(cfg *config.Config) filterContext {
+	ctx := filterContext{cfg: cfg, sources: map[string]config.Source{}}
+	if cfg == nil {
+		return ctx
+	}
+	for _, source := range cfg.Sources {
+		ctx.sources[source.Name] = source
+	}
+	return ctx
+}
+
+func newSourceStatsAccumulator(cfg *config.Config, from, to time.Time) *sourceStatsAccumulator {
+	acc := &sourceStatsAccumulator{
+		entries:          map[string]*model.SourceStatsEntry{},
+		sourceTypes:      map[string]string{},
+		sourceCategories: map[string]string{},
+		sourceURLs:       map[string]string{},
+		from:             from,
+		to:               to,
+	}
+	if cfg == nil {
+		return acc
+	}
+	for _, source := range cfg.Sources {
+		acc.sourceTypes[source.Name] = source.Type
+		acc.sourceCategories[source.Name] = source.Category
+		acc.sourceURLs[source.Name] = source.URL
+	}
+	return acc
 }
 
 func fetchAllSourcesDetailed(ctx context.Context, cfg *config.Config, since time.Time) ([]sourceFetchResult, []FailedSource, error) {
@@ -288,6 +334,192 @@ func fetchWindowDetailedContextWithXLookback(ctx context.Context, cfg *config.Co
 	return fetchWindowDetailedContextWithOptions(ctx, cfg, from, to, markSeen, ignoreSeen, fetchAll, true)
 }
 
+func (acc *sourceStatsAccumulator) statForArticle(article model.Article, fallback config.Source) *model.SourceStatsEntry {
+	if acc == nil {
+		return &model.SourceStatsEntry{}
+	}
+	sourceName := articleSourceName(article, fallback)
+	entry := acc.entries[sourceName]
+	if entry != nil {
+		return entry
+	}
+	category := strings.TrimSpace(article.Category)
+	if category == "" {
+		category = strings.TrimSpace(fallback.Category)
+	}
+	if category == "" {
+		category = acc.sourceCategories[sourceName]
+	}
+	entry = &model.SourceStatsEntry{
+		Source:   sourceName,
+		Type:     acc.sourceKind(sourceName, fallback),
+		Category: category,
+	}
+	acc.entries[sourceName] = entry
+	return entry
+}
+
+func (acc *sourceStatsAccumulator) countFetched(result sourceFetchResult) {
+	for _, candidate := range result.Candidates {
+		acc.statForArticle(candidate.Article, result.Source).Fetched++
+	}
+}
+
+func (acc *sourceStatsAccumulator) sourceKind(sourceName string, fallback config.Source) string {
+	if strings.HasPrefix(sourceName, "X/") || strings.HasPrefix(sourceName, "X Search/") {
+		return "x.com"
+	}
+	sourceType := strings.TrimSpace(fallback.Type)
+	if sourceType == "" {
+		sourceType = acc.sourceTypes[sourceName]
+	}
+	sourceURL := strings.TrimSpace(fallback.URL)
+	if sourceURL == "" {
+		sourceURL = acc.sourceURLs[sourceName]
+	}
+	if sourceType == config.SourceTypeRSS && isRedditURL(sourceURL) {
+		return "reddit"
+	}
+	if sourceType != "" {
+		return sourceType
+	}
+	return "unknown"
+}
+
+func (acc *sourceStatsAccumulator) build(failed []FailedSource) model.SourceStatsReport {
+	report := model.SourceStatsReport{
+		SchemaVersion: "source-stats/v1",
+		SourceApp:     "news-briefing",
+		GeneratedAt:   time.Now(),
+		Window:        model.SourceStatsWindow{From: acc.from, To: acc.to},
+	}
+	for _, entry := range acc.entries {
+		report.Sources = append(report.Sources, *entry)
+	}
+	sort.Slice(report.Sources, func(i, j int) bool {
+		if report.Sources[i].Category == report.Sources[j].Category {
+			return report.Sources[i].Source < report.Sources[j].Source
+		}
+		return report.Sources[i].Category < report.Sources[j].Category
+	})
+	for _, item := range failed {
+		if strings.TrimSpace(item.Name) == "" {
+			continue
+		}
+		message := ""
+		if item.Err != nil {
+			message = item.Err.Error()
+		}
+		report.Failed = append(report.Failed, model.SourceStatsError{Source: item.Name, Error: message})
+	}
+	report.RecalculateTotals()
+	return report
+}
+
+func articleSourceName(article model.Article, fallback config.Source) string {
+	source := strings.TrimSpace(article.Source)
+	if source != "" {
+		return source
+	}
+	source = strings.TrimSpace(fallback.Name)
+	if source != "" {
+		return source
+	}
+	return "unknown"
+}
+
+func (ctx filterContext) includeKeywords(article model.Article, fallback config.Source) []string {
+	if ctx.cfg == nil {
+		return nil
+	}
+	sourceName := articleSourceName(article, fallback)
+	if sourceFilter, ok := ctx.cfg.Filters.Sources[sourceName]; ok && len(sourceFilter.IncludeKeywords) > 0 {
+		return sourceFilter.IncludeKeywords
+	}
+	if source, ok := ctx.sources[sourceName]; ok && len(source.Keywords) > 0 {
+		return source.Keywords
+	}
+	category := filterCategory(article, fallback, ctx.sources[sourceName])
+	if categoryFilter, ok := ctx.cfg.Filters.Categories[category]; ok && len(categoryFilter.IncludeKeywords) > 0 {
+		return categoryFilter.IncludeKeywords
+	}
+	return ctx.cfg.Keywords
+}
+
+func (ctx filterContext) excludeKeywords(article model.Article, fallback config.Source) []string {
+	if ctx.cfg == nil {
+		return nil
+	}
+	sourceName := articleSourceName(article, fallback)
+	category := filterCategory(article, fallback, ctx.sources[sourceName])
+	var out []string
+	if categoryFilter, ok := ctx.cfg.Filters.Categories[category]; ok {
+		out = append(out, categoryFilter.ExcludeKeywords...)
+	}
+	if sourceFilter, ok := ctx.cfg.Filters.Sources[sourceName]; ok {
+		out = append(out, sourceFilter.ExcludeKeywords...)
+	}
+	return out
+}
+
+func (ctx filterContext) maxArticlesForSource(article model.Article) int {
+	if ctx.cfg == nil {
+		return 0
+	}
+	sourceName := articleSourceName(article, config.Source{})
+	filter, ok := ctx.cfg.Filters.Sources[sourceName]
+	if !ok {
+		return 0
+	}
+	return filter.MaxArticles
+}
+
+func filterCategory(article model.Article, fallback config.Source, source config.Source) string {
+	category := strings.TrimSpace(article.Category)
+	if category != "" {
+		return category
+	}
+	category = strings.TrimSpace(source.Category)
+	if category != "" {
+		return category
+	}
+	return strings.TrimSpace(fallback.Category)
+}
+
+func articleKeywordText(article model.Article) string {
+	return article.Title + " " + article.Summary
+}
+
+func filterCandidate(article model.Article, fallback config.Source, filters filterContext) (matched []string, excluded []string) {
+	text := articleKeywordText(article)
+	matched = matchedKeywords(text, filters.includeKeywords(article, fallback))
+	excluded = matchedKeywords(text, filters.excludeKeywords(article, fallback))
+	return matched, excluded
+}
+
+func applySourceLimits(articles []model.Article, filtered []model.Article, filters filterContext, stats *sourceStatsAccumulator) ([]model.Article, []model.Article) {
+	if len(articles) == 0 {
+		return articles, filtered
+	}
+	out := make([]model.Article, 0, len(articles))
+	counts := make(map[string]int)
+	for _, article := range articles {
+		sourceName := articleSourceName(article, config.Source{})
+		maxArticles := filters.maxArticlesForSource(article)
+		if maxArticles > 0 && counts[sourceName] >= maxArticles {
+			stat := stats.statForArticle(article, config.Source{})
+			stat.Filtered++
+			stat.FilteredSourceLimit++
+			filtered = append(filtered, article)
+			continue
+		}
+		out = append(out, article)
+		counts[sourceName]++
+		stats.statForArticle(article, config.Source{}).AcceptedBeforeDedup++
+	}
+	return out, filtered
+}
+
 func fetchWindowDetailedContextWithOptions(ctx context.Context, cfg *config.Config, from, to time.Time, markSeen bool, ignoreSeen bool, fetchAll fetchAllSourcesDetailedFunc, useXLookback bool, xVisibleOptions ...xVisibleReadOptions) (FetchResult, error) {
 	if err := ctx.Err(); err != nil {
 		return FetchResult{}, err
@@ -304,7 +536,8 @@ func fetchWindowDetailedContextWithOptions(ctx context.Context, cfg *config.Conf
 	if len(xVisibleOptions) > 0 {
 		xReadOptions = xVisibleOptions[0]
 	}
-	xResults, xFailed, err := fetchXVisibleNDJSONWithOptions(ctx, cfg.XAccounts, cfg.Keywords, xFrom, to, xReadOptions)
+	filters := newFilterContext(cfg)
+	xResults, xFailed, err := fetchXVisibleNDJSONWithOptions(ctx, cfg.XAccounts, filters.includeKeywords(model.Article{Category: cfg.XAccounts.Category}, config.Source{Name: xVisibleSourceName, Category: cfg.XAccounts.Category}), xFrom, to, xReadOptions)
 	if err != nil {
 		return FetchResult{}, err
 	}
@@ -316,7 +549,9 @@ func fetchWindowDetailedContextWithOptions(ctx context.Context, cfg *config.Conf
 
 	accepted := make([]model.Article, 0)
 	filtered := make([]model.Article, 0)
+	stats := newSourceStatsAccumulator(cfg, from, to)
 	for _, result := range results {
+		stats.countFetched(result)
 		windowFrom := from
 		if result.Source.Name == xVisibleSourceName {
 			windowFrom = xFrom
@@ -325,7 +560,22 @@ func fetchWindowDetailedContextWithOptions(ctx context.Context, cfg *config.Conf
 			if !articleWithinWindow(candidate.Article, windowFrom, to) {
 				continue
 			}
-			if len(candidate.MatchedKeywords) == 0 {
+			stat := stats.statForArticle(candidate.Article, result.Source)
+			stat.InWindow++
+			matched, excluded := filterCandidate(candidate.Article, result.Source, filters)
+			if len(matched) == 0 && len(candidate.MatchedKeywords) > 0 && len(filters.includeKeywords(candidate.Article, result.Source)) == 0 {
+				matched = candidate.MatchedKeywords
+			}
+			if len(matched) == 0 {
+				stat.Filtered++
+				stat.FilteredKeywordMiss++
+				filtered = append(filtered, candidate.Article)
+				continue
+			}
+			stat.KeywordMatched++
+			if len(excluded) > 0 {
+				stat.Filtered++
+				stat.FilteredExcluded++
 				filtered = append(filtered, candidate.Article)
 				continue
 			}
@@ -336,6 +586,7 @@ func fetchWindowDetailedContextWithOptions(ctx context.Context, cfg *config.Conf
 	sort.Slice(accepted, func(i, j int) bool {
 		return accepted[i].Published.After(accepted[j].Published)
 	})
+	accepted, filtered = applySourceLimits(accepted, filtered, filters, stats)
 	sort.Slice(filtered, func(i, j int) bool {
 		return filtered[i].Published.After(filtered[j].Published)
 	})
@@ -346,9 +597,12 @@ func fetchWindowDetailedContextWithOptions(ctx context.Context, cfg *config.Conf
 
 	outcome, err := applyDedupContext(ctx, accepted, markSeen, ignoreSeen, NewSeenStore(cfg.Output.Dir))
 	if err != nil {
-		return FetchResult{FilteredArticles: filtered, Failed: failed}, err
+		return FetchResult{FilteredArticles: filtered, Failed: failed, SourceStats: stats.build(failed)}, err
 	}
-	return FetchResult{Articles: outcome.Articles, FilteredArticles: filtered, Failed: failed}, nil
+	for _, article := range outcome.Articles {
+		stats.statForArticle(article, config.Source{}).AcceptedAfterDedup++
+	}
+	return FetchResult{Articles: outcome.Articles, FilteredArticles: filtered, Failed: failed, SourceStats: stats.build(failed)}, nil
 }
 
 func MarkArticlesSeen(outputDir string, articles []model.Article) error {
@@ -420,6 +674,7 @@ func fetchAllSourcesDetailedWith(ctx context.Context, cfg *config.Config, since 
 
 	var redditSources []config.Source
 	var otherSources []config.Source
+	filters := newFilterContext(cfg)
 	for _, src := range cfg.Sources {
 		if shouldRateLimitAsReddit(src) {
 			redditSources = append(redditSources, src)
@@ -437,7 +692,7 @@ func fetchAllSourcesDetailedWith(ctx context.Context, cfg *config.Config, since 
 				mu.Unlock()
 				return
 			}
-			result, err := fetchWithRetryUsing(ctx, src, cfg.Keywords, since, fetchers, sleep, retrySettings)
+			result, err := fetchWithRetryUsing(ctx, src, filters.includeKeywords(model.Article{Category: src.Category, Source: src.Name}, src), since, fetchers, sleep, retrySettings)
 			mu.Lock()
 			if err != nil {
 				failed = append(failed, FailedSource{Name: src.Name, Err: err})
@@ -456,7 +711,9 @@ func fetchAllSourcesDetailedWith(ctx context.Context, cfg *config.Config, since 
 				}
 				return fetchWithRetryUsing(ctx, src, keywords, since, fetchers, sleep, retrySettings)
 			}
-			fetchRedditSourcesSeriallyWith(ctx, redditSources, cfg.Keywords, since, fetchRedditSource, sleep, redditSourceDelayOptionsFromConfig(cfg), func(item FailedSource) {
+			fetchRedditSourcesSeriallyWith(ctx, redditSources, nil, since, func(ctx context.Context, src config.Source, _ []string, since time.Time) (sourceFetchResult, error) {
+				return fetchRedditSource(ctx, src, filters.includeKeywords(model.Article{Category: src.Category, Source: src.Name}, src), since)
+			}, sleep, redditSourceDelayOptionsFromConfig(cfg), func(item FailedSource) {
 				mu.Lock()
 				failed = append(failed, item)
 				mu.Unlock()

@@ -3,10 +3,10 @@ sources:
     url: https://techcrunch.com/category/artificial-intelligence/feed/
     type: rss
     category: AI/科技
-  - name: The Verge
-    url: https://www.theverge.com/rss/index.xml
-    type: rss
-    category: AI/科技
+  # - name: The Verge
+  #   url: https://www.theverge.com/rss/index.xml
+  #   type: rss
+  #   category: AI/科技
   - name: Ars Technica
     url: https://feeds.arstechnica.com/arstechnica/technology-lab
     type: rss
@@ -156,6 +156,82 @@ keywords:
   - nuclear
   - Russia
   - Ukraine
+
+filters:
+  categories:
+    AI/科技:
+      include_keywords:
+        - AI
+        - OpenAI
+        - Claude
+        - Gemini
+        - DeepMind
+        - GitHub
+        - 大模型
+        - 智能体
+        - 算力
+        - 芯片
+        - 航天
+    新闻财经:
+      include_keywords:
+        - 国务院
+        - 发改委
+        - 财政部
+        - 央行
+        - 房地产
+        - 消费
+        - 就业
+        - A股
+        - 港股
+        - IPO
+        - 产业政策
+      exclude_keywords:
+        - 文旅
+        - 体育
+        - 天气
+        - 台风
+        - 防汛
+        - 救灾
+    国际政治:
+      include_keywords:
+        - China
+        - trade
+        - tariff
+        - geopolitics
+        - military
+        - sanction
+        - Taiwan
+        - Iran
+        - Israel
+        - Russia
+        - Ukraine
+      exclude_keywords:
+        - World Cup
+        - football
+        - soccer
+  sources:
+    Hacker News:
+      max_articles: 15
+      exclude_keywords:
+        - mermaid
+        - debit-card
+        - card network
+        - fees
+        - game
+        - gaming
+    IT之家:
+      max_articles: 15
+      exclude_keywords:
+        - 游戏
+        - XGP
+        - 入库
+        - 汽车
+        - 车型
+        - 手机
+        - Pixel
+        - iOS
+        - iPadOS
+        - Win11
 
 fetch:
   timeout: 30s
