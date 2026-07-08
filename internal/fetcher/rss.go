@@ -248,7 +248,7 @@ func (c *Client) fetchOpenGraphImage(ctx context.Context, articleURL string) str
 			return imageURL
 		}
 	}
-	return ""
+	return articleBodyImage(doc, articleURL)
 }
 
 func openGraphImageFromSelection(selection *goquery.Selection, baseURL string) string {
@@ -260,6 +260,95 @@ func openGraphImageFromSelection(selection *goquery.Selection, baseURL string) s
 		imageURL, _ = selection.Attr("href")
 	}
 	return normalizeRSSImageURL(imageURL, baseURL)
+}
+
+func articleBodyImage(doc *goquery.Document, baseURL string) string {
+	for _, selector := range []string{
+		`.left_zw img`,
+		`article img`,
+		`main img`,
+		`[role="main"] img`,
+		`[itemprop="articleBody"] img`,
+		`.article-content img`,
+		`.article_body img`,
+		`.article-body img`,
+		`.articleText img`,
+		`.entry-content img`,
+		`.post-content img`,
+		`.story-body img`,
+		`#article img`,
+		`#articleContent img`,
+		`#artibody img`,
+	} {
+		if imageURL := firstUsableArticleImage(doc.Find(selector), baseURL); imageURL != "" {
+			return imageURL
+		}
+	}
+	return ""
+}
+
+func firstUsableArticleImage(selection *goquery.Selection, baseURL string) string {
+	var selected string
+	selection.EachWithBreak(func(_ int, image *goquery.Selection) bool {
+		if isDecorativeArticleImage(image) {
+			return true
+		}
+		if imageURL := normalizeRSSImageURL(imageSource(image), baseURL); imageURL != "" {
+			selected = imageURL
+			return false
+		}
+		return true
+	})
+	return selected
+}
+
+func imageSource(image *goquery.Selection) string {
+	for _, attr := range []string{"src", "data-src", "data-original", "data-lazy-src", "data-actualsrc", "data-url"} {
+		if value := strings.TrimSpace(image.AttrOr(attr, "")); value != "" {
+			return value
+		}
+	}
+	return ""
+}
+
+func isDecorativeArticleImage(image *goquery.Selection) bool {
+	value := strings.ToLower(strings.Join([]string{
+		image.AttrOr("src", ""),
+		image.AttrOr("data-src", ""),
+		image.AttrOr("class", ""),
+		image.AttrOr("id", ""),
+		image.AttrOr("alt", ""),
+	}, " "))
+	for _, marker := range []string{
+		"logo",
+		"icon",
+		"avatar",
+		"banner",
+		"advert",
+		"ad-",
+		"qrcode",
+		"qr-code",
+		"wechat",
+		"weixin",
+		"share",
+		"spacer",
+		"loading",
+	} {
+		if strings.Contains(value, marker) {
+			return true
+		}
+	}
+	return imageDimensionTooSmall(image.AttrOr("width", "")) || imageDimensionTooSmall(image.AttrOr("height", ""))
+}
+
+func imageDimensionTooSmall(raw string) bool {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return false
+	}
+	raw = strings.TrimSuffix(raw, "px")
+	value, err := strconv.Atoi(raw)
+	return err == nil && value > 0 && value < 80
 }
 
 func shouldFallbackToCurl(source config.Source, err error) bool {
