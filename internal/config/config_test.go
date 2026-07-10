@@ -1779,6 +1779,7 @@ filters:
   sources:
     Hacker News:
       max_articles: 12
+      priority: 20
       exclude_keywords:
         - Show HN
 email: {}
@@ -1806,6 +1807,9 @@ ai: {}
 	if source.MaxArticles != 12 {
 		t.Fatalf("MaxArticles = %d, want 12", source.MaxArticles)
 	}
+	if source.Priority != 20 {
+		t.Fatalf("Priority = %d, want 20", source.Priority)
+	}
 	if !reflect.DeepEqual(source.ExcludeKeywords, []string{"Show HN"}) {
 		t.Fatalf("Source ExcludeKeywords = %#v", source.ExcludeKeywords)
 	}
@@ -1826,6 +1830,11 @@ func TestLoadRejectsInvalidFilters(t *testing.T) {
 			name:    "negative source max",
 			filter:  "filters:\n  sources:\n    Hacker News:\n      max_articles: -1\n",
 			wantErr: "max_articles",
+		},
+		{
+			name:    "negative source priority",
+			filter:  "filters:\n  sources:\n    Hacker News:\n      priority: -1\n",
+			wantErr: "priority",
 		},
 		{
 			name:    "duplicate source keyword",
