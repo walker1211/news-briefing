@@ -124,6 +124,11 @@ sources:
     url: https://example.com/world.rss
     type: rss
     category: 国际政治
+  - name: Protected RSSHub Feed
+    url: https://rsshub.example.com/example/route
+    type: rss
+    category: 新闻财经
+    rsshub_access_key_env: RSSHUB_ACCESS_KEY
 ```
 
 Notes:
@@ -131,6 +136,7 @@ Notes:
 - `category` can be any string
 - grouped output follows the first-appearance order of `sources`
 - if a runtime category is not present in config, it is appended after configured categories
+- remote RSSHub sources must use HTTPS; with `rsshub_access_key_env`, the master key stays in `.env` and requests carry only a route-derived access code
 
 The program reads only `configs/config.yaml` by default.
 

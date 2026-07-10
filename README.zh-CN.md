@@ -124,6 +124,11 @@ sources:
     url: https://example.com/world.rss
     type: rss
     category: 国际政治
+  - name: Protected RSSHub Feed
+    url: https://rsshub.example.com/example/route
+    type: rss
+    category: 新闻财经
+    rsshub_access_key_env: RSSHUB_ACCESS_KEY
 ```
 
 说明：
@@ -131,6 +136,7 @@ sources:
 - `category` 可以自定义，不限于内置枚举
 - 分组展示顺序按 `sources` 中首次出现顺序决定
 - 如果运行时出现了配置里没有的分类，会追加到已配置分类之后
+- 远程 RSSHub 必须使用 HTTPS；设置 `rsshub_access_key_env` 后，主密钥只放在 `.env`，请求仅携带按路由生成的访问码
 
 程序默认只读取 `configs/config.yaml`。
 
