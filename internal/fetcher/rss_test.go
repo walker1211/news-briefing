@@ -2,9 +2,12 @@ package fetcher
 
 import (
 	"context"
+	"crypto/md5"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
@@ -27,6 +30,51 @@ func mustRSSHTMLDoc(t *testing.T, html string) *goquery.Document {
 		t.Fatalf("parse html: %v", err)
 	}
 	return doc
+}
+
+func TestFetchRSSAuthenticatesRSSHubRoute(t *testing.T) {
+	const accessKey = "test-master-key"
+	t.Setenv("RSSHUB_ACCESS_KEY", accessKey)
+
+	var requestedCode string
+	var requestedKey string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		requestedCode = req.URL.Query().Get("code")
+		requestedKey = req.URL.Query().Get("key")
+		w.Header().Set("Content-Type", "application/rss+xml")
+		_, _ = io.WriteString(w, `<?xml version="1.0"?><rss version="2.0"><channel><title>Finance</title></channel></rss>`)
+	}))
+	defer server.Close()
+
+	client := NewClient(server.Client())
+	_, err := client.FetchRSS(config.Source{
+		Name:               "First Financial",
+		URL:                server.URL + "/yicai/brief",
+		Type:               config.SourceTypeRSS,
+		Category:           "新闻财经",
+		RSSHubAccessKeyEnv: "RSSHUB_ACCESS_KEY",
+	}, nil, time.Time{})
+	if err != nil {
+		t.Fatalf("FetchRSS() error = %v", err)
+	}
+	wantCode := fmt.Sprintf("%x", md5.Sum([]byte("/yicai/brief"+accessKey)))
+	if requestedCode != wantCode {
+		t.Fatalf("code = %q, want %q", requestedCode, wantCode)
+	}
+	if requestedKey != "" {
+		t.Fatalf("master key query parameter must be empty")
+	}
+}
+
+func TestAuthenticatedRSSURLRequiresConfiguredEnvironment(t *testing.T) {
+	t.Setenv("MISSING_RSSHUB_ACCESS_KEY", "")
+	_, err := authenticatedRSSURL(config.Source{
+		URL:                "https://rsshub.example.com/yicai/brief",
+		RSSHubAccessKeyEnv: "MISSING_RSSHUB_ACCESS_KEY",
+	})
+	if err == nil || !strings.Contains(err.Error(), "MISSING_RSSHUB_ACCESS_KEY") {
+		t.Fatalf("authenticatedRSSURL() error = %v", err)
+	}
 }
 
 func TestFetchRSSFallsBackToCurlForReddit403(t *testing.T) {

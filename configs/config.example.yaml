@@ -44,13 +44,15 @@ sources:
     type: rss
     category: AI/科技
   - name: 第一财经
-    url: http://127.0.0.1:1200/yicai/brief
+    url: https://rsshub.example.com/yicai/brief
     type: rss
     category: 新闻财经
+    rsshub_access_key_env: RSSHUB_ACCESS_KEY
   - name: 财新
-    url: http://127.0.0.1:1200/caixin/latest
+    url: https://rsshub.example.com/caixin/latest
     type: rss
     category: 新闻财经
+    rsshub_access_key_env: RSSHUB_ACCESS_KEY
   - name: NPR World
     url: https://feeds.npr.org/1004/rss.xml
     type: rss

@@ -5,6 +5,7 @@ import (
 	"net/mail"
 	"net/url"
 	"os"
+	"regexp"
 	"strings"
 	"time"
 
@@ -71,13 +72,14 @@ func cloneDurations(values []time.Duration) []time.Duration {
 }
 
 type Source struct {
-	Name     string   `yaml:"name"`
-	URL      string   `yaml:"url"`
-	Type     string   `yaml:"type"`
-	Category string   `yaml:"category"`
-	Keywords []string `yaml:"keywords"`
-	PageKind string   `yaml:"page_kind"`
-	TimeHint string   `yaml:"time_hint"`
+	Name               string   `yaml:"name"`
+	URL                string   `yaml:"url"`
+	Type               string   `yaml:"type"`
+	Category           string   `yaml:"category"`
+	Keywords           []string `yaml:"keywords"`
+	PageKind           string   `yaml:"page_kind"`
+	TimeHint           string   `yaml:"time_hint"`
+	RSSHubAccessKeyEnv string   `yaml:"rsshub_access_key_env"`
 }
 
 type FiltersConfig struct {
@@ -276,6 +278,8 @@ var supportedSourceTypes = map[string]struct{}{
 	SourceTypeDocsPage:   {},
 	SourceTypeRepoPage:   {},
 }
+
+var environmentVariableNamePattern = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 
 var supportedWatchTypes = map[string]struct{}{
 	WatchTypeAnthropicSupport: {},
@@ -712,6 +716,26 @@ func validateSource(index int, source Source) error {
 	}
 	if err := validateHTTPURL(prefix+".url", source.URL); err != nil {
 		return err
+	}
+	accessKeyEnv := strings.TrimSpace(source.RSSHubAccessKeyEnv)
+	if accessKeyEnv == "" {
+		return nil
+	}
+	if kind != SourceTypeRSS {
+		return fmt.Errorf("validate %s.rsshub_access_key_env: only rss sources support RSSHub authentication", prefix)
+	}
+	if !environmentVariableNamePattern.MatchString(accessKeyEnv) {
+		return fmt.Errorf("validate %s.rsshub_access_key_env: must be a valid environment variable name", prefix)
+	}
+	parsedURL, err := url.Parse(source.URL)
+	if err != nil {
+		return fmt.Errorf("validate %s.url: %w", prefix, err)
+	}
+	if parsedURL.Scheme != "https" {
+		return fmt.Errorf("validate %s.url: authenticated remote RSSHub sources must use https", prefix)
+	}
+	if parsedURL.User != nil || parsedURL.RawQuery != "" || parsedURL.Fragment != "" {
+		return fmt.Errorf("validate %s.url: authenticated RSSHub sources must not contain credentials, a query, or a fragment", prefix)
 	}
 	return nil
 }

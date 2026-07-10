@@ -3,10 +3,12 @@ package fetcher
 import (
 	"bytes"
 	"context"
+	"crypto/md5"
 	"fmt"
 	"io"
 	"net/http"
 	"net/url"
+	"os"
 	"os/exec"
 	"regexp"
 	"strconv"
@@ -56,11 +58,17 @@ func (c *Client) FetchRSSContext(ctx context.Context, source config.Source, keyw
 func (c *Client) fetchRSSContextWithOpenGraphOptions(ctx context.Context, source config.Source, keywords []string, since time.Time, sleep sleepFunc, delay delayFunc) (sourceFetchResult, error) {
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
+	fetchSource := source
+	authenticatedURL, err := authenticatedRSSURL(source)
+	if err != nil {
+		return sourceFetchResult{}, err
+	}
+	fetchSource.URL = authenticatedURL
 
 	fp := gofeed.NewParser()
 	fp.Client = c.httpClient
 
-	feed, headers, err := c.fetchRSSFeed(ctx, source, fp)
+	feed, headers, err := c.fetchRSSFeed(ctx, fetchSource, fp)
 	if err != nil {
 		if !shouldFallbackToCurl(source, err) {
 			return sourceFetchResult{}, err
@@ -69,7 +77,7 @@ func (c *Client) fetchRSSContextWithOpenGraphOptions(ctx context.Context, source
 		if fetchCurl == nil {
 			fetchCurl = fetchFeedWithCurlContext
 		}
-		body, curlErr := fetchCurl(ctx, source.URL)
+		body, curlErr := fetchCurl(ctx, fetchSource.URL)
 		if curlErr != nil {
 			return sourceFetchResult{}, fmt.Errorf("reddit rss curl fallback failed: %w", curlErr)
 		}
@@ -131,6 +139,27 @@ func (c *Client) fetchRSSContextWithOpenGraphOptions(ctx context.Context, source
 	}
 
 	return result, nil
+}
+
+func authenticatedRSSURL(source config.Source) (string, error) {
+	envName := strings.TrimSpace(source.RSSHubAccessKeyEnv)
+	if envName == "" {
+		return source.URL, nil
+	}
+	accessKey, ok := os.LookupEnv(envName)
+	if !ok || strings.TrimSpace(accessKey) == "" {
+		return "", fmt.Errorf("RSSHub access key environment variable %s is not set", envName)
+	}
+	parsedURL, err := url.Parse(source.URL)
+	if err != nil || !parsedURL.IsAbs() || parsedURL.Host == "" {
+		return "", fmt.Errorf("parse RSSHub source URL for authentication")
+	}
+	accessCode := md5.Sum([]byte(parsedURL.Path + accessKey))
+	query := parsedURL.Query()
+	query.Del("key")
+	query.Set("code", fmt.Sprintf("%x", accessCode))
+	parsedURL.RawQuery = query.Encode()
+	return parsedURL.String(), nil
 }
 
 func (c *Client) fetchRSSFeed(ctx context.Context, source config.Source, fp *gofeed.Parser) (*gofeed.Feed, http.Header, error) {

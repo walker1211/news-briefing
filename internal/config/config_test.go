@@ -1093,6 +1093,74 @@ func TestLoadRejectsInvalidSourceConfig(t *testing.T) {
 	}
 }
 
+func TestLoadParsesRSSHubAccessKeyEnvironment(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	content := `sources:
+  - name: Protected RSSHub
+    url: https://rsshub.example.com/yicai/brief
+    type: rss
+    category: 新闻财经
+    rsshub_access_key_env: RSSHUB_ACCESS_KEY
+keywords: []
+email:
+  smtp_host: smtp.example.com
+  smtp_port: 465
+  from: from@example.com
+  to: to@example.com
+schedule: []
+output: {}
+proxy: {}
+`
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if got := cfg.Sources[0].RSSHubAccessKeyEnv; got != "RSSHUB_ACCESS_KEY" {
+		t.Fatalf("Sources[0].RSSHubAccessKeyEnv = %q", got)
+	}
+}
+
+func TestValidateSourceRejectsInvalidRSSHubAuthentication(t *testing.T) {
+	tests := []struct {
+		name    string
+		source  Source
+		wantErr string
+	}{
+		{
+			name:    "invalid environment name",
+			source:  Source{Name: "RSSHub", URL: "https://rsshub.example.com/feed", Type: SourceTypeRSS, Category: "新闻财经", RSSHubAccessKeyEnv: "BAD-NAME"},
+			wantErr: "environment variable name",
+		},
+		{
+			name:    "remote http",
+			source:  Source{Name: "RSSHub", URL: "http://rsshub.example.com/feed", Type: SourceTypeRSS, Category: "新闻财经", RSSHubAccessKeyEnv: "RSSHUB_ACCESS_KEY"},
+			wantErr: "must use https",
+		},
+		{
+			name:    "query",
+			source:  Source{Name: "RSSHub", URL: "https://rsshub.example.com/feed?code=old", Type: SourceTypeRSS, Category: "新闻财经", RSSHubAccessKeyEnv: "RSSHUB_ACCESS_KEY"},
+			wantErr: "must not contain",
+		},
+		{
+			name:    "non rss source",
+			source:  Source{Name: "Page", URL: "https://example.com/page", Type: SourceTypeDocsPage, Category: "AI/科技", RSSHubAccessKeyEnv: "RSSHUB_ACCESS_KEY"},
+			wantErr: "only rss sources",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := validateSource(0, tt.source)
+			if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
+				t.Fatalf("validateSource() error = %v, want %q", err, tt.wantErr)
+			}
+		})
+	}
+}
+
 func TestLoadRejectsInvalidScheduleExpression(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.yaml")
