@@ -1281,6 +1281,28 @@ func TestApplyBriefingArticleLimitsReturnsCategoryReport(t *testing.T) {
 	}
 }
 
+func TestApplyBriefingArticleLimitsUsesSourcePriorityAndPreservesTimeOrder(t *testing.T) {
+	articles := []model.Article{
+		{Title: "new community", Source: "Hacker News", Category: "AI/科技"},
+		{Title: "new media", Source: "TechCrunch AI", Category: "AI/科技"},
+		{Title: "older official", Source: "OpenAI News", Category: "AI/科技"},
+		{Title: "old community", Source: "Reddit Singularity", Category: "AI/科技"},
+	}
+	limits := map[string]int{"AI/科技": 2}
+	priorities := map[string]int{
+		"OpenAI News":   100,
+		"TechCrunch AI": 50,
+	}
+
+	limited, _, _, err := applyBriefingArticleLimitsWithSourcePriorities(articles, nil, limits, priorities)
+	if err != nil {
+		t.Fatalf("applyBriefingArticleLimitsWithSourcePriorities() error = %v", err)
+	}
+	if got, want := articleTitles(limited), []string{"new media", "older official"}; !slices.Equal(got, want) {
+		t.Fatalf("limited titles = %v, want %v", got, want)
+	}
+}
+
 func TestScheduledBriefingOnceUpdatesRunningMarkerDuringAI(t *testing.T) {
 	window := scheduler.Window{Expr: "0 18 * * *", Period: "1800", From: time.Date(2026, 6, 16, 8, 0, 0, 0, time.UTC), To: time.Date(2026, 6, 16, 18, 0, 0, 0, time.UTC)}
 	var marker string

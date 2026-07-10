@@ -461,7 +461,48 @@ func TestFetchXVisibleNDJSONReportsSearchLimitReachedCoverageWarning(t *testing.
 	if len(results) != 1 || len(results[0].Candidates) != 1 {
 		t.Fatalf("results = %#v, want one X search candidate", results)
 	}
-	assertFailedSourceContains(t, failed, "X coverage/search:Codex", "limit-reached")
+	assertFailedSourceContains(t, failed, "X coverage", "search:Codex=limit-reached")
+}
+
+func TestFetchXVisibleNDJSONMergesCoverageWarnings(t *testing.T) {
+	dir := t.TempDir()
+	accountsPath := filepath.Join(dir, "accounts.ndjson")
+	content := `{"kind":"x-visible-article","schemaVersion":1,"targetRaw":"/twitter/user/OpenAI","targetType":"account","targetUrl":"https://x.com/OpenAI","sourceUrl":"https://x.com/OpenAI","finalUrl":"https://x.com/OpenAI","windowFrom":"2026-05-20T10:00:00.000Z","windowTo":"2026-05-21T00:00:00.000Z","scrollStopReason":"limit-reached","text":"OpenAI Codex update","datetime":"2026-05-20T23:59:40.000Z","statusUrl":"https://x.com/OpenAI/status/limit-reached"}
+{"kind":"x-visible-article","schemaVersion":1,"targetRaw":"/twitter/user/AnthropicAI","targetType":"account","targetUrl":"https://x.com/AnthropicAI","sourceUrl":"https://x.com/AnthropicAI","finalUrl":"https://x.com/AnthropicAI","windowFrom":"2026-05-20T10:00:00.000Z","windowTo":"2026-05-21T00:00:00.000Z","scrollStopReason":"limit-reached","text":"Anthropic Claude update","datetime":"2026-05-20T23:58:40.000Z","statusUrl":"https://x.com/AnthropicAI/status/limit-reached"}
+`
+	if err := os.WriteFile(accountsPath, []byte(content), 0o644); err != nil {
+		t.Fatalf("write accounts ndjson: %v", err)
+	}
+	cfg := config.XAccountsConfig{
+		Enabled:      true,
+		AccountsPath: accountsPath,
+		Category:     "AI/科技",
+		Accounts: []config.XAccountConfig{
+			{Handle: "OpenAI"},
+			{Handle: "AnthropicAI"},
+		},
+	}
+	from := time.Date(2026, 5, 20, 10, 0, 0, 0, time.UTC)
+	to := time.Date(2026, 5, 21, 0, 0, 0, 0, time.UTC)
+
+	results, failed, err := fetchXVisibleNDJSON(context.Background(), cfg, []string{"Codex", "Claude"}, from, to)
+	if err != nil {
+		t.Fatalf("fetchXVisibleNDJSON() error = %v", err)
+	}
+	if len(results) != 1 || len(results[0].Candidates) != 2 {
+		t.Fatalf("results = %#v, want two X candidates", results)
+	}
+	if len(failed) != 1 {
+		t.Fatalf("failed = %#v, want one merged coverage warning", failed)
+	}
+	if failed[0].Name != "X coverage" {
+		t.Fatalf("FailedSource.Name = %q, want X coverage", failed[0].Name)
+	}
+	for _, want := range []string{"2 targets", "AnthropicAI=limit-reached", "OpenAI=limit-reached"} {
+		if !strings.Contains(failed[0].Err.Error(), want) {
+			t.Fatalf("FailedSource.Err = %q, want %q", failed[0].Err, want)
+		}
+	}
 }
 
 func TestFetchXVisibleNDJSONLimitsPostsPerTargetForAccountsAndSearches(t *testing.T) {
@@ -772,11 +813,11 @@ func TestFetchXVisibleNDJSONReportsIncompleteCoverageWarning(t *testing.T) {
 	if len(failed) != 1 {
 		t.Fatalf("failed = %#v, want one coverage warning", failed)
 	}
-	if failed[0].Name != "X coverage/OpenAI" {
+	if failed[0].Name != "X coverage" {
 		t.Fatalf("FailedSource.Name = %q", failed[0].Name)
 	}
-	if !strings.Contains(failed[0].Err.Error(), "max-scrolls") {
-		t.Fatalf("FailedSource.Err = %v, want max-scrolls", failed[0].Err)
+	if !strings.Contains(failed[0].Err.Error(), "OpenAI=max-scrolls") {
+		t.Fatalf("FailedSource.Err = %v, want OpenAI=max-scrolls", failed[0].Err)
 	}
 }
 

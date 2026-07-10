@@ -611,7 +611,7 @@ func (app *app) runBriefingContext(ctx context.Context, commandPath string, peri
 	}
 	logutil.Printf("Stage fetch completed in %s", time.Since(fetchStarted).Round(time.Second))
 	limitStarted := time.Now()
-	result.articles, result.filteredArticles, _, err = applyBriefingArticleLimits(result.articles, result.filteredArticles, app.configuredArticleLimits())
+	result.articles, result.filteredArticles, _, err = app.applyBriefingArticleLimits(result.articles, result.filteredArticles, app.configuredArticleLimits())
 	if err != nil {
 		return err
 	}
@@ -641,7 +641,7 @@ func (app *app) runScheduledBriefingContextWithReporter(ctx context.Context, win
 	logutil.Printf("Stage fetch completed in %s", time.Since(fetchStarted).Round(time.Second))
 	limitStarted := time.Now()
 	var limitReport articleLimitReport
-	result.articles, result.filteredArticles, limitReport, err = applyBriefingArticleLimits(result.articles, result.filteredArticles, app.configuredArticleLimits())
+	result.articles, result.filteredArticles, limitReport, err = app.applyBriefingArticleLimits(result.articles, result.filteredArticles, app.configuredArticleLimits())
 	if reporter != nil {
 		reporter.updateArticleLimits(limitReport)
 	}
@@ -950,7 +950,7 @@ func (app *app) runRegenContext(ctx context.Context, cmd regenCommand) error {
 		limits = cmd.maxArticlesByCategory
 	}
 	limitStarted := time.Now()
-	result.Articles, result.FilteredArticles, _, err = applyBriefingArticleLimits(result.Articles, result.FilteredArticles, limits)
+	result.Articles, result.FilteredArticles, _, err = app.applyBriefingArticleLimits(result.Articles, result.FilteredArticles, limits)
 	if err != nil {
 		return err
 	}
@@ -963,6 +963,23 @@ func (app *app) configuredArticleLimits() map[string]int {
 		return nil
 	}
 	return app.cfg.Output.MaxArticlesByCategory
+}
+
+func (app *app) configuredSourcePriorities() map[string]int {
+	if app == nil || app.cfg == nil {
+		return nil
+	}
+	priorities := make(map[string]int)
+	for source, filter := range app.cfg.Filters.Sources {
+		if filter.Priority > 0 {
+			priorities[source] = filter.Priority
+		}
+	}
+	return priorities
+}
+
+func (app *app) applyBriefingArticleLimits(articles []model.Article, filteredArticles []model.Article, limits map[string]int) ([]model.Article, []model.Article, articleLimitReport, error) {
+	return applyBriefingArticleLimitsWithSourcePriorities(articles, filteredArticles, limits, app.configuredSourcePriorities())
 }
 
 type articleLimitCategoryReport struct {
@@ -981,11 +998,15 @@ type articleLimitReport struct {
 }
 
 func applyBriefingArticleLimits(articles []model.Article, filteredArticles []model.Article, limits map[string]int) ([]model.Article, []model.Article, articleLimitReport, error) {
+	return applyBriefingArticleLimitsWithSourcePriorities(articles, filteredArticles, limits, nil)
+}
+
+func applyBriefingArticleLimitsWithSourcePriorities(articles []model.Article, filteredArticles []model.Article, limits map[string]int, priorities map[string]int) ([]model.Article, []model.Article, articleLimitReport, error) {
 	if len(limits) == 0 {
 		return articles, filteredArticles, articleLimitReport{}, nil
 	}
 	original := articles
-	articles = filterArticlesByCategoryLimits(articles, limits)
+	articles = filterArticlesByCategoryLimitsWithSourcePriorities(articles, limits, priorities)
 	filteredArticles = nil
 	report := buildArticleLimitReport(original, articles, limits)
 	logutil.Printf("Article limits by category: %s", report.summaryString())
@@ -1071,16 +1092,49 @@ func normalizedArticleCategory(category string) string {
 }
 
 func filterArticlesByCategoryLimits(articles []model.Article, limits map[string]int) []model.Article {
-	out := make([]model.Article, 0, len(articles))
-	counts := make(map[string]int, len(limits))
-	for _, article := range articles {
+	return filterArticlesByCategoryLimitsWithSourcePriorities(articles, limits, nil)
+}
+
+type rankedArticleIndex struct {
+	index    int
+	priority int
+}
+
+func filterArticlesByCategoryLimitsWithSourcePriorities(articles []model.Article, limits map[string]int, priorities map[string]int) []model.Article {
+	byCategory := make(map[string][]rankedArticleIndex, len(limits))
+	for index, article := range articles {
 		category := normalizedArticleCategory(article.Category)
-		limit, ok := limits[category]
-		if !ok || counts[category] >= limit {
+		if _, ok := limits[category]; !ok {
 			continue
 		}
-		out = append(out, article)
-		counts[category]++
+		byCategory[category] = append(byCategory[category], rankedArticleIndex{
+			index:    index,
+			priority: priorities[strings.TrimSpace(article.Source)],
+		})
+	}
+
+	selected := make([]bool, len(articles))
+	for category, candidates := range byCategory {
+		sort.SliceStable(candidates, func(i, j int) bool {
+			if candidates[i].priority != candidates[j].priority {
+				return candidates[i].priority > candidates[j].priority
+			}
+			return candidates[i].index < candidates[j].index
+		})
+		limit := limits[category]
+		if limit > len(candidates) {
+			limit = len(candidates)
+		}
+		for _, candidate := range candidates[:limit] {
+			selected[candidate.index] = true
+		}
+	}
+
+	out := make([]model.Article, 0, len(articles))
+	for index, article := range articles {
+		if selected[index] {
+			out = append(out, article)
+		}
 	}
 	return out
 }
@@ -1141,7 +1195,7 @@ func (app *app) aiBriefingAttempts(articles []model.Article) ([]aiBriefingAttemp
 		return attempts, nil
 	}
 	for _, level := range app.cfg.Output.Fallback.Levels {
-		limited := filterArticlesByCategoryLimits(articles, level.MaxArticlesByCategory)
+		limited := filterArticlesByCategoryLimitsWithSourcePriorities(articles, level.MaxArticlesByCategory, app.configuredSourcePriorities())
 		if len(limited) == 0 {
 			return nil, fmt.Errorf("fallback %q leaves no articles", level.Name)
 		}

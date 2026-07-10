@@ -163,7 +163,7 @@ func fetchXVisibleHistoryNDJSON(ctx context.Context, cfg config.XAccountsConfig,
 func collectXVisibleNDJSON(ctx context.Context, cfg config.XAccountsConfig, keywords []string, from time.Time, to time.Time, inputs []xVisibleNDJSONInput, statuses []xVisibleStatusWarningInput, failed []FailedSource) ([]sourceFetchResult, []FailedSource, error) {
 	allowedAccounts := xAccountHandleSet(cfg.Accounts)
 	seen := map[string]struct{}{}
-	coverageWarnings := map[string]struct{}{}
+	coverageWarnings := map[string]FailedSource{}
 	for _, input := range statuses {
 		if !xVisibleRefreshWindowOverlaps(input.status.Window, from, to) {
 			continue
@@ -193,8 +193,7 @@ func collectXVisibleNDJSON(ctx context.Context, cfg config.XAccountsConfig, keyw
 				if xVisibleWarningTargetAllowed(item, allowedAccounts) {
 					key := warning.Name + "\n" + warning.Err.Error()
 					if _, exists := coverageWarnings[key]; !exists {
-						coverageWarnings[key] = struct{}{}
-						failed = append(failed, *warning)
+						coverageWarnings[key] = *warning
 					}
 				}
 			}
@@ -218,10 +217,32 @@ func collectXVisibleNDJSON(ctx context.Context, cfg config.XAccountsConfig, keyw
 	for _, target := range targetOrder {
 		candidates = append(candidates, limitXVisibleCandidates(groupedCandidates[target], limit)...)
 	}
+	if warning := xVisibleCoverageSummaryWarning(coverageWarnings); warning != nil {
+		failed = append(failed, *warning)
+	}
 	if len(candidates) == 0 {
 		return nil, failed, nil
 	}
 	return []sourceFetchResult{{Source: config.Source{Name: xVisibleSourceName, Category: cfg.Category}, Candidates: candidates}}, failed, nil
+}
+
+func xVisibleCoverageSummaryWarning(warnings map[string]FailedSource) *FailedSource {
+	if len(warnings) == 0 {
+		return nil
+	}
+
+	details := make([]string, 0, len(warnings))
+	for _, warning := range warnings {
+		target := strings.TrimPrefix(warning.Name, "X coverage/")
+		reason := strings.TrimPrefix(warning.Err.Error(), "target may not fully cover requested window: ")
+		details = append(details, target+"="+reason)
+	}
+	sort.Strings(details)
+
+	return &FailedSource{
+		Name: "X coverage",
+		Err:  fmt.Errorf("%d targets may not fully cover requested window: %s", len(details), strings.Join(details, ", ")),
+	}
 }
 
 func xVisibleWarningTargetAllowed(item xVisibleArticle, allowedAccounts map[string]struct{}) bool {

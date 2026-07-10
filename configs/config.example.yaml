@@ -43,6 +43,14 @@ sources:
     url: https://blogs.bing.com/Home/feed
     type: rss
     category: AI/科技
+  - name: 第一财经
+    url: http://127.0.0.1:1200/yicai/brief
+    type: rss
+    category: 新闻财经
+  - name: 财新
+    url: http://127.0.0.1:1200/caixin/latest
+    type: rss
+    category: 新闻财经
   - name: NPR World
     url: https://feeds.npr.org/1004/rss.xml
     type: rss
@@ -186,6 +194,18 @@ filters:
         - 港股
         - IPO
         - 产业政策
+        - 宏观
+        - 通胀
+        - GDP
+        - CPI
+        - PPI
+        - PMI
+        - 社融
+        - 沪指
+        - 深成指
+        - 创业板
+        - 科创板
+        - 碳达峰
       exclude_keywords:
         - 文旅
         - 体育
@@ -193,6 +213,14 @@ filters:
         - 台风
         - 防汛
         - 救灾
+        - 涨停
+        - 跌停
+        - 概念股
+        - 个股
+        - 盘中
+        - 日内
+        - 世界杯
+        - 足球
     国际政治:
       include_keywords:
         - China
@@ -210,9 +238,24 @@ filters:
         - World Cup
         - football
         - soccer
+  # Higher priority sources are selected before recency when a category reaches output.max_articles.
   sources:
+    OpenAI News:
+      priority: 100
+    GitHub Changelog:
+      priority: 90
+    第一财经:
+      max_articles: 6
+      priority: 70
+    财新:
+      max_articles: 8
+      priority: 80
+    TechCrunch AI:
+      max_articles: 12
+      priority: 50
     Hacker News:
       max_articles: 8
+      priority: 20
       exclude_keywords:
         - mermaid
         - debit-card
@@ -222,6 +265,7 @@ filters:
         - gaming
     IT之家:
       max_articles: 15
+      priority: 40
       exclude_keywords:
         - 游戏
         - XGP
@@ -238,7 +282,14 @@ filters:
         - 存储
         - MB/s
     Reddit Singularity:
-      max_articles: 8
+      max_articles: 6
+      priority: 10
+    X Search/search:Codex limits:
+      max_articles: 3
+    X/@thsottiaux:
+      max_articles: 3
+    X/@coreyching:
+      max_articles: 3
     X Search/search:OpenAI outage:
       max_articles: 4
 
@@ -342,7 +393,8 @@ output:
   include_filtered_articles: false
   # Optional. Limits articles sent into briefing AI by category; omitted categories are excluded when set.
   max_articles:
-    AI/科技: 70
+    AI/科技: 90
+    新闻财经: 30
     国际政治: 30
   # Optional. If AI summary generation fails or times out, retry once per fallback level.
   fallback:
@@ -350,11 +402,13 @@ output:
     levels:
       - name: reduced
         max_articles:
-          AI/科技: 50
+          AI/科技: 60
+          新闻财经: 20
           国际政治: 20
       - name: minimal
         max_articles:
           AI/科技: 30
+          新闻财经: 10
           国际政治: 10
 
 publish_hook:

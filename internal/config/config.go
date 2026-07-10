@@ -94,6 +94,7 @@ type SourceFilterConfig struct {
 	IncludeKeywords []string `yaml:"include_keywords"`
 	ExcludeKeywords []string `yaml:"exclude_keywords"`
 	MaxArticles     int      `yaml:"max_articles"`
+	Priority        int      `yaml:"priority"`
 }
 
 type FetchConfig struct {
@@ -636,6 +637,9 @@ func validateFilters(filters FiltersConfig) error {
 		}
 		if filter.MaxArticles < 0 {
 			return fmt.Errorf("validate %s.max_articles: must be zero or greater", field)
+		}
+		if filter.Priority < 0 {
+			return fmt.Errorf("validate %s.priority: must be zero or greater", field)
 		}
 		if err := validateKeywordList(field+".include_keywords", filter.IncludeKeywords); err != nil {
 			return err
