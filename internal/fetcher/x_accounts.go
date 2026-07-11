@@ -100,6 +100,7 @@ type xVisibleRefreshTargetDetails struct {
 	TargetRaw        string          `json:"targetRaw"`
 	TargetType       string          `json:"targetType"`
 	TargetURL        string          `json:"targetUrl"`
+	OK               bool            `json:"ok"`
 	LoadStopReason   string          `json:"loadStopReason"`
 	ScrollStopReason string          `json:"scrollStopReason"`
 	LoginSignals     json.RawMessage `json:"loginSignals"`
@@ -638,7 +639,18 @@ func xVisibleTargetLoginProblem(target xVisibleRefreshTargetDetails) bool {
 	if !xVisibleRawSignalPresent(target.LoginSignals) {
 		return false
 	}
+	if xVisibleCoveredEmptyWindowWithWeakLoginSignal(target) {
+		return false
+	}
 	return !strings.EqualFold(loadStopReason, "article-ready") || target.ArticleCount == 0
+}
+
+func xVisibleCoveredEmptyWindowWithWeakLoginSignal(target xVisibleRefreshTargetDetails) bool {
+	return target.OK &&
+		strings.TrimSpace(target.Error) == "" &&
+		strings.EqualFold(strings.TrimSpace(target.LoadStopReason), "article-ready") &&
+		strings.EqualFold(strings.TrimSpace(target.ScrollStopReason), "covered-window-start") &&
+		target.ArticleCount == 0
 }
 
 func xVisibleTargetChallengeProblem(target xVisibleRefreshTargetDetails) bool {

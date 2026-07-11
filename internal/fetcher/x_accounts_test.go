@@ -3,6 +3,7 @@ package fetcher
 import (
 	"compress/gzip"
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -407,6 +408,86 @@ func TestFetchXVisibleNDJSONIgnoresWeakLoginSignalAfterArticlesReady(t *testing.
 	}
 	if len(failed) != 0 {
 		t.Fatalf("failed = %#v, want weak login signal ignored", failed)
+	}
+}
+
+func TestFetchXVisibleNDJSONIgnoresWeakLoginSignalAfterCoveredEmptyWindow(t *testing.T) {
+	dir := t.TempDir()
+	accountsPath := filepath.Join(dir, "accounts.ndjson")
+	statusPath := filepath.Join(dir, "status.json")
+	if err := os.WriteFile(accountsPath, nil, 0o644); err != nil {
+		t.Fatalf("write accounts ndjson: %v", err)
+	}
+	status := `{"kind":"x-visible-refresh-status","schemaVersion":1,"job":"x-visible-ai","period":"2026-07-11T10:00:00.000Z","status":"succeeded","startedAt":"2026-07-11T10:00:13.702Z","finishedAt":"2026-07-11T10:03:13.381Z","window":{"from":"2026-07-11T00:00:00.000Z","to":"2026-07-11T10:00:00.000Z"},"targetSummary":{"targetCount":1,"okCount":1,"errorCount":0,"timeoutCount":0,"loginSignalCount":1,"challengeSignalCount":0,"retryCount":0},"targets":[{"source":"accounts","targetRaw":"/twitter/user/GeminiApp","targetType":"account","targetUrl":"https://x.com/GeminiApp","ok":true,"articleCount":0,"attempts":1,"retried":false,"error":"","loadStopReason":"article-ready","scrollStopReason":"covered-window-start","loginSignals":true,"challengeSignals":false}]}
+`
+	if err := os.WriteFile(statusPath, []byte(status), 0o644); err != nil {
+		t.Fatalf("write status: %v", err)
+	}
+	cfg := config.XAccountsConfig{
+		Enabled:           true,
+		AccountsPath:      accountsPath,
+		RefreshStatusPath: statusPath,
+		Category:          "AI/科技",
+		Accounts:          []config.XAccountConfig{{Handle: "GeminiApp"}},
+	}
+	from := time.Date(2026, 7, 11, 0, 0, 0, 0, time.UTC)
+	to := time.Date(2026, 7, 11, 10, 0, 0, 0, time.UTC)
+
+	results, failed, err := fetchXVisibleNDJSON(context.Background(), cfg, []string{"Gemini"}, from, to)
+	if err != nil {
+		t.Fatalf("fetchXVisibleNDJSON() error = %v", err)
+	}
+	if len(results) != 0 {
+		t.Fatalf("results = %#v, want no current-window X candidate", results)
+	}
+	if len(failed) != 0 {
+		t.Fatalf("failed = %#v, want covered empty-window login signal ignored", failed)
+	}
+}
+
+func TestXVisibleTargetLoginProblemKeepsActionableSignals(t *testing.T) {
+	weakCoveredTarget := xVisibleRefreshTargetDetails{
+		OK:               true,
+		LoadStopReason:   "article-ready",
+		ScrollStopReason: "covered-window-start",
+		LoginSignals:     json.RawMessage("true"),
+		ArticleCount:     0,
+	}
+	tests := []struct {
+		name   string
+		target xVisibleRefreshTargetDetails
+		want   bool
+	}{
+		{name: "covered empty window", target: weakCoveredTarget, want: false},
+		{name: "explicit login stop", target: func() xVisibleRefreshTargetDetails {
+			target := weakCoveredTarget
+			target.LoadStopReason = "login-signal"
+			target.ArticleCount = 2
+			return target
+		}(), want: true},
+		{name: "target not ok", target: func() xVisibleRefreshTargetDetails {
+			target := weakCoveredTarget
+			target.OK = false
+			return target
+		}(), want: true},
+		{name: "target error", target: func() xVisibleRefreshTargetDetails {
+			target := weakCoveredTarget
+			target.Error = "target failed"
+			return target
+		}(), want: true},
+		{name: "window not covered", target: func() xVisibleRefreshTargetDetails {
+			target := weakCoveredTarget
+			target.ScrollStopReason = "stable"
+			return target
+		}(), want: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := xVisibleTargetLoginProblem(tt.target); got != tt.want {
+				t.Fatalf("xVisibleTargetLoginProblem() = %v, want %v", got, tt.want)
+			}
+		})
 	}
 }
 
