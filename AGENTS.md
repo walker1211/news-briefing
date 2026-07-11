@@ -1,4 +1,4 @@
-# Codex.example.md
+# News Briefing Codex Guide
 
 Codex 在本仓库中工作时可参考以下公开说明。
 
@@ -45,4 +45,3 @@ go test ./internal/config -run TestLoadAppliesDefaultAIConfig -v
 - `periodPrefix()` 是时间段标签的唯一事实来源。
 - Briefing 文件名格式为 `YY.MM.DD-<凌晨|早间|午间|晚间>-HHMM.md`。
 - 如果发现二进制行为与代码不一致，调试前先重新构建 `./news-briefing`。
-- `.Codex/memory/` 是项目共享记忆的主源，稳定的项目约定应维护在这里。
