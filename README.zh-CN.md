@@ -102,7 +102,7 @@ cp configs/config.example.yaml configs/config.yaml
 - 调度时间 `schedule`
 - 输出目录 `output.dir`
 - 代理配置
-- AI CLI 命令与批处理 flags（默认 `ccs codex` + 非交互 flags）
+- AI CLI 命令与批处理 flags（默认直连 `codex exec` + 隔离的非交互 flags）
 
 分类示例：
 
@@ -146,27 +146,31 @@ sources:
 
 ```yaml
 ai:
-  command: claude
+  command: codex
   args:
-    - --bare
-    - --disable-slash-commands
+    - exec
+    - --ignore-user-config
+    - --ephemeral
+    - --skip-git-repo-check
+    - --sandbox
+    - read-only
+    - --color
+    - never
+    - --disable
+    - apps
+    - --disable
+    - plugins
+    - --disable
+    - remote_plugin
+  models:
+    default: gpt-5.6-sol
+    translation: gpt-5.3-codex-spark
   append_system_prompt: true
 ```
 
-如果你本机只有 `claude`，通常只需要改成：
+runner 会通过 stdin 把每次 prompt 交给 `codex exec`，并自动追加输入标记 `-`。不要把 `-p`、`--model` 或末尾的 `-` 写进 `args`：Codex 的 `-p` 表示配置 profile；runner 会让摘要与深挖使用 `models.default`，翻译使用 `models.translation`。启用 `append_system_prompt` 时，runner 会把无人值守批处理指令映射为本次运行的 `developer_instructions`。
 
-```yaml
-ai:
-  command: claude
-  args:
-    - --model
-    - claude-opus-4-6
-    - --bare
-    - --disable-slash-commands
-  append_system_prompt: true
-```
-
-注意：这里不要把 `-p` 写进 `args`，程序会在运行时自动追加 prompt 参数。
+`--ignore-user-config` 与三个 feature disable 会让无人值守批处理与个人 MCP、apps 和 plugins 隔离；它们不会修改用户的 `~/.codex/config.toml`，也不会影响 Codex App 的 Computer Use 等功能。
 
 ### 4. output 输出配置
 

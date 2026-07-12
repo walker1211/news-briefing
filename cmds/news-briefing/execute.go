@@ -91,6 +91,7 @@ func newApp(cfg *config.Config) *app {
 	fetchClient := fetcher.NewClient(httpClient)
 	watchRunner := watch.NewRunner(httpClient)
 	aiRunner := summarizer.NewRunnerWithRetryDelays(cfg.AI.Command, cfg.AI.Args, cfg.AI.ShouldAppendSystemPrompt(), cfg.Proxy.HTTP, cfg.Proxy.Socks5, cfg.AI.Retry.Delays)
+	aiRunner.SetModels(cfg.AI.Models.Default, cfg.AI.Models.Translation)
 	emailSender := output.NewEmailSender()
 	return &app{
 		cfg: cfg,

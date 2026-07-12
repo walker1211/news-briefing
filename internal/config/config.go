@@ -5,6 +5,7 @@ import (
 	"net/mail"
 	"net/url"
 	"os"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"time"
@@ -63,9 +64,25 @@ const (
 	DefaultXRefreshWaitTimeout            = 10 * time.Minute
 	DefaultXRefreshWaitInterval           = 5 * time.Second
 	DefaultXMaxPostsPerTarget             = 10
+	DefaultAIModel                        = "gpt-5.6-sol"
+	DefaultAITranslationModel             = "gpt-5.3-codex-spark"
 )
 
-var DefaultAIRetryDelays = []time.Duration{time.Second, 2 * time.Second, 5 * time.Second, 9 * time.Second, 17 * time.Second}
+var (
+	defaultAIArgs = []string{
+		"exec",
+		"--ignore-user-config",
+		"--ephemeral",
+		"--skip-git-repo-check",
+		"--sandbox", "read-only",
+		"--color", "never",
+		"--disable", "apps",
+		"--disable", "plugins",
+		"--disable", "remote_plugin",
+	}
+	legacyClaudeAIArgs   = []string{"--bare", "--disable-slash-commands"}
+	DefaultAIRetryDelays = []time.Duration{time.Second, 2 * time.Second, 5 * time.Second, 9 * time.Second, 17 * time.Second}
+)
 
 func cloneDurations(values []time.Duration) []time.Duration {
 	return append([]time.Duration(nil), values...)
@@ -223,9 +240,15 @@ type Proxy struct {
 type AICfg struct {
 	Command            string       `yaml:"command"`
 	Args               []string     `yaml:"args"`
+	Models             AIModelsCfg  `yaml:"models"`
 	AppendSystemPrompt *bool        `yaml:"append_system_prompt"`
 	Retry              AIRetryCfg   `yaml:"retry"`
 	Timeout            AITimeoutCfg `yaml:"timeout"`
+}
+
+type AIModelsCfg struct {
+	Default     string `yaml:"default"`
+	Translation string `yaml:"translation"`
 }
 
 type AIRetryCfg struct {
@@ -538,6 +561,12 @@ func (cfg *Config) Validate() error {
 		if strings.TrimSpace(arg) == "" {
 			return fmt.Errorf("validate ai.args[%d]: must not be empty", i)
 		}
+	}
+	if strings.TrimSpace(cfg.AI.Models.Default) == "" {
+		return fmt.Errorf("validate ai.models.default: must not be empty")
+	}
+	if strings.TrimSpace(cfg.AI.Models.Translation) == "" {
+		return fmt.Errorf("validate ai.models.translation: must not be empty")
 	}
 	for i, delay := range cfg.AI.Retry.Delays {
 		if delay <= 0 {
@@ -922,10 +951,19 @@ func Load(configPath string) (*Config, error) {
 		cfg.Output.Mode = model.OutputModeTranslatedOnly
 	}
 	if cfg.AI.Command == "" {
-		cfg.AI.Command = "claude"
+		cfg.AI.Command = "codex"
 	}
 	if len(cfg.AI.Args) == 0 {
-		cfg.AI.Args = []string{"--bare", "--disable-slash-commands"}
+		cfg.AI.Args = defaultAIArgsForCommand(cfg.AI.Command)
+	}
+	if cfg.AI.Models.Default == "" {
+		cfg.AI.Models.Default = configuredModel(cfg.AI.Args)
+		if cfg.AI.Models.Default == "" {
+			cfg.AI.Models.Default = DefaultAIModel
+		}
+	}
+	if cfg.AI.Models.Translation == "" {
+		cfg.AI.Models.Translation = DefaultAITranslationModel
 	}
 	if cfg.AI.Retry.Delays == nil {
 		cfg.AI.Retry.Delays = cloneDurations(DefaultAIRetryDelays)
@@ -957,4 +995,33 @@ func Load(configPath string) (*Config, error) {
 	}
 
 	return &cfg, nil
+}
+
+func defaultAIArgsForCommand(command string) []string {
+	normalized := strings.ReplaceAll(strings.TrimSpace(command), `\`, "/")
+	name := strings.TrimSuffix(strings.ToLower(filepath.Base(normalized)), ".exe")
+	switch name {
+	case "codex":
+		return append([]string(nil), defaultAIArgs...)
+	case "claude":
+		return append([]string(nil), legacyClaudeAIArgs...)
+	default:
+		return nil
+	}
+}
+
+func configuredModel(args []string) string {
+	var model string
+	for i := 0; i < len(args); i++ {
+		switch {
+		case (args[i] == "--model" || args[i] == "-m") && i+1 < len(args) && !strings.HasPrefix(args[i+1], "-"):
+			model = args[i+1]
+			i++
+		case strings.HasPrefix(args[i], "--model="):
+			model = strings.TrimPrefix(args[i], "--model=")
+		case strings.HasPrefix(args[i], "-m="):
+			model = strings.TrimPrefix(args[i], "-m=")
+		}
+	}
+	return model
 }

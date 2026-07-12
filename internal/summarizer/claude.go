@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -98,6 +99,8 @@ const deepDivePrompt = `你是一个资深新闻调研员和话题研究助手�
 type Runner struct {
 	commandName        string
 	commandArgs        []string
+	defaultModel       string
+	translationModel   string
 	appendSystemPrompt bool
 	proxyEnv           []string
 	retrySleep         sleepFunc
@@ -108,14 +111,27 @@ type Runner struct {
 type callKind string
 
 const (
-	callKindSummarize callKind = "summarize"
-	callKindTranslate callKind = "translate"
-	callKindDeepDive  callKind = "deep"
+	callKindSummarize       callKind = "summarize"
+	callKindTranslate       callKind = "translate"
+	callKindDeepDive        callKind = "deep"
+	defaultModel                     = "gpt-5.6-sol"
+	defaultTranslationModel          = "gpt-5.3-codex-spark"
 )
 
 var (
-	defaultCommand            = "claude"
-	defaultCommandArgs        = []string{"--bare", "--disable-slash-commands"}
+	defaultCommand     = "codex"
+	defaultCommandArgs = []string{
+		"exec",
+		"--ignore-user-config",
+		"--ephemeral",
+		"--skip-git-repo-check",
+		"--sandbox", "read-only",
+		"--color", "never",
+		"--disable", "apps",
+		"--disable", "plugins",
+		"--disable", "remote_plugin",
+	}
+	legacyClaudeCommandArgs   = []string{"--bare", "--disable-slash-commands"}
 	defaultAppendSystemPrompt = true
 	defaultFailureLogPath     = filepath.Join("logs", "ai-cli-failures.log")
 	defaultRetryDelays        = []time.Duration{time.Second, 2 * time.Second, 5 * time.Second, 9 * time.Second, 17 * time.Second}
@@ -196,7 +212,19 @@ func NewRunnerWithRetryDelays(command string, args []string, appendSystemPrompt 
 	}
 	runnerArgs := cloneStrings(args)
 	if len(runnerArgs) == 0 {
-		runnerArgs = cloneStrings(defaultCommandArgs)
+		switch {
+		case isDirectCodexCommand(name):
+			runnerArgs = cloneStrings(defaultCommandArgs)
+		case isClaudeCommand(name):
+			runnerArgs = cloneStrings(legacyClaudeCommandArgs)
+		}
+	}
+	configuredDefaultModel := ""
+	if isDirectCodexCommand(name) {
+		runnerArgs, configuredDefaultModel = withoutModelArgs(runnerArgs)
+	}
+	if configuredDefaultModel == "" {
+		configuredDefaultModel = defaultModel
 	}
 	if retryDelays == nil {
 		retryDelays = defaultRetryDelays
@@ -218,12 +246,46 @@ func NewRunnerWithRetryDelays(command string, args []string, appendSystemPrompt 
 	return &Runner{
 		commandName:        name,
 		commandArgs:        runnerArgs,
+		defaultModel:       configuredDefaultModel,
+		translationModel:   defaultTranslationModel,
 		appendSystemPrompt: appendSystemPrompt,
 		proxyEnv:           proxyEnv,
 		retrySleep:         retrySleep,
 		retryDelays:        cloneDurations(retryDelays),
 		failureLogPath:     defaultFailureLogPath,
 	}
+}
+
+// SetModels configures task-specific models for direct Codex execution.
+// Other AI commands keep receiving only their configured base arguments.
+func (r *Runner) SetModels(defaultTaskModel, translationTaskModel string) {
+	if model := strings.TrimSpace(defaultTaskModel); model != "" {
+		r.defaultModel = model
+	}
+	if model := strings.TrimSpace(translationTaskModel); model != "" {
+		r.translationModel = model
+	}
+}
+
+func withoutModelArgs(args []string) ([]string, string) {
+	filtered := make([]string, 0, len(args))
+	model := ""
+	for i := 0; i < len(args); i++ {
+		switch {
+		case (args[i] == "--model" || args[i] == "-m") && i+1 < len(args) && !strings.HasPrefix(args[i+1], "-"):
+			model = args[i+1]
+			i++
+		case args[i] == "--model" || args[i] == "-m":
+			// Drop a malformed model flag so the task-specific value below remains unique.
+		case strings.HasPrefix(args[i], "--model="):
+			model = strings.TrimPrefix(args[i], "--model=")
+		case strings.HasPrefix(args[i], "-m="):
+			model = strings.TrimPrefix(args[i], "-m=")
+		default:
+			filtered = append(filtered, args[i])
+		}
+	}
+	return filtered, strings.TrimSpace(model)
 }
 
 // SetProxy 配置默认 Runner 的代理环境变量
@@ -359,8 +421,16 @@ func (r *Runner) runClaudeCommand(prompt string, runtimeArgs ...string) (string,
 func (r *Runner) runClaudeCommandContext(ctx context.Context, prompt string, runtimeArgs ...string) (string, string, string, error) {
 	args := append([]string{}, r.commandArgs...)
 	args = append(args, runtimeArgs...)
-	args = append(args, "-p", prompt)
+	directCodex := isDirectCodexCommand(r.commandName)
+	if directCodex {
+		args = append(args, "-")
+	} else {
+		args = append(args, "-p", prompt)
+	}
 	cmd := exec.CommandContext(ctx, r.commandName, args...)
+	if directCodex {
+		cmd.Stdin = strings.NewReader(prompt)
+	}
 	env := filterEnv(os.Environ(), "CLAUDECODE")
 	env = append(env, r.proxyEnv...)
 	cmd.Env = env
@@ -425,6 +495,16 @@ func shouldSanitizeCommand(command string, args []string) bool {
 		}
 	}
 	return false
+}
+
+func isDirectCodexCommand(command string) bool {
+	name := strings.TrimSuffix(strings.ToLower(filepath.Base(command)), ".exe")
+	return name == "codex"
+}
+
+func isClaudeCommand(command string) bool {
+	name := strings.TrimSuffix(strings.ToLower(filepath.Base(command)), ".exe")
+	return name == "claude"
 }
 
 func sanitizeCLIOutput(raw string) string {
@@ -602,11 +682,7 @@ func usableArticleImage(article model.Article) string {
 }
 
 func (r *Runner) summarizeRuntimeArgs() []string {
-	var args []string
-	if r.appendSystemPrompt {
-		args = append(args, "--append-system-prompt", nonInteractiveBriefingSystemPrompt)
-	}
-	return args
+	return r.taskRuntimeArgs(r.defaultModel, nonInteractiveBriefingSystemPrompt)
 }
 
 func shouldSanitizeCLIOutput() bool {
@@ -629,11 +705,7 @@ func (r *Runner) DeepDiveContext(ctx context.Context, topic string, articles []m
 }
 
 func (r *Runner) deepDiveRuntimeArgs() []string {
-	var args []string
-	if r.appendSystemPrompt {
-		args = append(args, "--append-system-prompt", nonInteractiveDeepDiveSystemPrompt)
-	}
-	return args
+	return r.taskRuntimeArgs(r.defaultModel, nonInteractiveDeepDiveSystemPrompt)
 }
 
 const translatePrompt = `将以下新闻列表翻译成中文。要求：
@@ -659,11 +731,25 @@ func (r *Runner) TranslateContext(ctx context.Context, articles []model.Article,
 }
 
 func (r *Runner) translateRuntimeArgs() []string {
+	return r.taskRuntimeArgs(r.translationModel, nonInteractiveBriefingSystemPrompt)
+}
+
+func (r *Runner) taskRuntimeArgs(model, systemPrompt string) []string {
 	var args []string
-	if r.appendSystemPrompt {
-		args = append(args, "--append-system-prompt", nonInteractiveBriefingSystemPrompt)
+	if isDirectCodexCommand(r.commandName) && strings.TrimSpace(model) != "" {
+		args = append(args, "--model", strings.TrimSpace(model))
 	}
-	return args
+	return append(args, r.systemPromptRuntimeArgs(systemPrompt)...)
+}
+
+func (r *Runner) systemPromptRuntimeArgs(systemPrompt string) []string {
+	if !r.appendSystemPrompt {
+		return nil
+	}
+	if isDirectCodexCommand(r.commandName) {
+		return []string{"-c", "developer_instructions=" + strconv.Quote(systemPrompt)}
+	}
+	return []string{"--append-system-prompt", systemPrompt}
 }
 
 func filterEnv(env []string, exclude string) []string {

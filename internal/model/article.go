@@ -16,7 +16,7 @@ type Briefing struct {
 	Date              string
 	Period            string // "HHMM" 格式，如 "0800"、"1400"、"2000"
 	Articles          []Article
-	Summary           string // Claude 生成的摘要
+	Summary           string // AI CLI 生成的摘要
 	StructuredSummary *BriefingSummary
 	RawContent        string // 完整的 Markdown 内容
 }

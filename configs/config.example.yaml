@@ -438,10 +438,25 @@ proxy:
   socks5: socks5://127.0.0.1:7897
 
 ai:
-  command: claude
+  command: codex
   args:
-    - --bare
-    - --disable-slash-commands
+    - exec
+    - --ignore-user-config
+    - --ephemeral
+    - --skip-git-repo-check
+    - --sandbox
+    - read-only
+    - --color
+    - never
+    - --disable
+    - apps
+    - --disable
+    - plugins
+    - --disable
+    - remote_plugin
+  models:
+    default: gpt-5.6-sol
+    translation: gpt-5.3-codex-spark
   append_system_prompt: true
   timeout:
     # Warn but keep waiting when one AI attempt is still running after this duration.

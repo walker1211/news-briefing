@@ -27,21 +27,21 @@ go test ./internal/config -run TestLoadAppliesDefaultAIConfig -v
 - `cmds/news-briefing/main.go`：CLI 启动层，仅负责配置加载、依赖装配、参数错误输出与统一退出处理。
 - `cmds/news-briefing/cli.go`：命令解析层，负责 `run`、`regen`、`fetch`、`serve`、`deep` 参数解析。
 - `cmds/news-briefing/execute.go`：执行层，负责命令分发、scheduler 注入、runner 注入以及 run/regen 共用渲染链路。
-- `internal/config/config.go`：加载 `.env` 与 `configs/config.yaml`；默认值包括 `output.dir=output`、`ai.command=ccs`、
-  `ai.args=codex`。
+- `internal/config/config.go`：加载 `.env` 与 `configs/config.yaml`；默认值包括 `output.dir=output`、`ai.command=codex`，
+  AI args 使用隔离的 `codex exec` 与只读 sandbox；摘要/深挖和翻译模型分别由 `ai.models` 配置。
 - `internal/fetcher/`：负责各来源抓取、重试策略、排序、去重与 seen-state 存储边界。
-- `internal/summarizer/claude.go`：负责实例化 AI runner、设置代理环境变量、清洗 CLI 输出。
+- `internal/summarizer/claude.go`：负责实例化 AI runner、转换 direct Codex/legacy CLI 调用协议、设置代理环境变量和清洗 legacy CCS 输出。
 - `internal/output/`：负责终端、Markdown 和邮件输出。
 - `internal/scheduler/cron.go`：负责 `Asia/Shanghai` 时区下的 cron 调度与 period 推导。
 
 ## 关键提醒
 
-- AI 命令通过 `configs/config.yaml` 配置，不要硬编码 `claude`。
+- AI 命令通过 `configs/config.yaml` 配置，不要在业务流程里另行硬编码 CLI 参数。
 - `.env` 只放敏感值；真实配置放 `configs/config.yaml`；模板配置放 `configs/config.example.yaml`。
 - seen 状态默认写入 `<output.dir>/state/seen.json`；默认路径是 `output/state/seen.json`。
 - 如果修改了 CLI 流程，也要验证 `serve` 模式和输出格式。
 - Reddit 抓取故意采用串行模式，并在 subreddit 之间保留 2 秒间隔；不要随意提高重试频率或并发度。
-- `sanitizeCLIOutput(...)` 仅适用于 `ccs codex` 路径。
+- `sanitizeCLIOutput(...)` 仅适用于 legacy `ccs codex` 路径；direct `codex exec` 读取 stdout 最终结果。
 - `periodPrefix()` 是时间段标签的唯一事实来源。
 - Briefing 文件名格式为 `YY.MM.DD-<凌晨|早间|午间|晚间>-HHMM.md`。
 - 如果发现二进制行为与代码不一致，调试前先重新构建 `./news-briefing`。
