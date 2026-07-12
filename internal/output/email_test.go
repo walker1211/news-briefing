@@ -3,13 +3,20 @@ package output
 import (
 	"bytes"
 	"context"
+	"encoding/binary"
 	"errors"
+	"hash/crc32"
 	"image"
+	"io"
+	"mime"
+	"mime/multipart"
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/mail"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -246,8 +253,8 @@ func TestBuildHTMLBodyRendersMarkdownImages(t *testing.T) {
 
 	got := buildHTMLBody(body)
 	wantParts := []string{
-		`<figure class="briefing-image hero-image"><img src="https://example.com/hero.jpg" alt="封面图" loading="lazy"></figure>`,
-		`<figure class="briefing-image"><img src="https://example.com/story.jpg?x=1&amp;y=2" alt="Claude &lt;cover&gt;" loading="lazy"></figure>`,
+		`<figure class="briefing-image hero-image"><img src="https://example.com/hero.jpg" alt="封面图"></figure>`,
+		`<figure class="briefing-image"><img src="https://example.com/story.jpg?x=1&amp;y=2" alt="Claude &lt;cover&gt;"></figure>`,
 		`.briefing-image`,
 	}
 	for _, want := range wantParts {
@@ -257,6 +264,9 @@ func TestBuildHTMLBodyRendersMarkdownImages(t *testing.T) {
 	}
 	if strings.Contains(got, "![封面图]") || strings.Contains(got, "![Claude") {
 		t.Fatalf("buildHTMLBody() leaked markdown image syntax: %q", got)
+	}
+	if strings.Contains(got, `loading="lazy"`) {
+		t.Fatalf("buildHTMLBody() kept lazy loading on email images: %q", got)
 	}
 
 	articleStart := strings.Index(got, `<article class="news-item"><h3>Claude &lt;服务&gt; 异常</h3>`)
@@ -476,7 +486,7 @@ func TestSendMarkdownFileEmbedsLocalImagesInline(t *testing.T) {
 		t.Fatalf("MkdirAll() error = %v", err)
 	}
 	imagePath := filepath.Join(assetDir, "story.jpg")
-	if err := os.WriteFile(imagePath, []byte("image data"), 0o644); err != nil {
+	if err := os.WriteFile(imagePath, testJPEGBytes(t, 640, 373), 0o644); err != nil {
 		t.Fatalf("WriteFile() image error = %v", err)
 	}
 	remoteImageData := testPNGBytes(t, 640, 373)
@@ -560,28 +570,230 @@ func TestSendMarkdownFileEmbedsLocalImagesInline(t *testing.T) {
 	}
 }
 
+func TestSendMarkdownFileCompressesLargeLocalImagesWithoutModifyingSource(t *testing.T) {
+	dir := t.TempDir()
+	outputDir := filepath.Join(dir, "output")
+	assetDir := filepath.Join(outputDir, "assets", "26.04.13-1800")
+	if err := os.MkdirAll(assetDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+	imagePath := filepath.Join(assetDir, "large.jpg")
+	original := testJPEGBytes(t, 2400, 1800)
+	if err := os.WriteFile(imagePath, original, 0o644); err != nil {
+		t.Fatalf("WriteFile() image error = %v", err)
+	}
+
+	path := filepath.Join(outputDir, "26.04.13-晚间-1800.md")
+	body := strings.Join([]string{
+		"# 国际资讯简报 26.04.13 晚间 18:00",
+		"",
+		"## AI/科技",
+		"",
+		"### Claude 服务异常",
+		"![Claude 服务异常](assets/26.04.13-1800/large.jpg)",
+	}, "\n")
+	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+		t.Fatalf("WriteFile() markdown error = %v", err)
+	}
+
+	cfg := &config.Config{Output: config.OutputCfg{Dir: outputDir}, Email: config.Email{RetryTimes: 1}}
+	sender := NewEmailSender()
+	var gotInlinePath string
+	var gotInlineData []byte
+	sender.smtpHTMLSend = func(cfg *config.Config, subject, textBody, htmlBody string, inlineImages []emailInlineImage, password string) error {
+		if len(inlineImages) != 1 {
+			return errors.New("expected one inline image")
+		}
+		gotInlinePath = inlineImages[0].Path
+		var err error
+		gotInlineData, err = os.ReadFile(gotInlinePath)
+		return err
+	}
+	t.Setenv("EMAIL_SMTP_AUTH_CODE", "secret")
+
+	if err := sender.SendMarkdownFile(path, cfg); err != nil {
+		t.Fatalf("SendMarkdownFile() error = %v", err)
+	}
+	if gotInlinePath == "" || gotInlinePath == imagePath {
+		t.Fatalf("inline image path = %q, want a temporary compressed copy", gotInlinePath)
+	}
+	if len(gotInlineData) > maxEmailInlineImageBytes {
+		t.Fatalf("inline image size = %d, want <= %d", len(gotInlineData), maxEmailInlineImageBytes)
+	}
+	config, format, err := image.DecodeConfig(bytes.NewReader(gotInlineData))
+	if err != nil {
+		t.Fatalf("DecodeConfig(inline image) error = %v", err)
+	}
+	if format != "jpeg" {
+		t.Fatalf("inline image format = %q, want jpeg", format)
+	}
+	if config.Width > maxEmailInlineImageDimension || config.Height > maxEmailInlineImageDimension {
+		t.Fatalf("inline image dimensions = %dx%d, want each <= %d", config.Width, config.Height, maxEmailInlineImageDimension)
+	}
+	after, err := os.ReadFile(imagePath)
+	if err != nil {
+		t.Fatalf("ReadFile(original image) error = %v", err)
+	}
+	if !bytes.Equal(after, original) {
+		t.Fatal("SendMarkdownFile() modified the original output asset")
+	}
+	if _, err := os.Stat(gotInlinePath); !os.IsNotExist(err) {
+		t.Fatalf("temporary inline image still exists after send: %v", err)
+	}
+}
+
+func TestSendMarkdownFileOmitsUnsafeInlineImageWithoutDecoding(t *testing.T) {
+	dir := t.TempDir()
+	outputDir := filepath.Join(dir, "output")
+	assetDir := filepath.Join(outputDir, "assets", "26.04.13-1800")
+	if err := os.MkdirAll(assetDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+	imagePath := filepath.Join(assetDir, "unsafe.png")
+	unsafeImage := testPNGConfigBytes(t, 10_000, 5_001)
+	if err := os.WriteFile(imagePath, unsafeImage, 0o644); err != nil {
+		t.Fatalf("WriteFile() image error = %v", err)
+	}
+
+	path := filepath.Join(outputDir, "26.04.13-晚间-1800.md")
+	body := strings.Join([]string{
+		"# 国际资讯简报 26.04.13 晚间 18:00",
+		"",
+		"## AI/科技",
+		"",
+		"### Claude 服务异常",
+		"![Claude 服务异常](assets/26.04.13-1800/unsafe.png)",
+	}, "\n")
+	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+		t.Fatalf("WriteFile() markdown error = %v", err)
+	}
+
+	cfg := &config.Config{Output: config.OutputCfg{Dir: outputDir}, Email: config.Email{RetryTimes: 1}}
+	sender := NewEmailSender()
+	var gotHTML string
+	var gotInline []emailInlineImage
+	sender.smtpHTMLSend = func(cfg *config.Config, subject, textBody, htmlBody string, inlineImages []emailInlineImage, password string) error {
+		gotHTML = htmlBody
+		gotInline = inlineImages
+		return nil
+	}
+	t.Setenv("EMAIL_SMTP_AUTH_CODE", "secret")
+
+	if err := sender.SendMarkdownFile(path, cfg); err != nil {
+		t.Fatalf("SendMarkdownFile() error = %v", err)
+	}
+	if len(gotInline) != 0 {
+		t.Fatalf("inline images = %v, want unsafe image omitted", gotInline)
+	}
+	if strings.Contains(gotHTML, "<img") || strings.Contains(gotHTML, "unsafe.png") || strings.Contains(gotHTML, "cid:") {
+		t.Fatalf("html body retained unsafe inline image: %q", gotHTML)
+	}
+}
+
+func testPNGConfigBytes(t *testing.T, width int, height int) []byte {
+	t.Helper()
+	data := testPNGBytes(t, 1, 1)
+	if len(data) < 33 {
+		t.Fatalf("test PNG length = %d, want at least 33", len(data))
+	}
+	binary.BigEndian.PutUint32(data[16:20], uint32(width))
+	binary.BigEndian.PutUint32(data[20:24], uint32(height))
+	binary.BigEndian.PutUint32(data[29:33], crc32.ChecksumIEEE(data[12:29]))
+	return data
+}
+
 func TestNewHTMLMessageEmbedsInlineImages(t *testing.T) {
-	imagePath := filepath.Join(t.TempDir(), "story.jpg")
-	if err := os.WriteFile(imagePath, []byte("image data"), 0o644); err != nil {
+	dir := t.TempDir()
+	firstImagePath := filepath.Join(dir, "story.jpg")
+	if err := os.WriteFile(firstImagePath, []byte("image data"), 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+	secondImagePath := filepath.Join(dir, "chart.png")
+	if err := os.WriteFile(secondImagePath, []byte("chart data"), 0o644); err != nil {
 		t.Fatalf("WriteFile() error = %v", err)
 	}
 	cfg := &config.Config{Email: config.Email{From: "from@example.com", To: "to@example.com"}}
 
-	message := newHTMLMessage(cfg, "Subject", "plain", `<img src="cid:news-briefing-image-1@news-briefing">`, []emailInlineImage{{Path: imagePath, CID: "news-briefing-image-1@news-briefing"}})
+	htmlBody := `<img src="cid:news-briefing-image-1@news-briefing"><img src="cid:news-briefing-image-2@news-briefing">`
+	message := newHTMLMessage(cfg, "Subject", "plain", htmlBody, []emailInlineImage{
+		{Path: firstImagePath, CID: "news-briefing-image-1@news-briefing"},
+		{Path: secondImagePath, CID: "news-briefing-image-2@news-briefing"},
+	})
 	var rendered strings.Builder
 	if _, err := message.WriteTo(&rendered); err != nil {
 		t.Fatalf("WriteTo() error = %v", err)
 	}
 	got := rendered.String()
 	wantParts := []string{
+		"Content-Type: multipart/related;",
+		"Content-Type: multipart/alternative;",
 		"Content-ID: <news-briefing-image-1@news-briefing>",
+		"Content-ID: <news-briefing-image-2@news-briefing>",
 		"Content-Disposition: inline; filename=\"story.jpg\"",
 		"Content-Type: image/jpeg; name=\"story.jpg\"",
+		"Content-Disposition: inline; filename=\"chart.png\"",
+		"Content-Type: image/png; name=\"chart.png\"",
 	}
 	for _, want := range wantParts {
 		if !strings.Contains(got, want) {
 			t.Fatalf("message = %q, want substring %q", got, want)
 		}
+	}
+
+	parsed, err := mail.ReadMessage(strings.NewReader(got))
+	if err != nil {
+		t.Fatalf("ReadMessage() error = %v", err)
+	}
+	referenced := map[string]int{}
+	embedded := map[string]int{}
+	collectMIMECIDs(t, parsed.Header.Get("Content-Type"), "", parsed.Body, referenced, embedded)
+	if len(referenced) != 2 || len(embedded) != 2 {
+		t.Fatalf("full MIME CID counts = references:%d Content-IDs:%d, want 2 and 2", len(referenced), len(embedded))
+	}
+	for cid, count := range referenced {
+		if count != 1 || embedded[cid] != 1 {
+			t.Fatalf("full MIME cid:%s counts = references:%d Content-IDs:%d, want 1 and 1", cid, count, embedded[cid])
+		}
+	}
+	for cid, count := range embedded {
+		if count != 1 || referenced[cid] != 1 {
+			t.Fatalf("full MIME Content-ID %s counts = embedded:%d references:%d, want 1 and 1", cid, count, referenced[cid])
+		}
+	}
+}
+
+func collectMIMECIDs(t *testing.T, contentType string, contentID string, body io.Reader, referenced map[string]int, embedded map[string]int) {
+	t.Helper()
+	if cid := strings.Trim(strings.TrimSpace(contentID), "<>"); cid != "" {
+		embedded[cid]++
+	}
+	mediaType, params, err := mime.ParseMediaType(contentType)
+	if err != nil {
+		t.Fatalf("ParseMediaType(%q) error = %v", contentType, err)
+	}
+	if strings.HasPrefix(mediaType, "multipart/") {
+		reader := multipart.NewReader(body, params["boundary"])
+		for {
+			part, err := reader.NextPart()
+			if errors.Is(err, io.EOF) {
+				return
+			}
+			if err != nil {
+				t.Fatalf("NextPart() error = %v", err)
+			}
+			collectMIMECIDs(t, part.Header.Get("Content-Type"), part.Header.Get("Content-ID"), part, referenced, embedded)
+		}
+	}
+	if mediaType != "text/html" {
+		return
+	}
+	htmlBody, err := io.ReadAll(body)
+	if err != nil {
+		t.Fatalf("ReadAll(text/html) error = %v", err)
+	}
+	pattern := regexp.MustCompile(`cid:([A-Za-z0-9._@-]+)`)
+	for _, match := range pattern.FindAllSubmatch(htmlBody, -1) {
+		referenced[string(match[1])]++
 	}
 }
 

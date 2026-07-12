@@ -6,6 +6,9 @@ import (
 	"crypto/tls"
 	"fmt"
 	"html"
+	"image"
+	"image/jpeg"
+	"image/png"
 	"net"
 	"net/smtp"
 	"net/url"
@@ -18,12 +21,19 @@ import (
 	"github.com/walker1211/news-briefing/internal/config"
 	"github.com/walker1211/news-briefing/internal/fetcher"
 	"github.com/walker1211/news-briefing/internal/model"
+	"golang.org/x/image/draw"
 	"golang.org/x/net/proxy"
 	"gopkg.in/gomail.v2"
 )
 
 var briefingMarkdownPattern = regexp.MustCompile(`^(\d{2}\.\d{2}\.\d{2})-(凌晨|早间|午间|晚间)-(\d{4})\.md$`)
 var htmlURLPattern = regexp.MustCompile(`https?://[A-Za-z0-9._~:/?#\[\]@!$&'()*+,;=%-]+`)
+
+const maxEmailInlineImageDimension = 1600
+const maxEmailInlineImageBytes = 1 * 1024 * 1024
+const maxEmailInlineImagePixels = 50_000_000
+const emailInlineImageResizePercent = 85
+const emailInlineJPEGQuality = 82
 
 type smtpSendFunc func(*config.Config, string, string, string) error
 type smtpHTMLSendFunc func(*config.Config, string, string, string, []emailInlineImage, string) error
@@ -421,7 +431,11 @@ func (r *emailInlineImageResolver) resolve(raw string) string {
 	if image, ok := r.byPath[path]; ok {
 		return "cid:" + image.CID
 	}
-	image := emailInlineImage{Path: path, CID: fmt.Sprintf("news-briefing-image-%d@news-briefing", len(r.images)+1)}
+	embedPath, err := r.prepare(path)
+	if err != nil {
+		return ""
+	}
+	image := emailInlineImage{Path: embedPath, CID: fmt.Sprintf("news-briefing-image-%d@news-briefing", len(r.images)+1)}
 	r.byPath[path] = image
 	r.images = append(r.images, image)
 	return "cid:" + image.CID
@@ -454,18 +468,143 @@ func (r *emailInlineImageResolver) resolvePath(raw string) (string, bool) {
 }
 
 func (r *emailInlineImageResolver) downloadRemote(raw string) (string, bool) {
-	if r.tempDir == "" {
-		dir, err := os.MkdirTemp("", "news-briefing-email-images-*")
-		if err != nil {
-			return "", false
-		}
-		r.tempDir = dir
+	tempDir, err := r.ensureTempDir()
+	if err != nil {
+		return "", false
 	}
-	path := filepath.Join(r.tempDir, markdownImageFileName(raw))
+	path := filepath.Join(tempDir, markdownImageFileName(raw))
 	if err := downloadMarkdownImage(raw, path); err != nil {
 		return "", false
 	}
 	return path, true
+}
+
+func (r *emailInlineImageResolver) prepare(path string) (string, error) {
+	source, err := os.ReadFile(path)
+	if err != nil {
+		return "", err
+	}
+	config, format, err := image.DecodeConfig(bytes.NewReader(source))
+	if err != nil {
+		return "", err
+	}
+	if !emailInlineImageDimensionsAreSafe(config.Width, config.Height) {
+		return "", fmt.Errorf("email inline image dimensions %dx%d exceed %d pixels", config.Width, config.Height, maxEmailInlineImagePixels)
+	}
+	if config.Width <= maxEmailInlineImageDimension && config.Height <= maxEmailInlineImageDimension && len(source) <= maxEmailInlineImageBytes {
+		return path, nil
+	}
+
+	decoded, decodedFormat, err := image.Decode(bytes.NewReader(source))
+	if err != nil {
+		return "", err
+	}
+	if decodedFormat != "" {
+		format = decodedFormat
+	}
+	width, height := fitEmailInlineImageDimensions(decoded.Bounds().Dx(), decoded.Bounds().Dy())
+	candidate := decoded
+	if width != decoded.Bounds().Dx() || height != decoded.Bounds().Dy() {
+		candidate = resizeEmailInlineImage(decoded, width, height)
+	}
+
+	var encoded []byte
+	var extension string
+	for {
+		encoded, extension, err = encodeEmailInlineImage(candidate, format)
+		if err != nil {
+			return "", err
+		}
+		if len(encoded) <= maxEmailInlineImageBytes {
+			break
+		}
+		width, height, ok := nextEmailInlineImageSize(candidate.Bounds())
+		if !ok {
+			return "", fmt.Errorf("compress email inline image below %d bytes", maxEmailInlineImageBytes)
+		}
+		candidate = resizeEmailInlineImage(candidate, width, height)
+	}
+
+	tempDir, err := r.ensureTempDir()
+	if err != nil {
+		return "", err
+	}
+	file, err := os.CreateTemp(tempDir, "inline-*"+extension)
+	if err != nil {
+		return "", err
+	}
+	preparedPath := file.Name()
+	if _, err := file.Write(encoded); err != nil {
+		_ = file.Close()
+		_ = os.Remove(preparedPath)
+		return "", err
+	}
+	if err := file.Close(); err != nil {
+		_ = os.Remove(preparedPath)
+		return "", err
+	}
+	return preparedPath, nil
+}
+
+func emailInlineImageDimensionsAreSafe(width int, height int) bool {
+	return width > 0 && height > 0 && height <= maxEmailInlineImagePixels && width <= maxEmailInlineImagePixels/height
+}
+
+func (r *emailInlineImageResolver) ensureTempDir() (string, error) {
+	if r.tempDir != "" {
+		return r.tempDir, nil
+	}
+	dir, err := os.MkdirTemp("", "news-briefing-email-images-*")
+	if err != nil {
+		return "", err
+	}
+	r.tempDir = dir
+	return dir, nil
+}
+
+func fitEmailInlineImageDimensions(width int, height int) (int, int) {
+	if width <= maxEmailInlineImageDimension && height <= maxEmailInlineImageDimension {
+		return width, height
+	}
+	if width >= height {
+		return maxEmailInlineImageDimension, max(1, height*maxEmailInlineImageDimension/width)
+	}
+	return max(1, width*maxEmailInlineImageDimension/height), maxEmailInlineImageDimension
+}
+
+func nextEmailInlineImageSize(bounds image.Rectangle) (int, int, bool) {
+	width := bounds.Dx()
+	height := bounds.Dy()
+	nextWidth := max(1, width*emailInlineImageResizePercent/100)
+	nextHeight := max(1, height*emailInlineImageResizePercent/100)
+	if nextWidth == width && nextHeight == height {
+		return width, height, false
+	}
+	return nextWidth, nextHeight, true
+}
+
+func resizeEmailInlineImage(source image.Image, width int, height int) image.Image {
+	resized := image.NewRGBA(image.Rect(0, 0, width, height))
+	draw.CatmullRom.Scale(resized, resized.Bounds(), source, source.Bounds(), draw.Over, nil)
+	return resized
+}
+
+func encodeEmailInlineImage(source image.Image, format string) ([]byte, string, error) {
+	var encoded bytes.Buffer
+	switch format {
+	case "jpeg":
+		if err := jpeg.Encode(&encoded, source, &jpeg.Options{Quality: emailInlineJPEGQuality}); err != nil {
+			return nil, "", err
+		}
+		return encoded.Bytes(), ".jpg", nil
+	case "png":
+		if err := png.Encode(&encoded, source); err != nil {
+			return nil, "", err
+		}
+		return encoded.Bytes(), ".png", nil
+	default:
+		return nil, "", fmt.Errorf("unsupported email inline image format %q", format)
+	}
 }
 
 func (r *emailInlineImageResolver) cleanup() {
@@ -798,11 +937,14 @@ func parseMarkdownImage(line string) (string, string, bool) {
 
 func renderMarkdownImageHTML(alt string, imageURL string) string {
 	imageURL = html.UnescapeString(imageURL)
+	if strings.TrimSpace(imageURL) == "" {
+		return ""
+	}
 	className := "briefing-image"
 	if strings.TrimSpace(alt) == "封面图" {
 		className += " hero-image"
 	}
-	return `<figure class="` + className + `"><img src="` + html.EscapeString(imageURL) + `" alt="` + html.EscapeString(alt) + `" loading="lazy"></figure>`
+	return `<figure class="` + className + `"><img src="` + html.EscapeString(imageURL) + `" alt="` + html.EscapeString(alt) + `"></figure>`
 }
 
 func htmlSectionClass(title string) string {
