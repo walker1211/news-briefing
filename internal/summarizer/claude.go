@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -13,6 +14,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/walker1211/news-briefing/internal/imageutil"
 	"github.com/walker1211/news-briefing/internal/logutil"
@@ -109,6 +111,23 @@ type Runner struct {
 }
 
 type callKind string
+
+// InvalidPromptError reports the first byte that prevents an AI prompt from
+// being encoded as UTF-8. It is deterministic and should not be retried with a
+// smaller article set.
+type InvalidPromptError struct {
+	Offset int
+}
+
+func (e *InvalidPromptError) Error() string {
+	return fmt.Sprintf("ai prompt is not valid UTF-8 (invalid byte at offset %d)", e.Offset)
+}
+
+// IsInvalidPromptError reports whether err was caused by invalid prompt bytes.
+func IsInvalidPromptError(err error) bool {
+	var target *InvalidPromptError
+	return errors.As(err, &target)
+}
 
 const (
 	callKindSummarize       callKind = "summarize"
@@ -419,6 +438,9 @@ func (r *Runner) runClaudeCommand(prompt string, runtimeArgs ...string) (string,
 }
 
 func (r *Runner) runClaudeCommandContext(ctx context.Context, prompt string, runtimeArgs ...string) (string, string, string, error) {
+	if offset := firstInvalidUTF8Byte(prompt); offset >= 0 {
+		return "", "", "", &InvalidPromptError{Offset: offset}
+	}
 	args := append([]string{}, r.commandArgs...)
 	args = append(args, runtimeArgs...)
 	directCodex := isDirectCodexCommand(r.commandName)
@@ -443,6 +465,17 @@ func (r *Runner) runClaudeCommandContext(ctx context.Context, prompt string, run
 	}
 
 	return stdout.String(), strings.TrimSpace(stdout.String()), strings.TrimSpace(stderr.String()), nil
+}
+
+func firstInvalidUTF8Byte(text string) int {
+	for offset := 0; offset < len(text); {
+		r, size := utf8.DecodeRuneInString(text[offset:])
+		if r == utf8.RuneError && size == 1 {
+			return offset
+		}
+		offset += size
+	}
+	return -1
 }
 
 func buildRetryableCallError(attempt int, err error, stdout string, stderr string) error {

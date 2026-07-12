@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -18,6 +19,7 @@ import (
 	"github.com/walker1211/news-briefing/internal/model"
 	"github.com/walker1211/news-briefing/internal/output"
 	"github.com/walker1211/news-briefing/internal/scheduler"
+	"github.com/walker1211/news-briefing/internal/summarizer"
 )
 
 func TestNewAppWiresInstanceDependencies(t *testing.T) {
@@ -1035,6 +1037,44 @@ func TestRunScheduledBriefingFallsBackThroughConfiguredArticleLevels(t *testing.
 	}
 	if alerts != 2 {
 		t.Fatalf("alerts = %d, want 2 fallback alerts", alerts)
+	}
+}
+
+func TestSummarizeBriefingSkipsArticleFallbackForInvalidPrompt(t *testing.T) {
+	cfg := executeTestConfigWithEmail(t, model.OutputModeTranslatedOnly)
+	cfg.Output.Fallback = config.OutputFallbackCfg{
+		Enabled: true,
+		Levels: []config.ArticleLimitLevel{{
+			Name: "reduced", MaxArticlesByCategory: map[string]int{"AI/科技": 1},
+		}},
+	}
+	attempts := 0
+	var alertSubjects []string
+	app := &app{
+		cfg: cfg,
+		ai: aiDeps{
+			summarizeBriefingContext: func(context.Context, []model.Article, []string, *time.Location) (model.BriefingSummary, string, error) {
+				attempts++
+				return model.BriefingSummary{}, "", fmt.Errorf("build prompt: %w", &summarizer.InvalidPromptError{Offset: 3933})
+			},
+		},
+		email: emailDeps{
+			sendAlertEmail: func(subject string, body string, cfg *config.Config) error {
+				alertSubjects = append(alertSubjects, subject)
+				return nil
+			},
+		},
+	}
+
+	_, err := app.summarizeBriefingWithFallback(context.Background(), sampleExecuteArticles(), []string{"AI/科技"}, time.Local, true, nil)
+	if err == nil || !summarizer.IsInvalidPromptError(err) {
+		t.Fatalf("summarizeBriefingWithFallback() error = %v, want invalid prompt error", err)
+	}
+	if attempts != 1 {
+		t.Fatalf("AI summary attempts = %d, want 1", attempts)
+	}
+	if want := []string{"[news-briefing] AI summary failed"}; !reflect.DeepEqual(alertSubjects, want) {
+		t.Fatalf("alert subjects = %#v, want %#v", alertSubjects, want)
 	}
 }
 
