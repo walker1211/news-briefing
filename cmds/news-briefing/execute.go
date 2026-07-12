@@ -1176,6 +1176,10 @@ func (app *app) summarizeBriefingWithFallback(ctx context.Context, articles []mo
 			return aiBriefingResult{articles: attempt.articles, structuredSummary: structuredSummary, summary: summary}, nil
 		}
 		lastErr = err
+		if summarizer.IsInvalidPromptError(err) {
+			logutil.Warnf("AI summary attempt %q has an invalid UTF-8 prompt; article-count fallback skipped: %v", attempt.name, err)
+			break
+		}
 		if index == len(attempts)-1 {
 			break
 		}

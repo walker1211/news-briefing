@@ -11,6 +11,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/PuerkitoBio/goquery"
 	"github.com/mmcdole/gofeed"
@@ -30,6 +31,37 @@ func mustRSSHTMLDoc(t *testing.T, html string) *goquery.Document {
 		t.Fatalf("parse html: %v", err)
 	}
 	return doc
+}
+
+func TestFetchRSSTruncatesSummaryOnUTF8Boundary(t *testing.T) {
+	description := strings.Repeat("a", 499) + "中tail"
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		w.Header().Set("Content-Type", "application/rss+xml")
+		_, _ = fmt.Fprintf(w, `<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0"><channel><title>Test</title><item>
+<title>UTF-8 summary</title><link>https://example.com/article</link>
+<description>%s</description>
+<enclosure url="https://example.com/image.jpg" type="image/jpeg" />
+</item></channel></rss>`, description)
+	}))
+	defer server.Close()
+
+	result, err := NewClient(server.Client()).FetchRSS(config.Source{
+		Name: "Test RSS", URL: server.URL, Type: config.SourceTypeRSS, Category: "AI/科技",
+	}, nil, time.Time{})
+	if err != nil {
+		t.Fatalf("FetchRSS() error = %v", err)
+	}
+	if len(result.Candidates) != 1 {
+		t.Fatalf("len(result.Candidates) = %d, want 1", len(result.Candidates))
+	}
+	got := result.Candidates[0].Article.Summary
+	if want := strings.Repeat("a", 499); got != want {
+		t.Fatalf("summary = %q, want %q", got, want)
+	}
+	if !utf8.ValidString(got) || len(got) > 500 {
+		t.Fatalf("summary is not valid UTF-8 within 500 bytes: valid=%t bytes=%d", utf8.ValidString(got), len(got))
+	}
 }
 
 func TestFetchRSSAuthenticatesRSSHubRoute(t *testing.T) {

@@ -75,7 +75,7 @@ func (c *Client) FetchRedditContext(ctx context.Context, source config.Source, k
 
 		summary := post.Selftext
 		if len(summary) > 300 {
-			summary = summary[:300] + "..."
+			summary = truncateUTF8Bytes(summary, 300) + "..."
 		}
 		if summary == "" {
 			summary = fmt.Sprintf("Score: %d", post.Score)

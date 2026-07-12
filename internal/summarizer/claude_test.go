@@ -436,6 +436,29 @@ func TestCallClaudeIncludesStdoutAndStderrOnExitError(t *testing.T) {
 	}
 }
 
+func TestCallClaudeRejectsInvalidUTF8PromptBeforeStartingCLI(t *testing.T) {
+	runner := NewRunner("command-must-not-run", nil, true, "", "")
+	runner.failureLogPath = ""
+	runner.retrySleep = func(context.Context, time.Duration) error {
+		t.Fatal("invalid prompt must not be retried")
+		return nil
+	}
+
+	prompt := "abc" + string([]byte{0xff}) + "中文"
+	_, err := runner.callClaude(prompt)
+	if err == nil {
+		t.Fatal("callClaude() error = nil, want invalid prompt error")
+	}
+	if !IsInvalidPromptError(err) {
+		t.Fatalf("IsInvalidPromptError(%v) = false, want true", err)
+	}
+	for _, want := range []string{"ai cli failed after 1 attempts", "invalid byte at offset 3"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("callClaude() error = %q, want substring %q", err.Error(), want)
+		}
+	}
+}
+
 func TestCallClaudeRetriesRetryableFailureAndEventuallySucceeds(t *testing.T) {
 	dir := t.TempDir()
 	oldPath := os.Getenv("PATH")

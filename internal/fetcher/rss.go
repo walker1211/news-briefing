@@ -104,7 +104,7 @@ func (c *Client) fetchRSSContextWithOpenGraphOptions(ctx context.Context, source
 
 		summary := item.Description
 		if len(summary) > 500 {
-			summary = summary[:500]
+			summary = truncateUTF8Bytes(summary, 500)
 		}
 
 		imageURL := extractRSSItemImage(item)
