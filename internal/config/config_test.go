@@ -1,6 +1,7 @@
 package config
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -34,11 +35,28 @@ proxy: {}
 		t.Fatalf("Load() error = %v", err)
 	}
 
-	if cfg.AI.Command != "claude" {
-		t.Fatalf("AI.Command = %q, want %q", cfg.AI.Command, "claude")
+	if cfg.AI.Command != "codex" {
+		t.Fatalf("AI.Command = %q, want %q", cfg.AI.Command, "codex")
 	}
-	if !reflect.DeepEqual(cfg.AI.Args, []string{"--bare", "--disable-slash-commands"}) {
-		t.Fatalf("AI.Args = %v, want %v", cfg.AI.Args, []string{"--bare", "--disable-slash-commands"})
+	wantArgs := []string{
+		"exec",
+		"--ignore-user-config",
+		"--ephemeral",
+		"--skip-git-repo-check",
+		"--sandbox", "read-only",
+		"--color", "never",
+		"--disable", "apps",
+		"--disable", "plugins",
+		"--disable", "remote_plugin",
+	}
+	if !reflect.DeepEqual(cfg.AI.Args, wantArgs) {
+		t.Fatalf("AI.Args = %v, want %v", cfg.AI.Args, wantArgs)
+	}
+	if cfg.AI.Models.Default != DefaultAIModel {
+		t.Fatalf("AI.Models.Default = %q, want %q", cfg.AI.Models.Default, DefaultAIModel)
+	}
+	if cfg.AI.Models.Translation != DefaultAITranslationModel {
+		t.Fatalf("AI.Models.Translation = %q, want %q", cfg.AI.Models.Translation, DefaultAITranslationModel)
 	}
 	if !cfg.AI.ShouldAppendSystemPrompt() {
 		t.Fatalf("AI.ShouldAppendSystemPrompt() = false, want true")
@@ -281,8 +299,91 @@ ai:
 	if !reflect.DeepEqual(cfg.AI.Args, []string{"--model", "claude-opus-4-6", "--bare", "--disable-slash-commands"}) {
 		t.Fatalf("AI.Args = %v", cfg.AI.Args)
 	}
+	if cfg.AI.Models.Default != "claude-opus-4-6" {
+		t.Fatalf("AI.Models.Default = %q, want claude-opus-4-6", cfg.AI.Models.Default)
+	}
+	if cfg.AI.Models.Translation != DefaultAITranslationModel {
+		t.Fatalf("AI.Models.Translation = %q, want %q", cfg.AI.Models.Translation, DefaultAITranslationModel)
+	}
 	if cfg.AI.ShouldAppendSystemPrompt() {
 		t.Fatalf("AI.ShouldAppendSystemPrompt() = true, want false")
+	}
+}
+
+func TestLoadAppliesCommandSpecificDefaultAIArgs(t *testing.T) {
+	tests := []struct {
+		name    string
+		command string
+		want    []string
+	}{
+		{name: "Claude", command: "claude", want: []string{"--bare", "--disable-slash-commands"}},
+		{name: "Claude Windows path", command: `C:\\tools\\CLAUDE.EXE`, want: []string{"--bare", "--disable-slash-commands"}},
+		{name: "custom", command: "my-ai", want: nil},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dir := t.TempDir()
+			path := filepath.Join(dir, "config.yaml")
+			content := fmt.Sprintf(`sources: []
+keywords: []
+email:
+  smtp_host: smtp.example.com
+  smtp_port: 465
+  from: from@example.com
+  to: to@example.com
+schedule: []
+output: {}
+proxy: {}
+ai:
+  command: %q
+`, tt.command)
+			if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+				t.Fatalf("write config: %v", err)
+			}
+
+			cfg, err := Load(path)
+			if err != nil {
+				t.Fatalf("Load() error = %v", err)
+			}
+			if !reflect.DeepEqual(cfg.AI.Args, tt.want) {
+				t.Fatalf("AI.Args = %v, want %v", cfg.AI.Args, tt.want)
+			}
+		})
+	}
+}
+
+func TestLoadParsesConfiguredAIModels(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	content := `sources: []
+keywords: []
+email:
+  smtp_host: smtp.example.com
+  smtp_port: 465
+  from: from@example.com
+  to: to@example.com
+schedule: []
+output: {}
+proxy: {}
+ai:
+  models:
+    default: default-model
+    translation: translation-model
+`
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if cfg.AI.Models.Default != "default-model" {
+		t.Fatalf("AI.Models.Default = %q, want default-model", cfg.AI.Models.Default)
+	}
+	if cfg.AI.Models.Translation != "translation-model" {
+		t.Fatalf("AI.Models.Translation = %q, want translation-model", cfg.AI.Models.Translation)
 	}
 }
 
@@ -1534,6 +1635,8 @@ func TestLoadRejectsInvalidAIConfig(t *testing.T) {
 	}{
 		{name: "blank command", ai: "command: \" \"", wantErr: "ai.command"},
 		{name: "blank arg", ai: "command: ccs\nargs:\n  - \" \"", wantErr: "ai.args[0]"},
+		{name: "blank default model", ai: "models:\n  default: \" \"", wantErr: "ai.models.default"},
+		{name: "blank translation model", ai: "models:\n  translation: \" \"", wantErr: "ai.models.translation"},
 	}
 
 	for _, tt := range tests {

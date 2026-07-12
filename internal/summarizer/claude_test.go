@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"runtime"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -290,32 +291,116 @@ func TestRunnerUsesConfiguredArgsForDeepDive(t *testing.T) {
 }
 
 func TestRunnerUsesDefaultConfiguredCommand(t *testing.T) {
-	setupFakeCLI(t, "claude")
+	setupFakeCLI(t, "codex")
 	runner := NewRunner("", nil, true, "", "")
 
-	got, err := runner.callClaude("hello world")
+	got, err := runner.callClaude("hello world", runner.summarizeRuntimeArgs()...)
 	if err != nil {
 		t.Fatalf("callClaude() error = %v", err)
 	}
 
-	want := []string{"--bare", "--disable-slash-commands", "-p", "hello world"}
+	want := []string{
+		"exec",
+		"--ignore-user-config",
+		"--ephemeral",
+		"--skip-git-repo-check",
+		"--sandbox", "read-only",
+		"--color", "never",
+		"--disable", "apps",
+		"--disable", "plugins",
+		"--disable", "remote_plugin",
+		"--model", defaultModel,
+		"-c", "developer_instructions=" + strconv.Quote(nonInteractiveBriefingSystemPrompt),
+		"-",
+	}
 	if args := splitArgs(got); !reflect.DeepEqual(args, want) {
 		t.Fatalf("callClaude() args = %#v, want %#v", args, want)
 	}
 }
 
-func TestRunnerUsesConfiguredCommandAndArgs(t *testing.T) {
-	setupFakeCLI(t, "my-ai")
-	runner := NewRunner("my-ai", []string{"foo", "bar"}, true, "", "")
+func TestRunnerUsesCodexStdinAndDeveloperInstructions(t *testing.T) {
+	argsPath, stdinPath := setupFakeCLIOutputAndInput(t, "codex", validBriefingJSON())
+	runner := NewRunner("codex", []string{"exec", "--model", "gpt-5.6-sol"}, true, "", "")
 
-	got, err := runner.callClaude("hello world", "--model", "haiku")
-	if err != nil {
-		t.Fatalf("callClaude() error = %v", err)
+	articles := sampleArticles()
+	if _, err := runner.Summarize(articles, []string{"AI/科技", "国际政治"}, time.Local); err != nil {
+		t.Fatalf("Summarize() error = %v", err)
 	}
 
-	want := []string{"foo", "bar", "--model", "haiku", "-p", "hello world"}
-	if args := splitArgs(got); !reflect.DeepEqual(args, want) {
-		t.Fatalf("callClaude() args = %#v, want %#v", args, want)
+	wantArgs := []string{
+		"exec",
+		"--model", "gpt-5.6-sol",
+		"-c", "developer_instructions=" + strconv.Quote(nonInteractiveBriefingSystemPrompt),
+		"-",
+	}
+	if args := readFakeCLIArgs(t, argsPath); !reflect.DeepEqual(args, wantArgs) {
+		t.Fatalf("Summarize() args = %#v, want %#v", args, wantArgs)
+	}
+	wantStdin := briefingPrompt + "\n\n---\n以下是今日新闻条目：\n\n" + output.GroupedArticleListView(articles, []string{"AI/科技", "国际政治"}, time.Local)
+	stdin, err := os.ReadFile(stdinPath)
+	if err != nil {
+		t.Fatalf("read fake CLI stdin: %v", err)
+	}
+	if got := string(stdin); got != wantStdin {
+		t.Fatalf("Summarize() stdin = %q, want %q", got, wantStdin)
+	}
+}
+
+func TestCodexRuntimeArgsMapSystemPromptsToDeveloperInstructions(t *testing.T) {
+	runner := NewRunner("codex", []string{"exec"}, true, "", "")
+	runner.SetModels("summary-model", "translation-model")
+	tests := []struct {
+		name      string
+		got       []string
+		wantModel string
+		want      string
+	}{
+		{name: "summarize", got: runner.summarizeRuntimeArgs(), wantModel: "summary-model", want: nonInteractiveBriefingSystemPrompt},
+		{name: "deep", got: runner.deepDiveRuntimeArgs(), wantModel: "summary-model", want: nonInteractiveDeepDiveSystemPrompt},
+		{name: "translate", got: runner.translateRuntimeArgs(), wantModel: "translation-model", want: nonInteractiveBriefingSystemPrompt},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			want := []string{"--model", tt.wantModel, "-c", "developer_instructions=" + strconv.Quote(tt.want)}
+			if !reflect.DeepEqual(tt.got, want) {
+				t.Fatalf("runtime args = %#v, want %#v", tt.got, want)
+			}
+		})
+	}
+
+	withoutSystemPrompt := NewRunner("codex", []string{"exec"}, false, "", "")
+	withoutSystemPrompt.SetModels("summary-model", "translation-model")
+	if got, want := withoutSystemPrompt.summarizeRuntimeArgs(), []string{"--model", "summary-model"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("runtime args with append_system_prompt=false = %#v, want %#v", got, want)
+	}
+}
+
+func TestRunnerUsesConfiguredTranslationModelExactlyOnce(t *testing.T) {
+	argsPath, stdinPath := setupFakeCLIOutputAndInput(t, "codex", "final body")
+	runner := NewRunner("codex", []string{"exec", "--model", "legacy-model", "--ephemeral"}, false, "", "")
+	runner.SetModels("configured-default-model", "configured-translation-model")
+	articles := sampleArticles()
+	categoryOrder := []string{"AI/科技", "国际政治"}
+
+	got, err := runner.Translate(articles, categoryOrder, time.Local)
+	if err != nil {
+		t.Fatalf("Translate() error = %v", err)
+	}
+	if got != "final body" {
+		t.Fatalf("Translate() = %q, want %q", got, "final body")
+	}
+
+	want := []string{"exec", "--ephemeral", "--model", "configured-translation-model", "-"}
+	if args := readFakeCLIArgs(t, argsPath); !reflect.DeepEqual(args, want) {
+		t.Fatalf("Translate() args = %#v, want %#v", args, want)
+	}
+	stdin, err := os.ReadFile(stdinPath)
+	if err != nil {
+		t.Fatalf("read fake CLI stdin: %v", err)
+	}
+	wantStdin := translatePrompt + "\n\n" + output.GroupedArticleListView(articles, categoryOrder, time.Local)
+	if got := string(stdin); got != wantStdin {
+		t.Fatalf("Translate() stdin = %q, want %q", got, wantStdin)
 	}
 }
 
@@ -1162,7 +1247,7 @@ func TestLegacyShouldSanitizeCLIOutputUsesDefaultConfig(t *testing.T) {
 	t.Cleanup(ResetCommandForTest)
 
 	if shouldSanitizeCLIOutput() {
-		t.Fatalf("shouldSanitizeCLIOutput() = true, want false for default claude")
+		t.Fatalf("shouldSanitizeCLIOutput() = true, want false for default codex")
 	}
 }
 
@@ -1201,6 +1286,7 @@ func TestDefaultRunnerConcurrentMutationDoesNotRace(t *testing.T) {
 	ResetCommandForTest()
 	t.Cleanup(ResetCommandForTest)
 	setupFakeCLI(t, "claude")
+	setupFakeCLI(t, "codex")
 	setupFakeCLI(t, "ccs")
 	setupFakeCLI(t, "my-ai")
 
@@ -1255,6 +1341,41 @@ func setupFakeCLIOutput(t *testing.T, baseName string, output string) string {
 		t.Fatalf("set PATH: %v", err)
 	}
 	return argsPath
+}
+
+func setupFakeCLIOutputAndInput(t *testing.T, baseName string, output string) (string, string) {
+	t.Helper()
+
+	dir := t.TempDir()
+	oldPath := os.Getenv("PATH")
+	t.Cleanup(func() {
+		_ = os.Setenv("PATH", oldPath)
+		ResetCommandForTest()
+	})
+
+	commandName := baseName
+	if runtime.GOOS == "windows" {
+		commandName += ".bat"
+	}
+	argsPath := filepath.Join(dir, "args.txt")
+	stdinPath := filepath.Join(dir, "stdin.txt")
+	outputPath := filepath.Join(dir, "output.txt")
+	if err := os.WriteFile(outputPath, []byte(output), 0o644); err != nil {
+		t.Fatalf("write fake CLI output: %v", err)
+	}
+	commandPath := filepath.Join(dir, commandName)
+	script := "#!/bin/sh\n" +
+		"for arg do printf '%s\037' \"$arg\" >> \"" + argsPath + "\"; done\n" +
+		"printf '\n' >> \"" + argsPath + "\"\n" +
+		"cat > \"" + stdinPath + "\"\n" +
+		"cat \"" + outputPath + "\"\n"
+	if err := os.WriteFile(commandPath, []byte(script), 0o755); err != nil {
+		t.Fatalf("write fake CLI: %v", err)
+	}
+	if err := os.Setenv("PATH", dir+string(os.PathListSeparator)+oldPath); err != nil {
+		t.Fatalf("set PATH: %v", err)
+	}
+	return argsPath, stdinPath
 }
 
 func readFakeCLIArgs(t *testing.T, argsPath string) []string {

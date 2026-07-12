@@ -102,7 +102,7 @@ Then edit `configs/config.yaml` and fill in:
 - scheduled trigger times in `schedule`
 - output directory in `output.dir`
 - proxy settings
-- AI CLI command and batch flags (default `ccs codex` with non-interactive flags)
+- AI CLI command and batch flags (default direct `codex exec` with isolated non-interactive flags)
 
 Example source categories:
 
@@ -146,27 +146,31 @@ Make sure the AI CLI configured in `configs/config.yaml` is available and alread
 
 ```yaml
 ai:
-  command: claude
+  command: codex
   args:
-    - --bare
-    - --disable-slash-commands
+    - exec
+    - --ignore-user-config
+    - --ephemeral
+    - --skip-git-repo-check
+    - --sandbox
+    - read-only
+    - --color
+    - never
+    - --disable
+    - apps
+    - --disable
+    - plugins
+    - --disable
+    - remote_plugin
+  models:
+    default: gpt-5.6-sol
+    translation: gpt-5.3-codex-spark
   append_system_prompt: true
 ```
 
-If you only have `claude` installed, you can usually switch to:
+The runner sends each prompt to `codex exec` over stdin and appends the `-` input marker automatically. Do not put `-p`, `--model`, or the trailing `-` into `args`: Codex uses `-p` for config profiles, while the runner selects `models.default` for summaries and deep dives and `models.translation` for translation. When `append_system_prompt` is enabled, the runner maps the batch-only instructions to a per-run `developer_instructions` override.
 
-```yaml
-ai:
-  command: claude
-  args:
-    - --model
-    - claude-opus-4-6
-    - --bare
-    - --disable-slash-commands
-  append_system_prompt: true
-```
-
-Do not put `-p` into `args`; the program appends the prompt argument automatically.
+`--ignore-user-config` and the three feature disables keep this unattended batch job isolated from personal MCP servers, apps, and plugins. They do not modify the user's `~/.codex/config.toml` or affect Codex App features such as Computer Use.
 
 ### 4. output configuration
 
