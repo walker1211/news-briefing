@@ -83,13 +83,16 @@ func TestStartContextReturnsContextErrorWhenCancelled(t *testing.T) {
 }
 
 func TestRunWindowAfterDelayWaitsBeforeRun(t *testing.T) {
-	window := Window{Expr: "0 18 * * *", Period: "1800"}
+	triggeredAt := time.Date(2026, 7, 13, 18, 0, 0, 0, time.Local)
+	window := Window{Expr: "0 18 * * *", Period: "1800", To: triggeredAt}
 	var waited time.Duration
 	var ran bool
 
 	runWindowAfterDelay(context.Background(), window, 5*time.Minute, func(ctx context.Context, d time.Duration) error {
 		waited = d
 		return nil
+	}, func() time.Time {
+		return triggeredAt
 	}, func(got Window) {
 		ran = true
 		if got.Period != window.Period {
@@ -105,13 +108,62 @@ func TestRunWindowAfterDelayWaitsBeforeRun(t *testing.T) {
 	}
 }
 
+func TestRunWindowAfterDelayOnlyWaitsUntilScheduledTargetWhenTriggeredLate(t *testing.T) {
+	triggeredAt := time.Date(2026, 7, 13, 18, 0, 0, 0, time.Local)
+	window := Window{Expr: "0 18 * * *", Period: "1800", To: triggeredAt}
+	var waited time.Duration
+	var ran bool
+
+	runWindowAfterDelay(context.Background(), window, 10*time.Minute, func(ctx context.Context, d time.Duration) error {
+		waited = d
+		return nil
+	}, func() time.Time {
+		return triggeredAt.Add(7 * time.Minute)
+	}, func(Window) {
+		ran = true
+	})
+
+	if waited != 3*time.Minute {
+		t.Fatalf("waited = %v, want 3m", waited)
+	}
+	if !ran {
+		t.Fatal("runFunc was not called")
+	}
+}
+
+func TestRunWindowAfterDelayRunsImmediatelyWhenScheduledTargetPassed(t *testing.T) {
+	triggeredAt := time.Date(2026, 7, 13, 18, 0, 0, 0, time.Local)
+	window := Window{Expr: "0 18 * * *", Period: "1800", To: triggeredAt}
+	var waited time.Duration
+	var ran bool
+
+	runWindowAfterDelay(context.Background(), window, 10*time.Minute, func(ctx context.Context, d time.Duration) error {
+		waited = d
+		return nil
+	}, func() time.Time {
+		return triggeredAt.Add(18 * time.Minute)
+	}, func(Window) {
+		ran = true
+	})
+
+	if waited != 0 {
+		t.Fatalf("waited = %v, want 0", waited)
+	}
+	if !ran {
+		t.Fatal("runFunc was not called")
+	}
+}
+
 func TestRunWindowAfterDelaySkipsRunWhenCancelled(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	var ran bool
+	triggeredAt := time.Date(2026, 7, 13, 18, 0, 0, 0, time.Local)
 
-	runWindowAfterDelay(ctx, Window{Expr: "0 18 * * *"}, 5*time.Minute, func(ctx context.Context, d time.Duration) error {
+	runWindowAfterDelay(ctx, Window{Expr: "0 18 * * *", To: triggeredAt}, 5*time.Minute, func(ctx context.Context, d time.Duration) error {
 		return ctx.Err()
+	}, func() time.Time {
+		return triggeredAt
 	}, func(Window) {
 		ran = true
 	})
