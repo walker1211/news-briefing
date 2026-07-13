@@ -18,6 +18,7 @@ type Window struct {
 }
 
 type waitFunc func(context.Context, time.Duration) error
+type nowFunc func() time.Time
 
 // Start 注册所有定时任务并启动调度器。
 func Start(cfg *config.Config, runFunc func(Window)) error {
@@ -38,11 +39,28 @@ func waitContext(ctx context.Context, d time.Duration) error {
 	}
 }
 
-func runWindowAfterDelay(ctx context.Context, window Window, delay time.Duration, wait waitFunc, runFunc func(Window)) {
-	if delay > 0 {
-		logutil.Printf("[scheduler] 延迟 %s 后执行窗口 %s", delay, window.Period)
+func remainingWindowDelay(window Window, delay time.Duration, now time.Time) time.Duration {
+	if delay <= 0 {
+		return 0
 	}
-	if err := wait(ctx, delay); err != nil {
+	if window.To.IsZero() {
+		return delay
+	}
+	remaining := window.To.Add(delay).Sub(now)
+	if remaining <= 0 {
+		return 0
+	}
+	return remaining
+}
+
+func runWindowAfterDelay(ctx context.Context, window Window, delay time.Duration, wait waitFunc, now nowFunc, runFunc func(Window)) {
+	waitFor := remainingWindowDelay(window, delay, now())
+	if waitFor > 0 {
+		logutil.Printf("[scheduler] 延迟 %s 后执行窗口 %s", waitFor, window.Period)
+	} else if delay > 0 {
+		logutil.Printf("[scheduler] 窗口 %s 已到计划执行时间，立即执行", window.Period)
+	}
+	if err := wait(ctx, waitFor); err != nil {
 		logutil.Printf("[scheduler] 跳过定时任务 %s：延迟等待被取消: %v", window.Expr, err)
 		return
 	}
@@ -89,7 +107,7 @@ func StartContext(ctx context.Context, cfg *config.Config, runFunc func(Window))
 			}
 			logutil.Printf("[scheduler] 触发定时任务: %s [%s -> %s] ...", expr, window.From.In(loc).Format(time.RFC3339), window.To.In(loc).Format(time.RFC3339))
 			run := func() {
-				runWindowAfterDelay(ctx, window, cfg.ScheduleDelay, waitContext, runFunc)
+				runWindowAfterDelay(ctx, window, cfg.ScheduleDelay, waitContext, time.Now, runFunc)
 			}
 			if cfg.ScheduleDelay > 0 {
 				go run()
