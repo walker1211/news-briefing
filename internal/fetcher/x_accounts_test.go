@@ -58,16 +58,20 @@ func TestFetchXVisibleNDJSONWaitsForRunningRefresh(t *testing.T) {
 	to := time.Now().UTC().Add(2 * time.Second).Truncate(time.Second)
 	published := to.Add(-time.Second)
 	status := fmt.Sprintf(`{"kind":"x-visible-refresh-status","schemaVersion":1,"job":"x-visible-ai","period":"%s","status":"running","startedAt":"%s","window":{"from":"%s","to":"%s"},"outputs":{"accounts":"%s"}}`, to.Format(time.RFC3339), from.Format(time.RFC3339), from.Format(time.RFC3339), to.Format(time.RFC3339), accountsPath)
-	if err := os.WriteFile(statusPath, []byte(status), 0o644); err != nil {
+	if err := writeTestFileAtomically(statusPath, []byte(status)); err != nil {
 		t.Fatalf("write status: %v", err)
 	}
+	writeDone := make(chan error, 1)
 	go func() {
 		time.Sleep(10 * time.Millisecond)
 		content := fmt.Sprintf(`{"kind":"x-visible-article","schemaVersion":1,"targetRaw":"/twitter/user/OpenAI","targetType":"account","targetUrl":"https://x.com/OpenAI","sourceUrl":"https://x.com/OpenAI","finalUrl":"https://x.com/OpenAI","text":"OpenAI launched Codex refresh","datetime":"%s","statusUrl":"https://x.com/OpenAI/status/fresh","statusLinks":["https://x.com/OpenAI/status/fresh"],"linkCount":1,"imageCount":0,"videoCount":0}
 	`, published.Format(time.RFC3339))
-		_ = os.WriteFile(accountsPath, []byte(content), 0o644)
+		if err := os.WriteFile(accountsPath, []byte(content), 0o644); err != nil {
+			writeDone <- fmt.Errorf("write accounts: %w", err)
+			return
+		}
 		succeeded := fmt.Sprintf(`{"kind":"x-visible-refresh-status","schemaVersion":1,"job":"x-visible-ai","period":"%s","status":"succeeded","startedAt":"%s","finishedAt":"%s","window":{"from":"%s","to":"%s"},"outputs":{"accounts":"%s"}}`, to.Format(time.RFC3339), from.Format(time.RFC3339), time.Now().UTC().Format(time.RFC3339), from.Format(time.RFC3339), to.Format(time.RFC3339), accountsPath)
-		_ = os.WriteFile(statusPath, []byte(succeeded), 0o644)
+		writeDone <- writeTestFileAtomically(statusPath, []byte(succeeded))
 	}()
 	cfg := config.XAccountsConfig{
 		Enabled:             true,
@@ -80,6 +84,9 @@ func TestFetchXVisibleNDJSONWaitsForRunningRefresh(t *testing.T) {
 	}
 
 	results, failed, err := fetchXVisibleNDJSON(context.Background(), cfg, []string{"Codex"}, from, to)
+	if writeErr := <-writeDone; writeErr != nil {
+		t.Fatalf("publish refresh fixtures: %v", writeErr)
+	}
 	if err != nil {
 		t.Fatalf("fetchXVisibleNDJSON() error = %v", err)
 	}
@@ -92,6 +99,29 @@ func TestFetchXVisibleNDJSONWaitsForRunningRefresh(t *testing.T) {
 	if results[0].Candidates[0].Article.Link != "https://x.com/OpenAI/status/fresh" {
 		t.Fatalf("Article.Link = %q", results[0].Candidates[0].Article.Link)
 	}
+}
+
+func writeTestFileAtomically(path string, data []byte) error {
+	tmp, err := os.CreateTemp(filepath.Dir(path), "."+filepath.Base(path)+".tmp-*")
+	if err != nil {
+		return err
+	}
+	tmpPath := tmp.Name()
+	closed := false
+	defer func() {
+		if !closed {
+			_ = tmp.Close()
+		}
+		_ = os.Remove(tmpPath)
+	}()
+	if _, err := tmp.Write(data); err != nil {
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	closed = true
+	return os.Rename(tmpPath, path)
 }
 
 func TestFetchXVisibleNDJSONReportsRunningRefreshAfterWindowCutoff(t *testing.T) {
