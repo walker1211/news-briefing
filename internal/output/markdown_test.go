@@ -165,14 +165,14 @@ func TestWriteMarkdownWritesCardManifestFromStructuredBriefing(t *testing.T) {
 	if got.SchemaVersion != "card-article-manifest/v1" || got.SourceApp != "news-briefing" {
 		t.Fatalf("manifest identity = %#v", got)
 	}
-	if got.Document.Title != "AI科技晚报 | 26.06.16 18:00" || got.Document.Date != "2026-06-16" || got.Document.Period != "1800" {
+	if got.Document.Title != "国际资讯简报 26.06.16 晚间 18:00" || got.Document.Date != "2026-06-16" || got.Document.Period != "1800" {
 		t.Fatalf("manifest document = %#v", got.Document)
 	}
 	if strings.Join(got.Document.Summary, ",") != "要点一,要点二" {
 		t.Fatalf("manifest summary = %#v", got.Document.Summary)
 	}
-	if len(got.Items) != 1 {
-		t.Fatalf("len(manifest.items) = %d, want 1: %#v", len(got.Items), got.Items)
+	if len(got.Items) != 2 {
+		t.Fatalf("len(manifest.items) = %d, want 2: %#v", len(got.Items), got.Items)
 	}
 	item := got.Items[0]
 	if item.ID == "" || item.Category != "AI/科技" || item.Title != "OpenAI 发布新功能" || item.Summary != "摘要正文" || item.Impact != "影响正文" || item.Source != "The Verge" || item.PublishedAt != "2026-06-16T11:00:00+08:00" || item.URL != "https://example.com/openai" {
@@ -180,6 +180,9 @@ func TestWriteMarkdownWritesCardManifestFromStructuredBriefing(t *testing.T) {
 	}
 	if item.Image == nil || !strings.HasPrefix(item.Image.Src, "assets/26.06.16-1800/") || item.Image.Alt != "OpenAI 发布新功能" {
 		t.Fatalf("manifest image = %#v", item.Image)
+	}
+	if got.Items[1].Category != "国际政治" || got.Items[1].Title != "外交新闻" {
+		t.Fatalf("second manifest item = %#v", got.Items[1])
 	}
 }
 

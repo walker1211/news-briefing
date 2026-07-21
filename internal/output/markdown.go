@@ -152,7 +152,7 @@ func buildCardManifest(briefing *model.Briefing, localizedImages map[string]stri
 		return manifest
 	}
 	manifest.Document = cardManifestDoc{
-		Title:   aiTechBriefingTitle(briefing.Date, briefing.Period),
+		Title:   briefingTitle(briefing.Date, briefing.Period),
 		Date:    isoBriefingDate(briefing.Date),
 		Period:  briefing.Period,
 		Summary: briefingManifestSummary(briefing.StructuredSummary),
@@ -162,9 +162,6 @@ func buildCardManifest(briefing *model.Briefing, localizedImages map[string]stri
 		return manifest
 	}
 	for _, story := range briefing.StructuredSummary.Stories {
-		if strings.TrimSpace(story.Category) != "AI/科技" {
-			continue
-		}
 		item := cardManifestItem{
 			ID:       stableManifestItemID(story, briefing.Articles),
 			Category: strings.TrimSpace(story.Category),
