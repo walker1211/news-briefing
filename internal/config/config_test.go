@@ -471,6 +471,8 @@ x_accounts:
   refresh_status_path: /tmp/rsshub-stack/status.json
   refresh_wait_timeout: 2m
   refresh_wait_interval: 500ms
+  refresh_reconcile_interval: 1m
+  refresh_heartbeat_stale_after: 3m
   category: AI/科技
   accounts:
     - handle: OpenAIDevs
@@ -492,6 +494,12 @@ x_accounts:
 	}
 	if cfg.XAccounts.RefreshWaitInterval != 500*time.Millisecond {
 		t.Fatalf("XAccounts.RefreshWaitInterval = %v, want 500ms", cfg.XAccounts.RefreshWaitInterval)
+	}
+	if cfg.XAccounts.RefreshReconcile != time.Minute {
+		t.Fatalf("XAccounts.RefreshReconcile = %v, want 1m", cfg.XAccounts.RefreshReconcile)
+	}
+	if cfg.XAccounts.HeartbeatStaleAfter != 3*time.Minute {
+		t.Fatalf("XAccounts.HeartbeatStaleAfter = %v, want 3m", cfg.XAccounts.HeartbeatStaleAfter)
 	}
 }
 

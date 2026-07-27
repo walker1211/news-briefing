@@ -74,6 +74,7 @@ type xVisibleRefreshStatus struct {
 	Window        xVisibleRefreshWindow          `json:"window"`
 	Status        string                         `json:"status"`
 	StartedAt     string                         `json:"startedAt"`
+	HeartbeatAt   string                         `json:"heartbeatAt"`
 	FinishedAt    string                         `json:"finishedAt"`
 	Error         string                         `json:"error"`
 	Outputs       map[string]string              `json:"outputs"`
@@ -84,6 +85,16 @@ type xVisibleRefreshStatus struct {
 type xVisibleRefreshWindow struct {
 	From string `json:"from"`
 	To   string `json:"to"`
+}
+
+// XVisibleRefreshWindowState describes the persisted X refresh state for one
+// exact briefing window.
+type XVisibleRefreshWindowState struct {
+	Status       string
+	Matches      bool
+	Running      bool
+	Stale        bool
+	LastActivity time.Time
 }
 
 type xVisibleRefreshTargetSummary struct {
@@ -541,6 +552,46 @@ func XVisibleRefreshRunning(cfg config.XAccountsConfig, from, to time.Time) (boo
 		return false, nil
 	}
 	return xVisibleRefreshWindowMatches(status.Window, from, to), nil
+}
+
+// ReadXVisibleRefreshWindowState returns the current-window X refresh state and
+// treats a running status without a recent heartbeat as stale.
+func ReadXVisibleRefreshWindowState(cfg config.XAccountsConfig, from, to, now time.Time) (XVisibleRefreshWindowState, error) {
+	if !cfg.Enabled || strings.TrimSpace(cfg.RefreshStatusPath) == "" {
+		return XVisibleRefreshWindowState{}, nil
+	}
+	status, err := readXVisibleRefreshStatus(cfg.RefreshStatusPath)
+	if os.IsNotExist(err) {
+		return XVisibleRefreshWindowState{}, nil
+	}
+	if err != nil {
+		return XVisibleRefreshWindowState{}, err
+	}
+	state := XVisibleRefreshWindowState{
+		Status:  strings.ToLower(strings.TrimSpace(status.Status)),
+		Matches: xVisibleRefreshWindowMatches(status.Window, from, to),
+	}
+	if !state.Matches || state.Status != "running" {
+		return state, nil
+	}
+	state.Running = true
+	state.LastActivity = parseXVisibleRefreshActivity(status)
+	staleAfter := cfg.HeartbeatStaleAfter
+	if staleAfter <= 0 {
+		staleAfter = config.DefaultXRefreshHeartbeatStaleAfter
+	}
+	state.Stale = state.LastActivity.IsZero() || now.Sub(state.LastActivity) > staleAfter
+	return state, nil
+}
+
+func parseXVisibleRefreshActivity(status xVisibleRefreshStatus) time.Time {
+	for _, value := range []string{status.HeartbeatAt, status.StartedAt} {
+		parsed, err := time.Parse(time.RFC3339Nano, strings.TrimSpace(value))
+		if err == nil {
+			return parsed
+		}
+	}
+	return time.Time{}
 }
 
 func xVisibleRefreshStatusWarnings(path string, from, to time.Time) ([]FailedSource, error) {

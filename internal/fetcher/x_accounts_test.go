@@ -201,6 +201,71 @@ func TestXVisibleRefreshRunningRequiresExactActiveWindow(t *testing.T) {
 	}
 }
 
+func TestReadXVisibleRefreshWindowStateUsesHeartbeatLease(t *testing.T) {
+	dir := t.TempDir()
+	statusPath := filepath.Join(dir, "status.json")
+	from := time.Date(2026, 7, 27, 0, 0, 0, 0, time.UTC)
+	to := time.Date(2026, 7, 27, 10, 0, 0, 0, time.UTC)
+	now := time.Date(2026, 7, 27, 10, 10, 0, 0, time.UTC)
+	cfg := config.XAccountsConfig{
+		Enabled:             true,
+		RefreshStatusPath:   statusPath,
+		HeartbeatStaleAfter: 3 * time.Minute,
+	}
+
+	tests := []struct {
+		name        string
+		status      string
+		wantMatches bool
+		wantRunning bool
+		wantStale   bool
+	}{
+		{
+			name:        "fresh heartbeat",
+			status:      `{"status":"running","startedAt":"2026-07-27T10:00:00Z","heartbeatAt":"2026-07-27T10:09:00Z","window":{"from":"2026-07-27T00:00:00Z","to":"2026-07-27T10:00:00Z"}}`,
+			wantMatches: true,
+			wantRunning: true,
+		},
+		{
+			name:        "stale heartbeat",
+			status:      `{"status":"running","startedAt":"2026-07-27T10:00:00Z","heartbeatAt":"2026-07-27T10:06:59Z","window":{"from":"2026-07-27T00:00:00Z","to":"2026-07-27T10:00:00Z"}}`,
+			wantMatches: true,
+			wantRunning: true,
+			wantStale:   true,
+		},
+		{
+			name:        "legacy running status falls back to started at",
+			status:      `{"status":"running","startedAt":"2026-07-27T10:08:00Z","window":{"from":"2026-07-27T00:00:00Z","to":"2026-07-27T10:00:00Z"}}`,
+			wantMatches: true,
+			wantRunning: true,
+		},
+		{
+			name:        "terminal status",
+			status:      `{"status":"failed","heartbeatAt":"2026-07-27T10:09:00Z","window":{"from":"2026-07-27T00:00:00Z","to":"2026-07-27T10:00:00Z"}}`,
+			wantMatches: true,
+		},
+		{
+			name:   "different window",
+			status: `{"status":"running","heartbeatAt":"2026-07-27T10:09:00Z","window":{"from":"2026-07-26T10:00:00Z","to":"2026-07-27T00:00:00Z"}}`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if err := os.WriteFile(statusPath, []byte(tt.status), 0o644); err != nil {
+				t.Fatalf("WriteFile(status) error = %v", err)
+			}
+			got, err := ReadXVisibleRefreshWindowState(cfg, from, to, now)
+			if err != nil {
+				t.Fatalf("ReadXVisibleRefreshWindowState() error = %v", err)
+			}
+			if got.Matches != tt.wantMatches || got.Running != tt.wantRunning || got.Stale != tt.wantStale {
+				t.Fatalf("state = %#v, want matches=%v running=%v stale=%v", got, tt.wantMatches, tt.wantRunning, tt.wantStale)
+			}
+		})
+	}
+}
+
 func TestFetchXVisibleNDJSONSkipsUnrelatedRunningRefresh(t *testing.T) {
 	dir := t.TempDir()
 	accountsPath := filepath.Join(dir, "accounts.ndjson")
