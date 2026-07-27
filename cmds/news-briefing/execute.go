@@ -697,6 +697,15 @@ func parseXReadyTime(value string, loc *time.Location) (time.Time, error) {
 }
 
 func (app *app) runScheduledBriefingOnceContext(ctx context.Context, window scheduler.Window, trigger string, sendEmail bool) error {
+	if strings.EqualFold(strings.TrimSpace(trigger), "cron") && app != nil && app.cfg != nil {
+		running, statusErr := fetcher.XVisibleRefreshRunning(app.cfg.XAccounts, window.From, window.To)
+		if statusErr != nil {
+			logutil.Warnf("[scheduler] 检查窗口 %s 的 X refresh 状态失败，继续执行 cron 兜底: %v", window.Period, statusErr)
+		} else if running {
+			logutil.Printf("[scheduler] 跳过窗口 %s：X refresh 正在处理，等待 x-ready 回调", window.Period)
+			return nil
+		}
+	}
 	paths, acquired, err := app.acquireScheduledRunWindow(window, trigger)
 	if err != nil {
 		return err
