@@ -428,10 +428,16 @@ publish_hook:
     - "{period}"
     - --xhs-card-manifest
     - "{xhs_card_manifest}"
+    - --xhs-declare-original=false
     - --channels
     - wechat,xhs
     - --mode
     - submit
+    # Repeat --only-section to combine multiple categories in one article for every channel.
+    - --only-section
+    - AI/科技
+    - --only-section
+    - 新闻财经
 
 proxy:
   http: http://127.0.0.1:7897
