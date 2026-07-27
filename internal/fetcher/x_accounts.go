@@ -524,6 +524,25 @@ func readXVisibleRefreshStatus(path string) (xVisibleRefreshStatus, error) {
 	return status, nil
 }
 
+// XVisibleRefreshRunning reports whether the configured X visible refresh is
+// actively producing the exact window requested by the caller.
+func XVisibleRefreshRunning(cfg config.XAccountsConfig, from, to time.Time) (bool, error) {
+	if !cfg.Enabled || strings.TrimSpace(cfg.RefreshStatusPath) == "" {
+		return false, nil
+	}
+	status, err := readXVisibleRefreshStatus(cfg.RefreshStatusPath)
+	if os.IsNotExist(err) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	if !strings.EqualFold(strings.TrimSpace(status.Status), "running") {
+		return false, nil
+	}
+	return xVisibleRefreshWindowMatches(status.Window, from, to), nil
+}
+
 func xVisibleRefreshStatusWarnings(path string, from, to time.Time) ([]FailedSource, error) {
 	path = strings.TrimSpace(path)
 	if path == "" {
@@ -721,6 +740,18 @@ func xVisibleRefreshWindowEndsAt(window xVisibleRefreshWindow, to time.Time) boo
 		return false
 	}
 	return windowTo.Equal(to)
+}
+
+func xVisibleRefreshWindowMatches(window xVisibleRefreshWindow, from, to time.Time) bool {
+	windowFrom, err := time.Parse(time.RFC3339, strings.TrimSpace(window.From))
+	if err != nil {
+		return false
+	}
+	windowTo, err := time.Parse(time.RFC3339, strings.TrimSpace(window.To))
+	if err != nil {
+		return false
+	}
+	return windowFrom.Equal(from) && windowTo.Equal(to)
 }
 
 func xVisibleRefreshWindowOverlaps(window xVisibleRefreshWindow, from, to time.Time) bool {

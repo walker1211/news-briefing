@@ -1287,6 +1287,45 @@ func TestScheduledBriefingOnceSkipsDoneAndFreshRunning(t *testing.T) {
 	}
 }
 
+func TestScheduledBriefingOnceCronDefersBeforeLockWhileXRefreshRuns(t *testing.T) {
+	window := scheduler.Window{Expr: "0 18 * * *", Period: "1800", From: time.Date(2026, 7, 27, 0, 0, 0, 0, time.UTC), To: time.Date(2026, 7, 27, 10, 0, 0, 0, time.UTC)}
+	statusPath := filepath.Join(t.TempDir(), "status.json")
+	status := `{"status":"running","window":{"from":"2026-07-27T00:00:00.000Z","to":"2026-07-27T10:00:00.000Z"}}`
+	if err := os.WriteFile(statusPath, []byte(status), 0o644); err != nil {
+		t.Fatalf("WriteFile(status) error = %v", err)
+	}
+	app := newScheduledOnceTestApp(t, errors.New("should not run"))
+	app.cfg.XAccounts = config.XAccountsConfig{Enabled: true, RefreshStatusPath: statusPath}
+
+	if err := app.runScheduledBriefingOnceContext(context.Background(), window, "cron", false); err != nil {
+		t.Fatalf("runScheduledBriefingOnceContext() error = %v", err)
+	}
+	paths := app.scheduledRunPaths(window)
+	for _, path := range []string{paths.running, paths.done, paths.failed} {
+		if _, err := os.Stat(path); !os.IsNotExist(err) {
+			t.Fatalf("scheduled marker %s exists after X-running deferral; stat error = %v", path, err)
+		}
+	}
+}
+
+func TestScheduledBriefingOnceCronContinuesAfterXRefreshFailure(t *testing.T) {
+	window := scheduler.Window{Expr: "0 18 * * *", Period: "1800", From: time.Date(2026, 7, 27, 0, 0, 0, 0, time.UTC), To: time.Date(2026, 7, 27, 10, 0, 0, 0, time.UTC)}
+	statusPath := filepath.Join(t.TempDir(), "status.json")
+	status := `{"status":"failed","window":{"from":"2026-07-27T00:00:00.000Z","to":"2026-07-27T10:00:00.000Z"}}`
+	if err := os.WriteFile(statusPath, []byte(status), 0o644); err != nil {
+		t.Fatalf("WriteFile(status) error = %v", err)
+	}
+	app := newScheduledOnceTestApp(t, nil)
+	app.cfg.XAccounts = config.XAccountsConfig{Enabled: true, RefreshStatusPath: statusPath}
+
+	if err := app.runScheduledBriefingOnceContext(context.Background(), window, "cron", false); err != nil {
+		t.Fatalf("runScheduledBriefingOnceContext() error = %v", err)
+	}
+	if _, err := os.Stat(app.scheduledRunPaths(window).done); err != nil {
+		t.Fatalf("done marker missing after failed X refresh fallback: %v", err)
+	}
+}
+
 func TestApplyBriefingArticleLimitsReturnsCategoryReport(t *testing.T) {
 	articles := []model.Article{
 		{Title: "ai-1", Category: "AI/科技"},

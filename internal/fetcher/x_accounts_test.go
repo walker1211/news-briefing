@@ -154,6 +154,53 @@ func TestFetchXVisibleNDJSONReportsRunningRefreshAfterWindowCutoff(t *testing.T)
 	assertFailedSourceContains(t, failed, "X refresh status", "refresh still running after")
 }
 
+func TestXVisibleRefreshRunningRequiresExactActiveWindow(t *testing.T) {
+	dir := t.TempDir()
+	statusPath := filepath.Join(dir, "status.json")
+	from := time.Date(2026, 7, 27, 0, 0, 0, 0, time.UTC)
+	to := time.Date(2026, 7, 27, 10, 0, 0, 0, time.UTC)
+	cfg := config.XAccountsConfig{Enabled: true, RefreshStatusPath: statusPath}
+
+	tests := []struct {
+		name   string
+		status string
+		want   bool
+	}{
+		{
+			name:   "matching running window",
+			status: `{"status":"running","window":{"from":"2026-07-27T00:00:00.000Z","to":"2026-07-27T10:00:00.000Z"}}`,
+			want:   true,
+		},
+		{
+			name:   "matching succeeded window",
+			status: `{"status":"succeeded","window":{"from":"2026-07-27T00:00:00.000Z","to":"2026-07-27T10:00:00.000Z"}}`,
+		},
+		{
+			name:   "matching failed window",
+			status: `{"status":"failed","window":{"from":"2026-07-27T00:00:00.000Z","to":"2026-07-27T10:00:00.000Z"}}`,
+		},
+		{
+			name:   "different running window",
+			status: `{"status":"running","window":{"from":"2026-07-26T10:00:00.000Z","to":"2026-07-27T00:00:00.000Z"}}`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if err := os.WriteFile(statusPath, []byte(tt.status), 0o644); err != nil {
+				t.Fatalf("WriteFile(status) error = %v", err)
+			}
+			got, err := XVisibleRefreshRunning(cfg, from, to)
+			if err != nil {
+				t.Fatalf("XVisibleRefreshRunning() error = %v", err)
+			}
+			if got != tt.want {
+				t.Fatalf("XVisibleRefreshRunning() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestFetchXVisibleNDJSONSkipsUnrelatedRunningRefresh(t *testing.T) {
 	dir := t.TempDir()
 	accountsPath := filepath.Join(dir, "accounts.ndjson")

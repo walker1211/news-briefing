@@ -318,7 +318,7 @@ schedule:
 schedule_delay: 10m
 ```
 
-The scheduled fetch window is derived by taking the current trigger time and walking back to the previous planned time point in the current `schedule`. `schedule_delay: 10m` anchors actual execution at around 08:10 / 18:10; if cron fires late, the scheduler waits only for the remaining time and runs immediately once that target has passed. Window boundaries remain anchored at 08:00 / 18:00 so upstream local fetching can finish writing data first.
+The scheduled fetch window is derived by taking the current trigger time and walking back to the previous planned time point in the current `schedule`. `schedule_delay: 10m` anchors actual execution at around 08:10 / 18:10; if cron fires late, the scheduler waits only for the remaining time and runs immediately once that target has passed. Window boundaries remain anchored at 08:00 / 18:00 so upstream local fetching can finish writing data first. If X is still `running` for the same window, cron yields before creating the briefing window lock and lets the X succeeded-or-failed terminal callback take over. Cron still proceeds as a fallback when the status cannot be read, the window does not match, or X has already reached a terminal state.
 
 Note: missed historical trigger points are not automatically backfilled after a restart. Because of that, changing `schedule` can leave a gap if you introduce a new time point that has already passed today but was never actually executed by the service.
 
