@@ -4,10 +4,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"os"
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 	"unicode"
 
@@ -22,23 +22,26 @@ import (
 )
 
 type app struct {
-	cfg                 *config.Config
-	now                 func() time.Time
-	scheduler           schedulerDeps
-	fetch               fetchDeps
-	watch               watchDeps
-	ai                  aiDeps
-	output              outputDeps
-	email               emailDeps
-	publishHook         func(context.Context, config.PublishHookConfig, publishHookRequest) error
-	suppressPublishHook bool
+	cfg                     *config.Config
+	now                     func() time.Time
+	scheduler               schedulerDeps
+	fetch                   fetchDeps
+	watch                   watchDeps
+	ai                      aiDeps
+	output                  outputDeps
+	email                   emailDeps
+	publishHook             func(context.Context, config.PublishHookConfig, publishHookRequest) error
+	suppressPublishHook     bool
+	scheduledWindowMu       sync.Mutex
+	scheduledWindowWatchers map[string]*scheduledWindowWatcher
 }
 
 type schedulerDeps struct {
-	startCron          func(*config.Config, func(scheduler.Window)) error
-	startCronContext   func(context.Context, *config.Config, func(scheduler.Window)) error
-	waitForever        func()
-	waitForeverContext func(context.Context)
+	startCron                   func(*config.Config, func(scheduler.Window)) error
+	startCronContext            func(context.Context, *config.Config, func(scheduler.Window)) error
+	startCronContextWithTrigger func(context.Context, *config.Config, func(scheduler.Window, time.Time) error, func(scheduler.Window)) error
+	waitForever                 func()
+	waitForeverContext          func(context.Context)
 }
 
 type fetchDeps struct {
@@ -97,8 +100,9 @@ func newApp(cfg *config.Config) *app {
 		cfg: cfg,
 		now: time.Now,
 		scheduler: schedulerDeps{
-			startCron:        scheduler.Start,
-			startCronContext: scheduler.StartContext,
+			startCron:                   scheduler.Start,
+			startCronContext:            scheduler.StartContext,
+			startCronContextWithTrigger: scheduler.StartContextWithTrigger,
 			waitForever: func() {
 				select {}
 			},
@@ -237,13 +241,24 @@ func executeContext(ctx context.Context, app *app, cmd command) error {
 		return app.runXReadyContext(ctx, c)
 	case serveCommand:
 		logutil.Println("Starting news aggregator in scheduled mode...")
-		if err := app.startScheduler(ctx, app.cfg, func(window scheduler.Window) {
+		if err := app.startSchedulerWithTrigger(ctx, app.cfg, func(window scheduler.Window, dueAt time.Time) error {
+			if err := app.registerScheduledWindow(window, dueAt); err != nil {
+				return err
+			}
+			if dueAt.After(app.currentTime()) {
+				app.startScheduledWindowWatcher(ctx, window)
+			}
+			return nil
+		}, func(window scheduler.Window) {
 			if err := app.runScheduledBriefingOnceContext(ctx, window, "cron", true); err != nil {
 				logutil.Errorf("scheduled run failed: %v", err)
 			}
 		}); err != nil {
 			return err
 		}
+		reconcileCtx, stopReconciler := context.WithCancel(ctx)
+		defer stopReconciler()
+		app.startScheduledWindowReconciler(reconcileCtx)
 		app.wait(ctx)
 		return nil
 	case deepCommand:
@@ -321,6 +336,23 @@ func (app *app) startScheduler(ctx context.Context, cfg *config.Config, run func
 		return app.scheduler.startCron(cfg, run)
 	}
 	return scheduler.StartContext(ctx, cfg, run)
+}
+
+func (app *app) startSchedulerWithTrigger(ctx context.Context, cfg *config.Config, onTrigger func(scheduler.Window, time.Time) error, run func(scheduler.Window)) error {
+	if app.scheduler.startCronContextWithTrigger != nil {
+		return app.scheduler.startCronContextWithTrigger(ctx, cfg, onTrigger, run)
+	}
+	return app.startScheduler(ctx, cfg, func(window scheduler.Window) {
+		dueAt := window.To
+		if cfg != nil {
+			dueAt = dueAt.Add(cfg.ScheduleDelay)
+		}
+		if err := onTrigger(window, dueAt); err != nil {
+			logutil.Errorf("record scheduled window: %v", err)
+			return
+		}
+		run(window)
+	})
 }
 
 func (app *app) wait(ctx context.Context) {
@@ -651,259 +683,6 @@ func (app *app) runScheduledBriefingContextWithReporter(ctx context.Context, win
 	}
 	logutil.Printf("Stage article_limit completed in %s", time.Since(limitStarted).Round(time.Second))
 	return app.renderBriefingContextWithReporterAndSourceStats(ctx, "serve", date, window.Period, result.articles, result.filteredArticles, result.seenArticles, result.failed, false, sendEmail, reporter, &result.sourceStats, result.watchSiteErrorNotices...)
-}
-
-const scheduledRunRunningTTL = 2 * time.Hour
-
-func (app *app) runXReadyContext(ctx context.Context, cmd xReadyCommand) error {
-	window, err := app.xReadyWindow(cmd)
-	if err != nil {
-		return err
-	}
-	loc := app.displayLocation()
-	logutil.Printf("[scheduler] X ready callback: [%s -> %s]", window.From.In(loc).Format(time.RFC3339), window.To.In(loc).Format(time.RFC3339))
-	return app.runScheduledBriefingOnceContext(ctx, window, "x-ready-callback", true)
-}
-
-func (app *app) xReadyWindow(cmd xReadyCommand) (scheduler.Window, error) {
-	loc := app.displayLocation()
-	from, err := parseXReadyTime(cmd.fromRaw, loc)
-	if err != nil {
-		return scheduler.Window{}, fmt.Errorf("parse --from: %w", err)
-	}
-	to, err := parseXReadyTime(cmd.toRaw, loc)
-	if err != nil {
-		return scheduler.Window{}, fmt.Errorf("parse --to: %w", err)
-	}
-	if !to.After(from) {
-		return scheduler.Window{}, fmt.Errorf("--to must be after --from")
-	}
-	period := strings.TrimSpace(cmd.period)
-	if period == "" {
-		period = defaultPeriodFrom(to.In(loc))
-	}
-	if err := validatePeriod(period); err != nil {
-		return scheduler.Window{}, err
-	}
-	return scheduler.Window{Expr: "x-ready-callback", Period: period, From: from, To: to}, nil
-}
-
-func parseXReadyTime(value string, loc *time.Location) (time.Time, error) {
-	value = strings.TrimSpace(value)
-	if t, err := time.Parse(time.RFC3339Nano, value); err == nil {
-		return t, nil
-	}
-	return parseRegenTime(value, loc)
-}
-
-func (app *app) runScheduledBriefingOnceContext(ctx context.Context, window scheduler.Window, trigger string, sendEmail bool) error {
-	if strings.EqualFold(strings.TrimSpace(trigger), "cron") && app != nil && app.cfg != nil {
-		running, statusErr := fetcher.XVisibleRefreshRunning(app.cfg.XAccounts, window.From, window.To)
-		if statusErr != nil {
-			logutil.Warnf("[scheduler] 检查窗口 %s 的 X refresh 状态失败，继续执行 cron 兜底: %v", window.Period, statusErr)
-		} else if running {
-			logutil.Printf("[scheduler] 跳过窗口 %s：X refresh 正在处理，等待 x-ready 回调", window.Period)
-			return nil
-		}
-	}
-	paths, acquired, err := app.acquireScheduledRunWindow(window, trigger)
-	if err != nil {
-		return err
-	}
-	if !acquired {
-		return nil
-	}
-	reporter := &scheduledRunReporter{paths: paths, trigger: trigger, window: window}
-	err = app.runScheduledBriefingContextWithReporter(ctx, window, sendEmail, reporter)
-	if err != nil {
-		if markErr := markScheduledRunFailed(paths, trigger, window, err); markErr != nil {
-			logutil.Errorf("mark scheduled run failed: %v", markErr)
-		}
-		return err
-	}
-	return markScheduledRunDone(paths, trigger, window, reporter.stateFields())
-}
-
-type scheduledRunPaths struct {
-	running string
-	done    string
-	failed  string
-}
-
-type scheduledRunReporter struct {
-	paths   scheduledRunPaths
-	trigger string
-	window  scheduler.Window
-	fields  map[string]string
-}
-
-func (r *scheduledRunReporter) updateArticleLimits(report articleLimitReport) {
-	if r == nil || strings.TrimSpace(r.paths.running) == "" || !report.applied {
-		return
-	}
-	r.updateFields("article_limit", report.stateFields())
-}
-
-func (r *scheduledRunReporter) updateAIStage(attempt aiBriefingAttempt, stage string, elapsed time.Duration) {
-	if r == nil || strings.TrimSpace(r.paths.running) == "" {
-		return
-	}
-	fields := map[string]string{
-		"ai_attempt":    attempt.name,
-		"ai_articles":   fmt.Sprintf("%d", len(attempt.articles)),
-		"ai_categories": articleCategoryCountsString(attempt.articles),
-	}
-	if attempt.fallback {
-		fields["ai_fallback"] = "true"
-	}
-	if elapsed > 0 {
-		fields["ai_elapsed"] = elapsed.Round(time.Second).String()
-	}
-	r.updateFields(stage, fields)
-}
-
-func (r *scheduledRunReporter) updateFields(stage string, fields map[string]string) {
-	if r.fields == nil {
-		r.fields = make(map[string]string)
-	}
-	for key, value := range fields {
-		r.fields[key] = value
-	}
-	r.fields["stage"] = stage
-	if err := os.WriteFile(r.paths.running, []byte(scheduledRunStateContentWithFields("running", r.trigger, r.window, nil, r.fields)), 0o644); err != nil {
-		logutil.Errorf("update scheduled run marker: %v", err)
-	}
-}
-
-func (r *scheduledRunReporter) stateFields() map[string]string {
-	if r == nil || len(r.fields) == 0 {
-		return nil
-	}
-	fields := make(map[string]string, len(r.fields))
-	for key, value := range r.fields {
-		fields[key] = value
-	}
-	return fields
-}
-
-func (app *app) acquireScheduledRunWindow(window scheduler.Window, trigger string) (scheduledRunPaths, bool, error) {
-	paths := app.scheduledRunPaths(window)
-	if err := os.MkdirAll(filepath.Dir(paths.running), 0o755); err != nil {
-		return paths, false, err
-	}
-	if _, err := os.Stat(paths.done); err == nil {
-		logutil.Printf("[scheduler] 跳过窗口 %s：已完成", window.Period)
-		return paths, false, nil
-	} else if !os.IsNotExist(err) {
-		return paths, false, err
-	}
-	if info, err := os.Stat(paths.running); err == nil {
-		if time.Since(info.ModTime()) < scheduledRunRunningTTL {
-			logutil.Printf("[scheduler] 跳过窗口 %s：已有执行中任务", window.Period)
-			return paths, false, nil
-		}
-		logutil.Printf("[scheduler] 替换过期执行标记: %s", paths.running)
-		if err := os.Remove(paths.running); err != nil && !os.IsNotExist(err) {
-			return paths, false, err
-		}
-	} else if !os.IsNotExist(err) {
-		return paths, false, err
-	}
-	file, err := os.OpenFile(paths.running, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
-	if os.IsExist(err) {
-		logutil.Printf("[scheduler] 跳过窗口 %s：已有执行中任务", window.Period)
-		return paths, false, nil
-	}
-	if err != nil {
-		return paths, false, err
-	}
-	if _, err := file.WriteString(scheduledRunStateContent("running", trigger, window, nil)); err != nil {
-		_ = file.Close()
-		return paths, false, err
-	}
-	if err := file.Close(); err != nil {
-		return paths, false, err
-	}
-	if err := os.Remove(paths.failed); err != nil && !os.IsNotExist(err) {
-		return paths, false, err
-	}
-	return paths, true, nil
-}
-
-func (app *app) scheduledRunPaths(window scheduler.Window) scheduledRunPaths {
-	outputDir := "output"
-	if app != nil && app.cfg != nil && strings.TrimSpace(app.cfg.Output.Dir) != "" {
-		outputDir = app.cfg.Output.Dir
-	}
-	key := scheduledRunWindowKey(window)
-	dir := filepath.Join(outputDir, "state", "scheduled-runs")
-	return scheduledRunPaths{
-		running: filepath.Join(dir, key+".running"),
-		done:    filepath.Join(dir, key+".done"),
-		failed:  filepath.Join(dir, key+".failed"),
-	}
-}
-
-func scheduledRunWindowKey(window scheduler.Window) string {
-	return window.From.UTC().Format("20060102T150405Z") + "_" + window.To.UTC().Format("20060102T150405Z")
-}
-
-func markScheduledRunDone(paths scheduledRunPaths, trigger string, window scheduler.Window, fields map[string]string) error {
-	if err := os.WriteFile(paths.done, []byte(scheduledRunStateContentWithFields("done", trigger, window, nil, fields)), 0o644); err != nil {
-		return err
-	}
-	if err := os.Remove(paths.running); err != nil && !os.IsNotExist(err) {
-		return err
-	}
-	return nil
-}
-
-func markScheduledRunFailed(paths scheduledRunPaths, trigger string, window scheduler.Window, runErr error) error {
-	if err := os.WriteFile(paths.failed, []byte(scheduledRunStateContent("failed", trigger, window, runErr)), 0o644); err != nil {
-		return err
-	}
-	if err := os.Remove(paths.running); err != nil && !os.IsNotExist(err) {
-		return err
-	}
-	return nil
-}
-
-func scheduledRunStateContent(status string, trigger string, window scheduler.Window, runErr error) string {
-	return scheduledRunStateContentWithFields(status, trigger, window, runErr, nil)
-}
-
-func scheduledRunStateContentWithFields(status string, trigger string, window scheduler.Window, runErr error, fields map[string]string) string {
-	var builder strings.Builder
-	builder.WriteString("status: ")
-	builder.WriteString(status)
-	builder.WriteByte('\n')
-	builder.WriteString("trigger: ")
-	builder.WriteString(trigger)
-	builder.WriteByte('\n')
-	builder.WriteString("period: ")
-	builder.WriteString(window.Period)
-	builder.WriteByte('\n')
-	builder.WriteString("from: ")
-	builder.WriteString(window.From.Format(time.RFC3339))
-	builder.WriteByte('\n')
-	builder.WriteString("to: ")
-	builder.WriteString(window.To.Format(time.RFC3339))
-	builder.WriteByte('\n')
-	builder.WriteString("updated_at: ")
-	builder.WriteString(time.Now().Format(time.RFC3339))
-	builder.WriteByte('\n')
-	for key, value := range fields {
-		builder.WriteString(key)
-		builder.WriteString(": ")
-		builder.WriteString(value)
-		builder.WriteByte('\n')
-	}
-	if runErr != nil {
-		builder.WriteString("error: ")
-		builder.WriteString(runErr.Error())
-		builder.WriteByte('\n')
-	}
-	return builder.String()
 }
 
 func (app *app) runRegen(cmd regenCommand) error {
@@ -1451,10 +1230,10 @@ func (app *app) renderBriefingContextWithReporterAndSourceStats(ctx context.Cont
 		}
 	}
 
-	return app.runPostMarkdownActions(ctx, briefing, path, sendEmail, failed)
+	return app.runPostMarkdownActions(ctx, briefing, path, sendEmail, failed, reporter)
 }
 
-func (app *app) runPostMarkdownActions(ctx context.Context, briefing *model.Briefing, markdownPath string, sendEmail bool, _ []fetcher.FailedSource) error {
+func (app *app) runPostMarkdownActions(ctx context.Context, briefing *model.Briefing, markdownPath string, sendEmail bool, _ []fetcher.FailedSource, reporter *scheduledRunReporter) error {
 	hookDone := make(chan error, 1)
 	if app.suppressPublishHook {
 		logutil.Println("Skipping publish hook")
@@ -1499,6 +1278,7 @@ func (app *app) runPostMarkdownActions(ctx context.Context, briefing *model.Brie
 				logutil.Errorf("Error sending email: %v", err)
 			}
 		} else {
+			reporter.markEmailSent()
 			logutil.Printf("Email sent to %s", app.cfg.Email.To)
 		}
 	}

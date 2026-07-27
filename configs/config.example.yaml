@@ -99,6 +99,9 @@ x_accounts:
   lookback: 24h
   refresh_wait_timeout: 10m
   refresh_wait_interval: 5s
+  # Active scheduled windows only; no polling occurs when no window is pending/waiting/running.
+  refresh_reconcile_interval: 1m
+  refresh_heartbeat_stale_after: 3m
   max_posts_per_target: 10
   original_only: true
   category: AI/科技

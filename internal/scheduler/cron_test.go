@@ -108,6 +108,33 @@ func TestRunWindowAfterDelayWaitsBeforeRun(t *testing.T) {
 	}
 }
 
+func TestNotifyWindowTriggerRecordsDueTimeBeforeDelayedRun(t *testing.T) {
+	window := Window{
+		Expr:   "0 18 * * *",
+		Period: "1800",
+		From:   time.Date(2026, 7, 27, 8, 0, 0, 0, time.Local),
+		To:     time.Date(2026, 7, 27, 18, 0, 0, 0, time.Local),
+	}
+	wantDueAt := window.To.Add(10 * time.Minute)
+	called := false
+	err := notifyWindowTrigger(window, 10*time.Minute, func(got Window, dueAt time.Time) error {
+		called = true
+		if got != window {
+			t.Fatalf("window = %#v, want %#v", got, window)
+		}
+		if !dueAt.Equal(wantDueAt) {
+			t.Fatalf("dueAt = %s, want %s", dueAt, wantDueAt)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("notifyWindowTrigger() error = %v", err)
+	}
+	if !called {
+		t.Fatal("onTrigger was not called")
+	}
+}
+
 func TestRunWindowAfterDelayOnlyWaitsUntilScheduledTargetWhenTriggeredLate(t *testing.T) {
 	triggeredAt := time.Date(2026, 7, 13, 18, 0, 0, 0, time.Local)
 	window := Window{Expr: "0 18 * * *", Period: "1800", To: triggeredAt}

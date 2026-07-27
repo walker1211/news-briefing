@@ -29,6 +29,7 @@ func TestNewAppWiresInstanceDependencies(t *testing.T) {
 	funcs := map[string]any{
 		"scheduler.startCron":                     app.scheduler.startCron,
 		"scheduler.startCronContext":              app.scheduler.startCronContext,
+		"scheduler.startCronContextWithTrigger":   app.scheduler.startCronContextWithTrigger,
 		"fetch.fetchAll":                          app.fetch.fetchAll,
 		"fetch.fetchAllContext":                   app.fetch.fetchAllContext,
 		"fetch.fetchAllDetailedContext":           app.fetch.fetchAllDetailedContext,
@@ -1260,72 +1261,6 @@ func TestExecuteXReadyRunsScheduledWindowOnce(t *testing.T) {
 	}
 }
 
-func TestScheduledBriefingOnceSkipsDoneAndFreshRunning(t *testing.T) {
-	window := scheduler.Window{Expr: "0 18 * * *", Period: "1800", From: time.Date(2026, 6, 16, 8, 0, 0, 0, time.UTC), To: time.Date(2026, 6, 16, 18, 0, 0, 0, time.UTC)}
-	app := newScheduledOnceTestApp(t, errors.New("should not run"))
-	paths := app.scheduledRunPaths(window)
-	if err := os.MkdirAll(filepath.Dir(paths.done), 0o755); err != nil {
-		t.Fatalf("MkdirAll() error = %v", err)
-	}
-	if err := os.WriteFile(paths.done, []byte("done"), 0o644); err != nil {
-		t.Fatalf("WriteFile(done) error = %v", err)
-	}
-	if err := app.runScheduledBriefingOnceContext(context.Background(), window, "x-ready-callback", false); err != nil {
-		t.Fatalf("runScheduledBriefingOnceContext(done) error = %v", err)
-	}
-
-	app = newScheduledOnceTestApp(t, errors.New("should not run"))
-	paths = app.scheduledRunPaths(window)
-	if err := os.MkdirAll(filepath.Dir(paths.running), 0o755); err != nil {
-		t.Fatalf("MkdirAll() error = %v", err)
-	}
-	if err := os.WriteFile(paths.running, []byte("running"), 0o644); err != nil {
-		t.Fatalf("WriteFile(running) error = %v", err)
-	}
-	if err := app.runScheduledBriefingOnceContext(context.Background(), window, "cron", false); err != nil {
-		t.Fatalf("runScheduledBriefingOnceContext(running) error = %v", err)
-	}
-}
-
-func TestScheduledBriefingOnceCronDefersBeforeLockWhileXRefreshRuns(t *testing.T) {
-	window := scheduler.Window{Expr: "0 18 * * *", Period: "1800", From: time.Date(2026, 7, 27, 0, 0, 0, 0, time.UTC), To: time.Date(2026, 7, 27, 10, 0, 0, 0, time.UTC)}
-	statusPath := filepath.Join(t.TempDir(), "status.json")
-	status := `{"status":"running","window":{"from":"2026-07-27T00:00:00.000Z","to":"2026-07-27T10:00:00.000Z"}}`
-	if err := os.WriteFile(statusPath, []byte(status), 0o644); err != nil {
-		t.Fatalf("WriteFile(status) error = %v", err)
-	}
-	app := newScheduledOnceTestApp(t, errors.New("should not run"))
-	app.cfg.XAccounts = config.XAccountsConfig{Enabled: true, RefreshStatusPath: statusPath}
-
-	if err := app.runScheduledBriefingOnceContext(context.Background(), window, "cron", false); err != nil {
-		t.Fatalf("runScheduledBriefingOnceContext() error = %v", err)
-	}
-	paths := app.scheduledRunPaths(window)
-	for _, path := range []string{paths.running, paths.done, paths.failed} {
-		if _, err := os.Stat(path); !os.IsNotExist(err) {
-			t.Fatalf("scheduled marker %s exists after X-running deferral; stat error = %v", path, err)
-		}
-	}
-}
-
-func TestScheduledBriefingOnceCronContinuesAfterXRefreshFailure(t *testing.T) {
-	window := scheduler.Window{Expr: "0 18 * * *", Period: "1800", From: time.Date(2026, 7, 27, 0, 0, 0, 0, time.UTC), To: time.Date(2026, 7, 27, 10, 0, 0, 0, time.UTC)}
-	statusPath := filepath.Join(t.TempDir(), "status.json")
-	status := `{"status":"failed","window":{"from":"2026-07-27T00:00:00.000Z","to":"2026-07-27T10:00:00.000Z"}}`
-	if err := os.WriteFile(statusPath, []byte(status), 0o644); err != nil {
-		t.Fatalf("WriteFile(status) error = %v", err)
-	}
-	app := newScheduledOnceTestApp(t, nil)
-	app.cfg.XAccounts = config.XAccountsConfig{Enabled: true, RefreshStatusPath: statusPath}
-
-	if err := app.runScheduledBriefingOnceContext(context.Background(), window, "cron", false); err != nil {
-		t.Fatalf("runScheduledBriefingOnceContext() error = %v", err)
-	}
-	if _, err := os.Stat(app.scheduledRunPaths(window).done); err != nil {
-		t.Fatalf("done marker missing after failed X refresh fallback: %v", err)
-	}
-}
-
 func TestApplyBriefingArticleLimitsReturnsCategoryReport(t *testing.T) {
 	articles := []model.Article{
 		{Title: "ai-1", Category: "AI/科技"},
@@ -1379,109 +1314,6 @@ func TestApplyBriefingArticleLimitsUsesSourcePriorityAndPreservesTimeOrder(t *te
 	}
 	if got, want := articleTitles(limited), []string{"new media", "older official"}; !slices.Equal(got, want) {
 		t.Fatalf("limited titles = %v, want %v", got, want)
-	}
-}
-
-func TestScheduledBriefingOnceUpdatesRunningMarkerDuringAI(t *testing.T) {
-	window := scheduler.Window{Expr: "0 18 * * *", Period: "1800", From: time.Date(2026, 6, 16, 8, 0, 0, 0, time.UTC), To: time.Date(2026, 6, 16, 18, 0, 0, 0, time.UTC)}
-	var marker string
-	testApp := newScheduledOnceTestApp(t, nil)
-	testApp.cfg.Output.Mode = model.OutputModeTranslatedOnly
-	testApp.cfg.Output.MaxArticlesByCategory = map[string]int{"AI/科技": 1, "国际政治": 1}
-	testApp.fetch = fetchDeps{
-		fetchWindowDetailedContext: func(ctx context.Context, cfg *config.Config, from, to time.Time, markSeen bool, ignoreSeen bool) (fetcher.FetchResult, error) {
-			return fetcher.FetchResult{Articles: []model.Article{
-				{Title: "ai-1", Category: "AI/科技"},
-				{Title: "ai-2", Category: "AI/科技"},
-				{Title: "politics-1", Category: "国际政治"},
-			}}, nil
-		},
-	}
-	testApp.ai = aiDeps{
-		summarizeContext: func(ctx context.Context, articles []model.Article, categoryOrder []string, loc *time.Location) (string, error) {
-			data, err := os.ReadFile(testApp.scheduledRunPaths(window).running)
-			if err != nil {
-				t.Fatalf("ReadFile(running) error = %v", err)
-			}
-			marker = string(data)
-			return "summary", nil
-		},
-	}
-	testApp.output = silentBriefingOutputDeps("body")
-
-	if err := testApp.runScheduledBriefingOnceContext(context.Background(), window, "x-ready-callback", false); err != nil {
-		t.Fatalf("runScheduledBriefingOnceContext() error = %v", err)
-	}
-	for _, want := range []string{
-		"stage: ai_summary",
-		"ai_attempt: primary",
-		"ai_articles: 2",
-		"article_limit_total_before: 3",
-		"article_limit_total_after: 2",
-		"article_limit_categories: AI/科技 2 -> 1 (limit 1), 国际政治 1 -> 1 (limit 1)",
-	} {
-		if !strings.Contains(marker, want) {
-			t.Fatalf("running marker = %q, want substring %q", marker, want)
-		}
-	}
-	doneData, err := os.ReadFile(testApp.scheduledRunPaths(window).done)
-	if err != nil {
-		t.Fatalf("ReadFile(done) error = %v", err)
-	}
-	done := string(doneData)
-	for _, want := range []string{
-		"status: done",
-		"article_limit_total_before: 3",
-		"article_limit_total_after: 2",
-		"article_limit_categories: AI/科技 2 -> 1 (limit 1), 国际政治 1 -> 1 (limit 1)",
-	} {
-		if !strings.Contains(done, want) {
-			t.Fatalf("done marker = %q, want substring %q", done, want)
-		}
-	}
-}
-
-func TestScheduledBriefingOnceReplacesStaleRunningAndWritesFailed(t *testing.T) {
-	window := scheduler.Window{Expr: "0 18 * * *", Period: "1800", From: time.Date(2026, 6, 16, 8, 0, 0, 0, time.UTC), To: time.Date(2026, 6, 16, 18, 0, 0, 0, time.UTC)}
-	runErr := errors.New("fetch failed")
-	app := newScheduledOnceTestApp(t, runErr)
-	paths := app.scheduledRunPaths(window)
-	if err := os.MkdirAll(filepath.Dir(paths.running), 0o755); err != nil {
-		t.Fatalf("MkdirAll() error = %v", err)
-	}
-	if err := os.WriteFile(paths.running, []byte("running"), 0o644); err != nil {
-		t.Fatalf("WriteFile(running) error = %v", err)
-	}
-	stale := time.Now().Add(-scheduledRunRunningTTL - time.Minute)
-	if err := os.Chtimes(paths.running, stale, stale); err != nil {
-		t.Fatalf("Chtimes() error = %v", err)
-	}
-
-	err := app.runScheduledBriefingOnceContext(context.Background(), window, "cron", false)
-	if !errors.Is(err, runErr) {
-		t.Fatalf("runScheduledBriefingOnceContext() error = %v, want %v", err, runErr)
-	}
-	if _, err := os.Stat(paths.failed); err != nil {
-		t.Fatalf("failed marker missing: %v", err)
-	}
-}
-
-func newScheduledOnceTestApp(t *testing.T, runErr error) *app {
-	t.Helper()
-	calls := 0
-	cfg := executeTestConfig(t, model.OutputModeOriginalOnly)
-	return &app{
-		cfg: cfg,
-		fetch: fetchDeps{
-			fetchWindowDetailedContext: func(ctx context.Context, cfg *config.Config, from, to time.Time, markSeen bool, ignoreSeen bool) (fetcher.FetchResult, error) {
-				calls++
-				if runErr != nil {
-					return fetcher.FetchResult{}, runErr
-				}
-				return fetcher.FetchResult{Articles: sampleExecuteArticles()}, nil
-			},
-		},
-		output: silentBriefingOutputDeps("body"),
 	}
 }
 

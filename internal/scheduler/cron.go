@@ -25,6 +25,13 @@ func Start(cfg *config.Config, runFunc func(Window)) error {
 	return StartContext(context.Background(), cfg, runFunc)
 }
 
+// StartContextWithTrigger records a window at its cron trigger before waiting
+// for the configured execution delay. Returning an error from onTrigger skips
+// that occurrence so an unrecorded window is never run implicitly.
+func StartContextWithTrigger(ctx context.Context, cfg *config.Config, onTrigger func(Window, time.Time) error, runFunc func(Window)) error {
+	return startContext(ctx, cfg, onTrigger, runFunc)
+}
+
 func waitContext(ctx context.Context, d time.Duration) error {
 	if d <= 0 {
 		return ctx.Err()
@@ -53,6 +60,13 @@ func remainingWindowDelay(window Window, delay time.Duration, now time.Time) tim
 	return remaining
 }
 
+func notifyWindowTrigger(window Window, delay time.Duration, onTrigger func(Window, time.Time) error) error {
+	if onTrigger == nil {
+		return nil
+	}
+	return onTrigger(window, window.To.Add(delay))
+}
+
 func runWindowAfterDelay(ctx context.Context, window Window, delay time.Duration, wait waitFunc, now nowFunc, runFunc func(Window)) {
 	waitFor := remainingWindowDelay(window, delay, now())
 	if waitFor > 0 {
@@ -71,6 +85,10 @@ func runWindowAfterDelay(ctx context.Context, window Window, delay time.Duration
 }
 
 func StartContext(ctx context.Context, cfg *config.Config, runFunc func(Window)) error {
+	return startContext(ctx, cfg, nil, runFunc)
+}
+
+func startContext(ctx context.Context, cfg *config.Config, onTrigger func(Window, time.Time) error, runFunc func(Window)) error {
 	if cfg == nil {
 		return fmt.Errorf("scheduler config 不能为空")
 	}
@@ -106,6 +124,10 @@ func StartContext(ctx context.Context, cfg *config.Config, runFunc func(Window))
 				return
 			}
 			logutil.Printf("[scheduler] 触发定时任务: %s [%s -> %s] ...", expr, window.From.In(loc).Format(time.RFC3339), window.To.In(loc).Format(time.RFC3339))
+			if triggerErr := notifyWindowTrigger(window, cfg.ScheduleDelay, onTrigger); triggerErr != nil {
+				logutil.Printf("[scheduler] 跳过定时任务 %s：登记窗口失败: %v", expr, triggerErr)
+				return
+			}
 			run := func() {
 				runWindowAfterDelay(ctx, window, cfg.ScheduleDelay, waitContext, time.Now, runFunc)
 			}

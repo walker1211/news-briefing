@@ -63,6 +63,8 @@ const (
 	DefaultWatchArticleConcurrency        = 8
 	DefaultXRefreshWaitTimeout            = 10 * time.Minute
 	DefaultXRefreshWaitInterval           = 5 * time.Second
+	DefaultXRefreshReconcileInterval      = time.Minute
+	DefaultXRefreshHeartbeatStaleAfter    = 3 * time.Minute
 	DefaultXMaxPostsPerTarget             = 10
 	DefaultAIModel                        = "gpt-5.6-sol"
 	DefaultAITranslationModel             = "gpt-5.3-codex-spark"
@@ -178,6 +180,8 @@ type XAccountsConfig struct {
 	LookbackRaw            string           `yaml:"lookback"`
 	RefreshWaitTimeoutRaw  string           `yaml:"refresh_wait_timeout"`
 	RefreshWaitIntervalRaw string           `yaml:"refresh_wait_interval"`
+	RefreshReconcileRaw    string           `yaml:"refresh_reconcile_interval"`
+	HeartbeatStaleAfterRaw string           `yaml:"refresh_heartbeat_stale_after"`
 	MaxPostsPerTarget      int              `yaml:"max_posts_per_target"`
 	OriginalOnly           bool             `yaml:"original_only"`
 	Category               string           `yaml:"category"`
@@ -185,6 +189,8 @@ type XAccountsConfig struct {
 	Lookback               time.Duration    `yaml:"-"`
 	RefreshWaitTimeout     time.Duration    `yaml:"-"`
 	RefreshWaitInterval    time.Duration    `yaml:"-"`
+	RefreshReconcile       time.Duration    `yaml:"-"`
+	HeartbeatStaleAfter    time.Duration    `yaml:"-"`
 }
 
 type XAccountConfig struct {
@@ -492,6 +498,28 @@ func applyXAccountsDefaults(cfg *XAccountsConfig) error {
 		return fmt.Errorf("validate x_accounts.refresh_wait_interval: must be greater than 0")
 	}
 	cfg.RefreshWaitInterval = refreshWaitInterval
+	if strings.TrimSpace(cfg.RefreshReconcileRaw) == "" {
+		cfg.RefreshReconcileRaw = DefaultXRefreshReconcileInterval.String()
+	}
+	refreshReconcile, err := time.ParseDuration(strings.TrimSpace(cfg.RefreshReconcileRaw))
+	if err != nil {
+		return fmt.Errorf("parse x_accounts.refresh_reconcile_interval: %w", err)
+	}
+	if refreshReconcile <= 0 {
+		return fmt.Errorf("validate x_accounts.refresh_reconcile_interval: must be greater than 0")
+	}
+	cfg.RefreshReconcile = refreshReconcile
+	if strings.TrimSpace(cfg.HeartbeatStaleAfterRaw) == "" {
+		cfg.HeartbeatStaleAfterRaw = DefaultXRefreshHeartbeatStaleAfter.String()
+	}
+	heartbeatStaleAfter, err := time.ParseDuration(strings.TrimSpace(cfg.HeartbeatStaleAfterRaw))
+	if err != nil {
+		return fmt.Errorf("parse x_accounts.refresh_heartbeat_stale_after: %w", err)
+	}
+	if heartbeatStaleAfter <= 0 {
+		return fmt.Errorf("validate x_accounts.refresh_heartbeat_stale_after: must be greater than 0")
+	}
+	cfg.HeartbeatStaleAfter = heartbeatStaleAfter
 	if cfg.MaxPostsPerTarget == 0 {
 		cfg.MaxPostsPerTarget = DefaultXMaxPostsPerTarget
 	}
