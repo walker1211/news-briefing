@@ -377,6 +377,9 @@ email:
   smtp_port: 465
   from: from@example.com
   to: to@example.com
+  # Optional additional recipients. The primary recipient above is always included.
+  # recipients:
+  #   - another@example.com
   timeout: 3s
   retry_times: 3
   retry_wait_time: 500ms
