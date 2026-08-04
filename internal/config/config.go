@@ -202,6 +202,7 @@ type Email struct {
 	SMTPPort         int           `yaml:"smtp_port"`
 	From             string        `yaml:"from"`
 	To               string        `yaml:"to"`
+	Recipients       []string      `yaml:"recipients"`
 	TimeoutRaw       string        `yaml:"timeout"`
 	RetryTimesRaw    *int          `yaml:"retry_times"`
 	RetryWaitTimeRaw string        `yaml:"retry_wait_time"`
@@ -879,7 +880,7 @@ func validateXAccounts(cfg XAccountsConfig) error {
 }
 
 func validateEmail(email Email) error {
-	if strings.TrimSpace(email.SMTPHost) == "" && email.SMTPPort == 0 && strings.TrimSpace(email.From) == "" && strings.TrimSpace(email.To) == "" {
+	if strings.TrimSpace(email.SMTPHost) == "" && email.SMTPPort == 0 && strings.TrimSpace(email.From) == "" && strings.TrimSpace(email.To) == "" && len(email.Recipients) == 0 {
 		return nil
 	}
 	return ValidateEmailForSending(email)
@@ -897,6 +898,11 @@ func ValidateEmailForSending(email Email) error {
 	}
 	if err := validateEmailAddress("email.to", email.To); err != nil {
 		return err
+	}
+	for i, recipient := range email.Recipients {
+		if err := validateEmailAddress(fmt.Sprintf("email.recipients[%d]", i), recipient); err != nil {
+			return err
+		}
 	}
 	return nil
 }

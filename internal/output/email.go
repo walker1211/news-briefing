@@ -53,6 +53,19 @@ type EmailSender struct {
 	sleep                     func(time.Duration)
 }
 
+func emailRecipients(cfg *config.Config) []string {
+	recipients := make([]string, 0, 1+len(cfg.Email.Recipients))
+	if recipient := strings.TrimSpace(cfg.Email.To); recipient != "" {
+		recipients = append(recipients, recipient)
+	}
+	for _, recipient := range cfg.Email.Recipients {
+		if recipient = strings.TrimSpace(recipient); recipient != "" {
+			recipients = append(recipients, recipient)
+		}
+	}
+	return recipients
+}
+
 func NewEmailSender() *EmailSender {
 	return &EmailSender{
 		newDirectEmailDialContext: defaultDirectEmailDialContext,
@@ -313,7 +326,7 @@ func (s *EmailSender) sendHTMLEmailWithRenderedContent(cfg *config.Config, subje
 func (s *EmailSender) deliverSMTPMessage(cfg *config.Config, subject string, body string, password string) error {
 	m := gomail.NewMessage()
 	m.SetHeader("From", cfg.Email.From)
-	m.SetHeader("To", cfg.Email.To)
+	m.SetHeader("To", emailRecipients(cfg)...)
 	m.SetHeader("Subject", subject)
 	m.SetBody("text/plain", body)
 	return s.deliverMessage(cfg, m, password)
@@ -326,7 +339,7 @@ func (s *EmailSender) deliverSMTPHTMLMessage(cfg *config.Config, subject string,
 func newHTMLMessage(cfg *config.Config, subject string, textBody string, htmlBody string, inlineImages []emailInlineImage) *gomail.Message {
 	m := gomail.NewMessage()
 	m.SetHeader("From", cfg.Email.From)
-	m.SetHeader("To", cfg.Email.To)
+	m.SetHeader("To", emailRecipients(cfg)...)
 	m.SetHeader("Subject", subject)
 	m.SetBody("text/plain", textBody)
 	m.AddAlternative("text/html", htmlBody)
@@ -375,8 +388,10 @@ func (s *EmailSender) deliverMessage(cfg *config.Config, m *gomail.Message, pass
 	if err := client.Mail(cfg.Email.From); err != nil {
 		return fmt.Errorf("send email: %w", err)
 	}
-	if err := client.Rcpt(cfg.Email.To); err != nil {
-		return fmt.Errorf("send email: %w", err)
+	for _, recipient := range emailRecipients(cfg) {
+		if err := client.Rcpt(recipient); err != nil {
+			return fmt.Errorf("send email: %w", err)
+		}
 	}
 
 	writer, err := client.Data()
