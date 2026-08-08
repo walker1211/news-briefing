@@ -14,7 +14,13 @@ func IsUsableRemoteImageURL(raw string) bool {
 	if parsed.Scheme != "http" && parsed.Scheme != "https" {
 		return false
 	}
-	return !IsTrackingImageURL(raw)
+	return !IsTrackingImageURL(raw) && !isGenericSitePreviewImageURL(parsed)
+}
+
+func isGenericSitePreviewImageURL(parsed *url.URL) bool {
+	host := strings.ToLower(parsed.Hostname())
+	path := strings.ToLower(strings.TrimSuffix(parsed.EscapedPath(), "/"))
+	return (host == "readhub.cn" || host == "www.readhub.cn") && path == "/social-image.webp"
 }
 
 func IsTrackingImageURL(raw string) bool {

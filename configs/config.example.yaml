@@ -43,6 +43,11 @@ sources:
     url: https://blogs.bing.com/Home/feed
     type: rss
     category: AI/科技
+  - name: 36氪快讯
+    url: https://rsshub.example.com/36kr/newsflashes
+    type: rss
+    category: AI/科技
+    rsshub_access_key_env: RSSHUB_ACCESS_KEY
   - name: 第一财经
     url: https://rsshub.example.com/yicai/brief
     type: rss
