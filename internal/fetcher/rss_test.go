@@ -419,6 +419,52 @@ func TestFetchRSSSkipsTrackingOpenGraphImage(t *testing.T) {
 	}
 }
 
+func TestFetchRSSSkipsReadhubGenericOpenGraphImage(t *testing.T) {
+	client := NewClient(&http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		body := `<!doctype html><html><head>
+<meta property="og:image" content="https://readhub.cn/social-image.webp">
+<meta name="twitter:image" content="https://readhub.cn/social-image.webp">
+</head><body><main><img alt="logo" width="80" height="15" src="/readhub.png"></main></body></html>`
+		if req.URL.Path == "/rss" {
+			body = `<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0">
+  <channel>
+    <title>Readhub</title>
+    <item>
+      <title>DeepSeek invests in Unitree</title>
+      <link>https://readhub.cn/topic/example</link>
+      <description>DeepSeek and Unitree update</description>
+      <pubDate>Sat, 8 Aug 2026 00:00:00 GMT</pubDate>
+    </item>
+  </channel>
+</rss>`
+		}
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Status:     "200 OK",
+			Body:       io.NopCloser(strings.NewReader(body)),
+			Header:     make(http.Header),
+			Request:    req,
+		}, nil
+	})})
+
+	result, err := client.FetchRSS(config.Source{
+		Name:     "Readhub",
+		URL:      "https://readhub.cn/rss",
+		Type:     config.SourceTypeRSS,
+		Category: "AI/科技",
+	}, []string{"DeepSeek"}, time.Date(2026, 8, 8, 0, 0, 0, 0, time.UTC))
+	if err != nil {
+		t.Fatalf("FetchRSS() error = %v", err)
+	}
+	if len(result.Candidates) != 1 {
+		t.Fatalf("len(result.Candidates) = %d, want 1", len(result.Candidates))
+	}
+	if got := result.Candidates[0].Article.ImageURL; got != "" {
+		t.Fatalf("Article.ImageURL = %q, want empty for generic Readhub preview", got)
+	}
+}
+
 func TestExtractRSSItemImageSkipsTrackingPixel(t *testing.T) {
 	item := &gofeed.Item{
 		Link:        "https://example.com/story",
