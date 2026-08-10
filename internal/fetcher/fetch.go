@@ -406,10 +406,7 @@ func (acc *sourceStatsAccumulator) build(failed []FailedSource) model.SourceStat
 		if strings.TrimSpace(item.Name) == "" {
 			continue
 		}
-		message := ""
-		if item.Err != nil {
-			message = item.Err.Error()
-		}
+		message := item.SafeErrorMessage()
 		report.Failed = append(report.Failed, model.SourceStatsError{Source: item.Name, Error: message})
 	}
 	report.RecalculateTotals()
@@ -834,12 +831,12 @@ func PrintFailed(failed []FailedSource) {
 	if checkTTY() {
 		fmt.Printf("\n\033[31m--- 以下源获取失败（重试3次均失败）---\033[0m\n")
 		for _, f := range failed {
-			fmt.Printf("  \033[31m✗ %s: %v\033[0m\n", f.Name, f.Err)
+			fmt.Printf("  \033[31m✗ %s: %s\033[0m\n", f.Name, f.SafeErrorMessage())
 		}
 	} else {
 		fmt.Printf("\n--- 以下源获取失败（重试3次均失败）---\n")
 		for _, f := range failed {
-			fmt.Printf("  ✗ %s: %v\n", f.Name, f.Err)
+			fmt.Printf("  ✗ %s: %s\n", f.Name, f.SafeErrorMessage())
 		}
 	}
 	fmt.Println()

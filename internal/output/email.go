@@ -1105,7 +1105,7 @@ func AppendFailedSection(body string, failed []fetcher.FailedSource) string {
 	var tail strings.Builder
 	tail.WriteString("\n\n---\n抓取异常\n")
 	for _, f := range failed {
-		tail.WriteString(fmt.Sprintf("- %s: %v\n", f.Name, f.Err))
+		tail.WriteString(fmt.Sprintf("- %s: %s\n", f.Name, f.SafeErrorMessage()))
 	}
 	return body + tail.String()
 }

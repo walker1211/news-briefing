@@ -1222,6 +1222,9 @@ func (app *app) renderBriefingContextWithReporterAndSourceStats(ctx context.Cont
 		logutil.Printf("Source stats saved: %s", statsPath)
 	}
 
+	if err := app.runPostMarkdownActions(ctx, briefing, path, sendEmail, failed, reporter); err != nil {
+		return err
+	}
 	if app.fetch.markSeen != nil && len(seenArticles) > 0 {
 		if err := runIfActive(ctx, func() error {
 			return app.fetch.markSeen(seenArticles)
@@ -1229,8 +1232,7 @@ func (app *app) renderBriefingContextWithReporterAndSourceStats(ctx context.Cont
 			return fmt.Errorf("mark seen: %w", err)
 		}
 	}
-
-	return app.runPostMarkdownActions(ctx, briefing, path, sendEmail, failed, reporter)
+	return nil
 }
 
 func (app *app) runPostMarkdownActions(ctx context.Context, briefing *model.Briefing, markdownPath string, sendEmail bool, _ []fetcher.FailedSource, reporter *scheduledRunReporter) error {
@@ -1283,10 +1285,11 @@ func (app *app) runPostMarkdownActions(ctx context.Context, briefing *model.Brie
 		}
 	}
 
-	if err := <-hookDone; err != nil {
-		logutil.Errorf("publish hook failed: %v", err)
+	hookErr := <-hookDone
+	if hookErr != nil {
+		logutil.Errorf("publish hook failed: %v", hookErr)
 	}
-	return emailErr
+	return errors.Join(emailErr, hookErr)
 }
 
 func cardManifestPathForMarkdown(markdownPath string) string {

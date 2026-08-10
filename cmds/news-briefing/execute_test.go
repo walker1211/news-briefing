@@ -150,6 +150,43 @@ func TestRenderBriefingRunsPublishHookAfterMarkdownWrite(t *testing.T) {
 	}
 }
 
+func TestRenderBriefingPublishFailureReturnsErrorBeforeMarkSeen(t *testing.T) {
+	cfg := executeTestConfig(t, model.OutputModeOriginalOnly)
+	cfg.PublishHook = config.PublishHookConfig{Enabled: true, Command: "content-publisher"}
+	marked := false
+	app := &app{
+		cfg: cfg,
+		fetch: fetchDeps{
+			markSeen: func([]model.Article) error {
+				marked = true
+				return nil
+			},
+		},
+		output: outputDeps{
+			printFailed:   func([]fetcher.FailedSource) {},
+			printArticles: func([]model.Article) {},
+			printCLI:      func(*model.Briefing) {},
+			composeBody: func(string, model.OutputMode, model.OutputContent) (string, error) {
+				return "body", nil
+			},
+			writeMarkdown: func(*model.Briefing, string) (string, error) {
+				return filepath.Join(cfg.Output.Dir, "briefing.md"), nil
+			},
+		},
+		publishHook: func(context.Context, config.PublishHookConfig, publishHookRequest) error {
+			return errors.New("publisher unavailable")
+		},
+	}
+
+	err := app.renderBriefingContext(context.Background(), "run", "26.08.10", "0800", sampleExecuteArticles(), nil, sampleExecuteArticles(), nil, false, false)
+	if err == nil || !strings.Contains(err.Error(), "publisher unavailable") {
+		t.Fatalf("renderBriefingContext() error = %v", err)
+	}
+	if marked {
+		t.Fatal("markSeen() should wait until publish succeeds")
+	}
+}
+
 func TestRenderBriefingSkipsPublishHookWhenSuppressed(t *testing.T) {
 	cfg := executeTestConfig(t, model.OutputModeOriginalOnly)
 	cfg.PublishHook = config.PublishHookConfig{
@@ -360,7 +397,7 @@ func TestRenderBriefingEmailsSavedMarkdownFile(t *testing.T) {
 	}
 }
 
-func TestRenderBriefingLogsPublishHookFailureWithoutFailing(t *testing.T) {
+func TestRenderBriefingReturnsPublishHookFailure(t *testing.T) {
 	cfg := executeTestConfig(t, model.OutputModeOriginalOnly)
 	cfg.PublishHook = config.PublishHookConfig{
 		Enabled: true,
@@ -385,8 +422,8 @@ func TestRenderBriefingLogsPublishHookFailureWithoutFailing(t *testing.T) {
 		},
 	}
 
-	if err := app.renderBriefingContext(context.Background(), "run", "26.06.04", "0800", sampleExecuteArticles(), nil, nil, nil, false, false); err != nil {
-		t.Fatalf("renderBriefingContext() error = %v", err)
+	if err := app.renderBriefingContext(context.Background(), "run", "26.06.04", "0800", sampleExecuteArticles(), nil, nil, nil, false, false); err == nil || !strings.Contains(err.Error(), "hook boom") {
+		t.Fatalf("renderBriefingContext() error = %v, want hook failure", err)
 	}
 }
 
@@ -769,14 +806,17 @@ func TestRenderBriefingContextStopsBeforeMarkSeenAndEmailWhenCancelledAfterWrite
 	}
 }
 
-func TestRenderBriefingContextStopsBeforeEmailWhenCancelledAfterMarkSeen(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
+func TestRenderBriefingContextMarksSeenAfterEmail(t *testing.T) {
 	emailed := false
+	marked := false
 	app := &app{
 		cfg: &config.Config{Output: config.OutputCfg{Dir: t.TempDir(), Mode: model.OutputModeOriginalOnly}},
 		fetch: fetchDeps{
 			markSeen: func([]model.Article) error {
-				cancel()
+				if !emailed {
+					t.Fatal("markSeen() ran before email")
+				}
+				marked = true
 				return nil
 			},
 		},
@@ -791,12 +831,12 @@ func TestRenderBriefingContextStopsBeforeEmailWhenCancelledAfterMarkSeen(t *test
 		},
 	}
 
-	err := app.renderBriefingContext(ctx, "run", "26.03.27", "1400", sampleExecuteArticles(), nil, sampleExecuteArticles(), nil, false, true)
-	if !errors.Is(err, context.Canceled) {
-		t.Fatalf("renderBriefingContext() error = %v, want context.Canceled", err)
+	err := app.renderBriefingContext(context.Background(), "run", "26.03.27", "1400", sampleExecuteArticles(), nil, sampleExecuteArticles(), nil, false, true)
+	if err != nil {
+		t.Fatalf("renderBriefingContext() error = %v", err)
 	}
-	if emailed {
-		t.Fatal("sendEmail() should not run after context cancellation")
+	if !emailed || !marked {
+		t.Fatalf("side effects emailed=%v marked=%v", emailed, marked)
 	}
 }
 
