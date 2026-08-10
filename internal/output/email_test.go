@@ -99,6 +99,22 @@ func TestBuildEmailBodyAppendsFailedSection(t *testing.T) {
 	}
 }
 
+func TestBuildEmailBodyRedactsSecretsFromFailedSource(t *testing.T) {
+	briefing := &model.Briefing{Date: "26.03.18", Period: "1400", RawContent: "正文"}
+	failed := []fetcher.FailedSource{{
+		Name: "RSSHub",
+		Err:  errors.New(`Get "https://rsshub.example.com/feed?code=deadbeef&lang=zh": no such host`),
+	}}
+
+	got := buildEmailBody(briefing, failed)
+	if strings.Contains(got, "deadbeef") {
+		t.Fatalf("buildEmailBody() = %q, leaked RSSHub access code", got)
+	}
+	if !strings.Contains(got, "code=[REDACTED]") {
+		t.Fatalf("buildEmailBody() = %q, want redacted RSSHub access code", got)
+	}
+}
+
 func TestBuildDeepEmailBodyUsesDeepTitle(t *testing.T) {
 	briefing := &model.Briefing{RawContent: "正文"}
 	got := buildDeepEmailBody("Claude", briefing, nil)

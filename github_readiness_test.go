@@ -29,6 +29,14 @@ func TestGitHubCIWorkflowReadiness(t *testing.T) {
 	}
 }
 
+func TestSecretScanIgnoresToolInternalRefs(t *testing.T) {
+	content := readTextFile(t, "scripts/secret-scan.sh")
+	for _, want := range []string{`"--branches"`, `"--tags"`, `"--remotes"`} {
+		assertContains(t, content, want)
+	}
+	assertNotContains(t, content, `"--all"`)
+}
+
 func TestGitHubReleaseWorkflowReadiness(t *testing.T) {
 	content := readTextFile(t, ".github/workflows/release.yml")
 	for _, want := range []string{

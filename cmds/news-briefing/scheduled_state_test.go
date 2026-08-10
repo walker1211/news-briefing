@@ -85,8 +85,13 @@ func TestScheduledBriefingCronWaitsWhileXHeartbeatFresh(t *testing.T) {
 	app := newScheduledOnceTestApp(t, errors.New("should not run"))
 	app.now = func() time.Time { return time.Date(2026, 7, 27, 10, 10, 0, 0, time.UTC) }
 	app.cfg.XAccounts = config.XAccountsConfig{Enabled: true, RefreshStatusPath: statusPath, HeartbeatStaleAfter: 3 * time.Minute}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer func() {
+		cancel()
+		waitForScheduledWindowWatcherCount(t, app, 0)
+	}()
 
-	if err := app.runScheduledBriefingOnceContext(context.Background(), window, "cron", false); err != nil {
+	if err := app.runScheduledBriefingOnceContext(ctx, window, "cron", false); err != nil {
 		t.Fatalf("runScheduledBriefingOnceContext() error = %v", err)
 	}
 	record := mustScheduledWindowState(t, app, window)

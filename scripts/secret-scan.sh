@@ -66,6 +66,7 @@ scan_history = sys.argv[4] == "1"
 PROTECTED_TRACKED_PATHS = {".env", "configs/config.yaml"}
 SKIP_PATHS = {"go.sum"}
 MAX_BLOB_BYTES = 5 * 1024 * 1024
+HISTORY_REVS = ["--branches", "--tags", "--remotes"]
 
 SECRET_NAME_RE = re.compile(
     r"(?i)\b[A-Z0-9_]*(?:API_KEY|TOKEN|SECRET|PASSWORD|AUTH_CODE)\b\s*[:=]\s*([\"']?)([^\"'\s,#)}\]]{4,})"
@@ -206,7 +207,7 @@ def scan_current_tree() -> list[Finding]:
 
 def iter_history_objects() -> Iterable[tuple[str, str]]:
     seen: set[str] = set()
-    for raw_line in git_text(["rev-list", "--objects", "--all"]).splitlines():
+    for raw_line in git_text(["rev-list", "--objects", *HISTORY_REVS]).splitlines():
         if not raw_line:
             continue
         oid, _, path = raw_line.partition(" ")
@@ -237,7 +238,7 @@ def object_size(oid: str) -> int:
 
 @lru_cache(maxsize=4096)
 def first_commit_for_blob(oid: str, path: str) -> str | None:
-    proc = git(["log", "--all", "--find-object", oid, "--format=%H", "--", path], check=False)
+    proc = git(["log", *HISTORY_REVS, "--find-object", oid, "--format=%H", "--", path], check=False)
     if proc.returncode != 0:
         return None
     for line in proc.stdout.decode("utf-8", errors="replace").splitlines():
