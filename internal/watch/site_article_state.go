@@ -18,6 +18,49 @@ type watchArticleContent struct {
 
 type watchArticleContentFetcher func(context.Context, string) (watchArticleContent, error)
 
+type memoizedWatchArticleContentResult struct {
+	ready   chan struct{}
+	content watchArticleContent
+	err     error
+}
+
+// memoizeWatchArticleContentFetcher keeps one in-flight/result entry per URL
+// for a single watch run. Anthropic Support currently exposes heavily
+// overlapping article lists across collections; sharing the result preserves
+// every collection comparison without downloading the same article repeatedly.
+func memoizeWatchArticleContentFetcher(fetch watchArticleContentFetcher) watchArticleContentFetcher {
+	var mu sync.Mutex
+	results := make(map[string]*memoizedWatchArticleContentResult)
+
+	return func(ctx context.Context, url string) (watchArticleContent, error) {
+		mu.Lock()
+		if existing, ok := results[url]; ok {
+			mu.Unlock()
+			select {
+			case <-ctx.Done():
+				return watchArticleContent{}, ctx.Err()
+			case <-existing.ready:
+				return existing.content, existing.err
+			}
+		}
+
+		result := &memoizedWatchArticleContentResult{ready: make(chan struct{})}
+		results[url] = result
+		mu.Unlock()
+
+		result.content, result.err = fetch(ctx, url)
+		mu.Lock()
+		if result.err != nil {
+			// A later collection may retry a transient failure instead of keeping
+			// the failure cached for the rest of the run.
+			delete(results, url)
+		}
+		close(result.ready)
+		mu.Unlock()
+		return result.content, result.err
+	}
+}
+
 type watchArticleContentResult struct {
 	item    model.WatchIndexItem
 	content watchArticleContent

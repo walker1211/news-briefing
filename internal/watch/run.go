@@ -269,7 +269,7 @@ func runAnthropicSupportSite(ctx context.Context, site config.WatchSite, now tim
 		Hash:       hashSnapshotItems(homeItems),
 	}
 
-	fetchContent := func(ctx context.Context, url string) (watchArticleContent, error) {
+	fetchContent := memoizeWatchArticleContentFetcher(func(ctx context.Context, url string) (watchArticleContent, error) {
 		articleHTML, err := fetchHTML(ctx, url)
 		if err != nil {
 			return watchArticleContent{}, err
@@ -279,7 +279,7 @@ func runAnthropicSupportSite(ctx context.Context, site config.WatchSite, now tim
 			return watchArticleContent{}, err
 		}
 		return watchArticleContent{title: title, summary: summary, body: body}, nil
-	}
+	})
 
 	articles := make([]model.Article, 0)
 	seenItems := make([]model.WatchSeenArticle, 0)

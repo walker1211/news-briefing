@@ -22,6 +22,7 @@ type BriefingSummary struct {
 	Stories        []BriefingStory         `json:"stories"`
 	Situation      string                  `json:"situation"`
 	Directions     []BriefingDirection     `json:"directions"`
+	XHSTopics      []string                `json:"xhs_topics,omitempty"`
 }
 
 type BriefingOverviewGroup struct {
