@@ -191,6 +191,71 @@ func TestValidateBriefingSummaryImagesBackfillsFromSourceArticleIDs(t *testing.T
 	}
 }
 
+func TestValidateAndNormalizeBriefingSummaryReferencesRejectsCrossCategorySource(t *testing.T) {
+	articles := []model.Article{
+		{Category: "AI/科技", Source: "AI Source", Title: "AI story"},
+		{Category: "国际政治", Source: "World Source", Title: "World story"},
+	}
+	summary := model.BriefingSummary{Stories: []model.BriefingStory{{
+		Category:         "AI/科技",
+		Title:            "Mismatched story",
+		SourceArticleIDs: []int{2},
+	}}}
+
+	_, err := validateAndNormalizeBriefingSummaryReferences(summary, articles, time.UTC)
+	if err == nil || !strings.Contains(err.Error(), `category "AI/科技" references article 2 from category "国际政治"`) {
+		t.Fatalf("validate references error = %v, want category mismatch", err)
+	}
+}
+
+func TestValidateAndNormalizeBriefingSummaryReferencesRejectsMissingAndInvalidIDs(t *testing.T) {
+	articles := []model.Article{{Category: "AI/科技", Source: "AI Source"}}
+	tests := []struct {
+		name    string
+		ids     []int
+		wantErr string
+	}{
+		{name: "missing", wantErr: "has no source_article_ids"},
+		{name: "zero", ids: []int{0}, wantErr: "outside 1..1"},
+		{name: "too large", ids: []int{2}, wantErr: "outside 1..1"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			summary := model.BriefingSummary{Stories: []model.BriefingStory{{Category: "AI/科技", Title: "Story", SourceArticleIDs: tc.ids}}}
+			_, err := validateAndNormalizeBriefingSummaryReferences(summary, articles, time.UTC)
+			if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+				t.Fatalf("validate references error = %v, want %q", err, tc.wantErr)
+			}
+		})
+	}
+}
+
+func TestValidateAndNormalizeBriefingSummaryReferencesBuildsSourceLine(t *testing.T) {
+	articles := []model.Article{
+		{Category: "AI/科技", Source: "Source B", Published: time.Date(2026, 8, 11, 9, 30, 0, 0, time.UTC)},
+		{Category: "AI/科技", Source: "Source A", Published: time.Date(2026, 8, 11, 8, 0, 0, 0, time.UTC)},
+		{Category: "AI/科技", Source: "Source B", Published: time.Date(2026, 8, 11, 9, 0, 0, 0, time.UTC)},
+	}
+	summary := model.BriefingSummary{Stories: []model.BriefingStory{{
+		Category:         " AI/科技 ",
+		Title:            "Story",
+		SourceArticleIDs: []int{1, 2, 1, 3},
+		SourceLine:       "来源: AI 自由生成的错误来源",
+	}}}
+
+	got, err := validateAndNormalizeBriefingSummaryReferences(summary, articles, time.UTC)
+	if err != nil {
+		t.Fatal(err)
+	}
+	story := got.Stories[0]
+	if !reflect.DeepEqual(story.SourceArticleIDs, []int{1, 2, 3}) {
+		t.Fatalf("source ids = %v, want deduplicated ids", story.SourceArticleIDs)
+	}
+	if story.SourceLine != "来源: Source B、Source A | 2026-08-11 08:00 至 2026-08-11 09:30" {
+		t.Fatalf("source line = %q", story.SourceLine)
+	}
+}
+
 func TestValidateBriefingSummaryImagesSkipsTrackingPixelBackfill(t *testing.T) {
 	articles := []model.Article{{ImageURL: "https://media.npr.org/include/images/tracking/npr-rss-pixel.png?story=nx-s1"}}
 	summary := model.BriefingSummary{Stories: []model.BriefingStory{{SourceArticleIDs: []int{1}}}}

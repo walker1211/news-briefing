@@ -289,6 +289,46 @@ func TestFetchWindowDetailedAppliesCategoryFiltersExcludesSourceLimitsAndStats(t
 	}
 }
 
+func TestFilterCandidateRequiresStrongOrEnoughWeakKeywords(t *testing.T) {
+	cfg := &config.Config{Filters: config.FiltersConfig{Categories: map[string]config.CategoryFilterConfig{
+		"AI/科技": {
+			IncludeKeywords:       []string{"OpenAI"},
+			WeakKeywords:          []string{"Google", "模型", "开源"},
+			MinWeakKeywordMatches: 2,
+		},
+	}}}
+	filters := newFilterContext(cfg)
+	tests := []struct {
+		name    string
+		title   string
+		matched bool
+	}{
+		{name: "strong", title: "OpenAI 发布新能力", matched: true},
+		{name: "single weak", title: "Google 发布搜索更新", matched: false},
+		{name: "two weak", title: "Google 发布开源模型", matched: true},
+		{name: "none", title: "普通消费电子新闻", matched: false},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			matched, _ := filterCandidate(model.Article{Category: "AI/科技", Title: tc.title}, config.Source{}, filters)
+			if got := len(matched) > 0; got != tc.matched {
+				t.Fatalf("matched = %v (%v), want %v", got, matched, tc.matched)
+			}
+		})
+	}
+}
+
+func TestFilterCandidateDefaultsToTwoWeakKeywords(t *testing.T) {
+	cfg := &config.Config{Filters: config.FiltersConfig{Categories: map[string]config.CategoryFilterConfig{
+		"新闻财经": {WeakKeywords: []string{"企业", "投资"}},
+	}}}
+	filters := newFilterContext(cfg)
+	matched, _ := filterCandidate(model.Article{Category: "新闻财经", Title: "企业增加投资"}, config.Source{}, filters)
+	if !reflect.DeepEqual(matched, []string{"企业", "投资"}) {
+		t.Fatalf("matched = %v", matched)
+	}
+}
+
 func TestFetchWindowDetailedDoesNotMarkFilteredCandidatesSeen(t *testing.T) {
 	from := time.Date(2026, 3, 18, 8, 0, 0, 0, time.UTC)
 	to := from.Add(6 * time.Hour)

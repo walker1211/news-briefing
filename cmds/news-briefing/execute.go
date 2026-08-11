@@ -767,8 +767,18 @@ func (app *app) configuredSourcePriorities() map[string]int {
 	return priorities
 }
 
+func (app *app) configuredArticleRanking() articleRankingConfig {
+	if app == nil || app.cfg == nil {
+		return articleRankingConfig{}
+	}
+	return articleRankingConfig{
+		priorities: app.configuredSourcePriorities(),
+		categories: app.cfg.Filters.Categories,
+	}
+}
+
 func (app *app) applyBriefingArticleLimits(articles []model.Article, filteredArticles []model.Article, limits map[string]int) ([]model.Article, []model.Article, articleLimitReport, error) {
-	return applyBriefingArticleLimitsWithSourcePriorities(articles, filteredArticles, limits, app.configuredSourcePriorities())
+	return applyBriefingArticleLimitsWithRanking(articles, filteredArticles, limits, app.configuredArticleRanking())
 }
 
 type articleLimitCategoryReport struct {
@@ -791,11 +801,15 @@ func applyBriefingArticleLimits(articles []model.Article, filteredArticles []mod
 }
 
 func applyBriefingArticleLimitsWithSourcePriorities(articles []model.Article, filteredArticles []model.Article, limits map[string]int, priorities map[string]int) ([]model.Article, []model.Article, articleLimitReport, error) {
+	return applyBriefingArticleLimitsWithRanking(articles, filteredArticles, limits, articleRankingConfig{priorities: priorities})
+}
+
+func applyBriefingArticleLimitsWithRanking(articles []model.Article, filteredArticles []model.Article, limits map[string]int, ranking articleRankingConfig) ([]model.Article, []model.Article, articleLimitReport, error) {
 	if len(limits) == 0 {
 		return articles, filteredArticles, articleLimitReport{}, nil
 	}
 	original := articles
-	articles = filterArticlesByCategoryLimitsWithSourcePriorities(articles, limits, priorities)
+	articles = filterArticlesByCategoryLimitsWithRanking(articles, limits, ranking)
 	filteredArticles = nil
 	report := buildArticleLimitReport(original, articles, limits)
 	logutil.Printf("Article limits by category: %s", report.summaryString())
@@ -885,28 +899,64 @@ func filterArticlesByCategoryLimits(articles []model.Article, limits map[string]
 }
 
 type rankedArticleIndex struct {
-	index    int
-	priority int
+	index            int
+	priority         int
+	baseScore        int
+	duplicatePenalty int
+	published        time.Time
+	titleFingerprint map[string]struct{}
+}
+
+type articleRankingConfig struct {
+	priorities map[string]int
+	categories map[string]config.CategoryFilterConfig
 }
 
 func filterArticlesByCategoryLimitsWithSourcePriorities(articles []model.Article, limits map[string]int, priorities map[string]int) []model.Article {
+	return filterArticlesByCategoryLimitsWithRanking(articles, limits, articleRankingConfig{priorities: priorities})
+}
+
+func filterArticlesByCategoryLimitsWithRanking(articles []model.Article, limits map[string]int, ranking articleRankingConfig) []model.Article {
 	byCategory := make(map[string][]rankedArticleIndex, len(limits))
+	newestByCategory := make(map[string]time.Time, len(limits))
+	for _, article := range articles {
+		category := normalizedArticleCategory(article.Category)
+		if _, ok := limits[category]; !ok || article.Published.IsZero() {
+			continue
+		}
+		if newest := newestByCategory[category]; newest.IsZero() || article.Published.After(newest) {
+			newestByCategory[category] = article.Published
+		}
+	}
 	for index, article := range articles {
 		category := normalizedArticleCategory(article.Category)
 		if _, ok := limits[category]; !ok {
 			continue
 		}
+		priority := ranking.priorities[strings.TrimSpace(article.Source)]
 		byCategory[category] = append(byCategory[category], rankedArticleIndex{
-			index:    index,
-			priority: priorities[strings.TrimSpace(article.Source)],
+			index:            index,
+			priority:         priority,
+			baseScore:        priority*5 + articleKeywordRankingScore(article, ranking.categories[category]) + articleFreshnessRankingScore(article.Published, newestByCategory[category]),
+			published:        article.Published,
+			titleFingerprint: articleTitleFingerprint(article.Title),
 		})
 	}
 
 	selected := make([]bool, len(articles))
 	for category, candidates := range byCategory {
+		applyNearDuplicateRankingPenalties(candidates)
 		sort.SliceStable(candidates, func(i, j int) bool {
+			leftScore := candidates[i].baseScore - candidates[i].duplicatePenalty
+			rightScore := candidates[j].baseScore - candidates[j].duplicatePenalty
+			if leftScore != rightScore {
+				return leftScore > rightScore
+			}
 			if candidates[i].priority != candidates[j].priority {
 				return candidates[i].priority > candidates[j].priority
+			}
+			if !candidates[i].published.Equal(candidates[j].published) {
+				return candidates[i].published.After(candidates[j].published)
 			}
 			return candidates[i].index < candidates[j].index
 		})
@@ -926,6 +976,92 @@ func filterArticlesByCategoryLimitsWithSourcePriorities(articles []model.Article
 		}
 	}
 	return out
+}
+
+func articleKeywordRankingScore(article model.Article, filter config.CategoryFilterConfig) int {
+	titleStrong := len(fetcher.MatchKeywords(article.Title, filter.IncludeKeywords))
+	summaryStrong := len(fetcher.MatchKeywords(article.Summary, filter.IncludeKeywords))
+	titleWeak := len(fetcher.MatchKeywords(article.Title, filter.WeakKeywords))
+	summaryWeak := len(fetcher.MatchKeywords(article.Summary, filter.WeakKeywords))
+	score := titleStrong*120 + summaryStrong*50 + titleWeak*35 + summaryWeak*15
+	if score > 400 {
+		return 400
+	}
+	return score
+}
+
+func articleFreshnessRankingScore(published time.Time, newest time.Time) int {
+	if published.IsZero() || newest.IsZero() {
+		return 0
+	}
+	age := newest.Sub(published)
+	if age < 0 {
+		age = 0
+	}
+	score := 100 - int(age/time.Hour)*5
+	if score < 0 {
+		return 0
+	}
+	return score
+}
+
+func applyNearDuplicateRankingPenalties(candidates []rankedArticleIndex) {
+	for left := 0; left < len(candidates); left++ {
+		for right := left + 1; right < len(candidates); right++ {
+			if articleTitleSimilarity(candidates[left].titleFingerprint, candidates[right].titleFingerprint) < 0.72 {
+				continue
+			}
+			loser := right
+			if rankedArticleBetter(candidates[right], candidates[left]) {
+				loser = left
+			}
+			candidates[loser].duplicatePenalty += 600
+		}
+	}
+}
+
+func rankedArticleBetter(left rankedArticleIndex, right rankedArticleIndex) bool {
+	if left.baseScore != right.baseScore {
+		return left.baseScore > right.baseScore
+	}
+	if left.priority != right.priority {
+		return left.priority > right.priority
+	}
+	if !left.published.Equal(right.published) {
+		return left.published.After(right.published)
+	}
+	return left.index < right.index
+}
+
+func articleTitleFingerprint(title string) map[string]struct{} {
+	runes := make([]rune, 0, len(title))
+	for _, char := range strings.ToLower(title) {
+		if unicode.IsLetter(char) || unicode.IsNumber(char) {
+			runes = append(runes, char)
+		}
+	}
+	if len(runes) < 4 {
+		return nil
+	}
+	fingerprint := make(map[string]struct{}, len(runes)-1)
+	for index := 0; index+1 < len(runes); index++ {
+		fingerprint[string(runes[index:index+2])] = struct{}{}
+	}
+	return fingerprint
+}
+
+func articleTitleSimilarity(left map[string]struct{}, right map[string]struct{}) float64 {
+	if len(left) == 0 || len(right) == 0 {
+		return 0
+	}
+	intersection := 0
+	for gram := range left {
+		if _, ok := right[gram]; ok {
+			intersection++
+		}
+	}
+	union := len(left) + len(right) - intersection
+	return float64(intersection) / float64(union)
 }
 
 type aiBriefingAttempt struct {
@@ -988,7 +1124,7 @@ func (app *app) aiBriefingAttempts(articles []model.Article) ([]aiBriefingAttemp
 		return attempts, nil
 	}
 	for _, level := range app.cfg.Output.Fallback.Levels {
-		limited := filterArticlesByCategoryLimitsWithSourcePriorities(articles, level.MaxArticlesByCategory, app.configuredSourcePriorities())
+		limited := filterArticlesByCategoryLimitsWithRanking(articles, level.MaxArticlesByCategory, app.configuredArticleRanking())
 		if len(limited) == 0 {
 			return nil, fmt.Errorf("fallback %q leaves no articles", level.Name)
 		}

@@ -96,6 +96,7 @@ type Source struct {
 	Type               string   `yaml:"type"`
 	Category           string   `yaml:"category"`
 	Keywords           []string `yaml:"keywords"`
+	MaxItems           int      `yaml:"max_items"`
 	PageKind           string   `yaml:"page_kind"`
 	TimeHint           string   `yaml:"time_hint"`
 	RSSHubAccessKeyEnv string   `yaml:"rsshub_access_key_env"`
@@ -107,8 +108,10 @@ type FiltersConfig struct {
 }
 
 type CategoryFilterConfig struct {
-	IncludeKeywords []string `yaml:"include_keywords"`
-	ExcludeKeywords []string `yaml:"exclude_keywords"`
+	IncludeKeywords       []string `yaml:"include_keywords"`
+	WeakKeywords          []string `yaml:"weak_keywords"`
+	MinWeakKeywordMatches int      `yaml:"min_weak_keyword_matches"`
+	ExcludeKeywords       []string `yaml:"exclude_keywords"`
 }
 
 type SourceFilterConfig struct {
@@ -688,6 +691,18 @@ func validateFilters(filters FiltersConfig) error {
 		if err := validateKeywordList(field+".include_keywords", filter.IncludeKeywords); err != nil {
 			return err
 		}
+		if err := validateKeywordList(field+".weak_keywords", filter.WeakKeywords); err != nil {
+			return err
+		}
+		if filter.MinWeakKeywordMatches < 0 {
+			return fmt.Errorf("validate %s.min_weak_keyword_matches: must be zero or greater", field)
+		}
+		if filter.MinWeakKeywordMatches > 0 && len(filter.WeakKeywords) == 0 {
+			return fmt.Errorf("validate %s.min_weak_keyword_matches: requires weak_keywords", field)
+		}
+		if err := validateDistinctKeywordLists(field, filter.IncludeKeywords, filter.WeakKeywords); err != nil {
+			return err
+		}
 		if err := validateKeywordList(field+".exclude_keywords", filter.ExcludeKeywords); err != nil {
 			return err
 		}
@@ -708,6 +723,19 @@ func validateFilters(filters FiltersConfig) error {
 		}
 		if err := validateKeywordList(field+".exclude_keywords", filter.ExcludeKeywords); err != nil {
 			return err
+		}
+	}
+	return nil
+}
+
+func validateDistinctKeywordLists(field string, strong []string, weak []string) error {
+	seen := make(map[string]struct{}, len(strong))
+	for _, keyword := range strong {
+		seen[strings.ToLower(strings.TrimSpace(keyword))] = struct{}{}
+	}
+	for index, keyword := range weak {
+		if _, ok := seen[strings.ToLower(strings.TrimSpace(keyword))]; ok {
+			return fmt.Errorf("validate %s.weak_keywords[%d]: keyword %q also appears in include_keywords", field, index, keyword)
 		}
 	}
 	return nil
@@ -765,6 +793,12 @@ func validateSource(index int, source Source) error {
 	}
 	if _, ok := supportedSourceTypes[kind]; !ok {
 		return fmt.Errorf("validate %s.type: unsupported source type %q", prefix, source.Type)
+	}
+	if source.MaxItems < 0 {
+		return fmt.Errorf("validate %s.max_items: must be zero or greater", prefix)
+	}
+	if source.MaxItems > 0 && kind != SourceTypeRSS {
+		return fmt.Errorf("validate %s.max_items: only rss sources support item limits", prefix)
 	}
 	if strings.TrimSpace(source.URL) == "" {
 		if kind == SourceTypeHackerNews {
