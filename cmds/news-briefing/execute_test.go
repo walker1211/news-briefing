@@ -427,6 +427,37 @@ func TestRenderBriefingReturnsPublishHookFailure(t *testing.T) {
 	}
 }
 
+func TestRenderBriefingWarnsWithoutFailingWhenPublishHookIsBestEffort(t *testing.T) {
+	cfg := executeTestConfig(t, model.OutputModeOriginalOnly)
+	cfg.PublishHook = config.PublishHookConfig{
+		Enabled:       true,
+		Command:       "content-publisher",
+		Args:          []string{"publish-all", "--file", "{markdown_file}"},
+		FailurePolicy: config.PublishHookFailurePolicyWarn,
+	}
+	app := &app{
+		cfg: cfg,
+		output: outputDeps{
+			printFailed:   func([]fetcher.FailedSource) {},
+			printArticles: func([]model.Article) {},
+			printCLI:      func(*model.Briefing) {},
+			composeBody: func(string, model.OutputMode, model.OutputContent) (string, error) {
+				return "body", nil
+			},
+			writeMarkdown: func(*model.Briefing, string) (string, error) {
+				return filepath.Join(cfg.Output.Dir, "briefing.md"), nil
+			},
+		},
+		publishHook: func(context.Context, config.PublishHookConfig, publishHookRequest) error {
+			return errors.New("hook boom")
+		},
+	}
+
+	if err := app.renderBriefingContext(context.Background(), "run", "26.06.04", "0800", sampleExecuteArticles(), nil, nil, nil, false, false); err != nil {
+		t.Fatalf("renderBriefingContext() error = %v, want nil", err)
+	}
+}
+
 func TestNewAppWaitContextHonorsCancellation(t *testing.T) {
 	app := newApp(executeTestConfig(t, model.OutputModeOriginalOnly))
 	ctx, cancel := context.WithCancel(context.Background())

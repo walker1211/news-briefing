@@ -237,9 +237,23 @@ type ArticleLimitLevel struct {
 }
 
 type PublishHookConfig struct {
-	Enabled bool     `yaml:"enabled"`
-	Command string   `yaml:"command"`
-	Args    []string `yaml:"args"`
+	Enabled       bool     `yaml:"enabled"`
+	Command       string   `yaml:"command"`
+	Args          []string `yaml:"args"`
+	FailurePolicy string   `yaml:"failure_policy"`
+}
+
+const (
+	PublishHookFailurePolicyFail = "fail"
+	PublishHookFailurePolicyWarn = "warn"
+)
+
+func (cfg PublishHookConfig) EffectiveFailurePolicy() string {
+	policy := strings.TrimSpace(cfg.FailurePolicy)
+	if policy == "" {
+		return PublishHookFailurePolicyFail
+	}
+	return policy
 }
 
 type Proxy struct {
@@ -641,6 +655,11 @@ func (cfg *Config) Validate() error {
 	}
 	if err := validateProxy(cfg.Proxy); err != nil {
 		return err
+	}
+	switch cfg.PublishHook.EffectiveFailurePolicy() {
+	case PublishHookFailurePolicyFail, PublishHookFailurePolicyWarn:
+	default:
+		return fmt.Errorf("validate publish_hook.failure_policy: must be fail or warn")
 	}
 	return nil
 }
