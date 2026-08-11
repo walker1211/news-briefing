@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -669,7 +670,7 @@ func TestRunBackfillsMissingArticleStateForExistingCategoryBaseline(t *testing.T
 
 	responses["https://support.claude.com/zh-CN/articles/14328960-claude-上的-身份验证"] = `<html><head><title>Claude 上的身份验证</title><meta name="description" content="某些使用场景需要提供政府颁发的身份证件与实时自拍。" /></head><body><article><h1>Claude 上的身份验证</h1><p>某些使用场景需要提供政府颁发的身份证件与实时自拍。</p><p>新增了实时自拍与手机号码交叉校验。</p></article></body></html>`
 
-	articles, report, err = runContext(context.Background(), cfg, time.Date(2026, 4, 15, 17, 0, 0, 0, time.UTC), fetchHTML)
+	articles, report, err = runContext(context.Background(), cfg, time.Date(2026, 4, 16, 17, 0, 0, 0, time.UTC), fetchHTML)
 	if err != nil {
 		t.Fatalf("Run() second error = %v", err)
 	}
@@ -1092,7 +1093,7 @@ func TestRunContentChangedUpdatesSeenState(t *testing.T) {
 	}
 }
 
-func TestRunWatchCategoryChecksExistingArticlesConcurrently(t *testing.T) {
+func TestRunWatchCategoryDeepVerifiesOldestDueArticlesConcurrently(t *testing.T) {
 	now := time.Date(2026, 6, 14, 12, 0, 0, 0, time.UTC)
 	items := []model.WatchIndexItem{
 		{Title: "Article 1", URL: "https://example.com/1", ItemHash: "1"},
@@ -1105,10 +1106,11 @@ func TestRunWatchCategoryChecksExistingArticlesConcurrently(t *testing.T) {
 	for _, item := range items {
 		titles[item.URL] = item.Title
 		articleState[item.URL] = model.WatchArticleState{
-			URL:         item.URL,
-			Title:       item.Title,
-			SummaryHash: hashWatchContent("summary"),
-			BodyHash:    hashWatchContent("body"),
+			URL:           item.URL,
+			Title:         item.Title,
+			SummaryHash:   hashWatchContent("summary"),
+			BodyHash:      hashWatchContent("body"),
+			LastCheckedAt: now.Add(-48 * time.Hour),
 		}
 	}
 	indexState := IndexState{Categories: map[string]model.WatchIndexSnapshot{
@@ -1138,14 +1140,16 @@ func TestRunWatchCategoryChecksExistingArticlesConcurrently(t *testing.T) {
 	}
 
 	articles, seenItems, events, err := runWatchCategory(context.Background(), watchCategoryRun{
-		site:               config.WatchSite{Name: "source"},
-		now:                now,
-		stateKey:           "source::category",
-		current:            indexState.Categories["source::category"],
-		indexState:         indexState,
-		articleState:       articleState,
-		fetchContent:       fetchContent,
-		articleConcurrency: 2,
+		site:                config.WatchSite{Name: "source"},
+		now:                 now,
+		stateKey:            "source::category",
+		current:             indexState.Categories["source::category"],
+		indexState:          indexState,
+		articleState:        articleState,
+		fetchContent:        fetchContent,
+		articleConcurrency:  2,
+		deepVerifyInterval:  24 * time.Hour,
+		deepVerifyBatchSize: len(items),
 	})
 	if err != nil {
 		t.Fatalf("runWatchCategory() error = %v", err)
@@ -1158,5 +1162,71 @@ func TestRunWatchCategoryChecksExistingArticlesConcurrently(t *testing.T) {
 	}
 	if maxInFlight != 2 {
 		t.Fatalf("maxInFlight = %d, want configured concurrency 2", maxInFlight)
+	}
+}
+
+func TestRunWatchCategorySkipsFreshArticleBodies(t *testing.T) {
+	now := time.Date(2026, 6, 14, 12, 0, 0, 0, time.UTC)
+	item := model.WatchIndexItem{Title: "Article", URL: "https://example.com/1", ItemHash: "1"}
+	indexState := IndexState{Categories: map[string]model.WatchIndexSnapshot{
+		"source::category": {Category: "category", ItemCount: 1, Items: []model.WatchIndexItem{item}},
+	}}
+	articleState := ArticleState{item.URL: {
+		URL: item.URL, Title: item.Title,
+		SummaryHash: hashWatchContent("summary"), BodyHash: hashWatchContent("body"),
+		LastCheckedAt: now.Add(-time.Hour),
+	}}
+	calls := 0
+	_, _, events, err := runWatchCategory(context.Background(), watchCategoryRun{
+		site: config.WatchSite{Name: "source"}, now: now, stateKey: "source::category",
+		current: indexState.Categories["source::category"], indexState: indexState,
+		articleState: articleState, articleConcurrency: 2,
+		deepVerifyInterval: 24 * time.Hour, deepVerifyBatchSize: 48,
+		fetchContent: func(context.Context, string) (watchArticleContent, error) {
+			calls++
+			return watchArticleContent{}, nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("runWatchCategory() error = %v", err)
+	}
+	if calls != 0 || len(events) != 0 {
+		t.Fatalf("calls=%d events=%#v, want fast index-only path", calls, events)
+	}
+}
+
+func TestRunWatchCategoryBoundsDeepVerificationBatch(t *testing.T) {
+	now := time.Date(2026, 6, 14, 12, 0, 0, 0, time.UTC)
+	items := []model.WatchIndexItem{
+		{Title: "oldest", URL: "https://example.com/1", Position: 1, ItemHash: "1"},
+		{Title: "middle", URL: "https://example.com/2", Position: 2, ItemHash: "2"},
+		{Title: "newest", URL: "https://example.com/3", Position: 3, ItemHash: "3"},
+	}
+	articleState := ArticleState{}
+	for i, item := range items {
+		articleState[item.URL] = model.WatchArticleState{URL: item.URL, Title: item.Title,
+			SummaryHash: hashWatchContent("summary"), BodyHash: hashWatchContent("body"),
+			LastCheckedAt: now.Add(time.Duration(i-4) * 24 * time.Hour)}
+	}
+	indexState := IndexState{Categories: map[string]model.WatchIndexSnapshot{
+		"source::category": {Category: "category", ItemCount: len(items), Items: items},
+	}}
+	fetched := []string{}
+	_, _, _, err := runWatchCategory(context.Background(), watchCategoryRun{
+		site: config.WatchSite{Name: "source"}, now: now, stateKey: "source::category",
+		current: indexState.Categories["source::category"], indexState: indexState,
+		articleState: articleState, articleConcurrency: 1,
+		deepVerifyInterval: 24 * time.Hour, deepVerifyBatchSize: 2,
+		fetchContent: func(_ context.Context, url string) (watchArticleContent, error) {
+			fetched = append(fetched, url)
+			state := articleState[url]
+			return watchArticleContent{title: state.Title, summary: "summary", body: "body"}, nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("runWatchCategory() error = %v", err)
+	}
+	if !slices.Equal(fetched, []string{items[0].URL, items[1].URL}) {
+		t.Fatalf("fetched = %#v, want oldest two", fetched)
 	}
 }

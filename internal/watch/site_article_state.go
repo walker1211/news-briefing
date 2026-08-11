@@ -67,14 +67,16 @@ type watchArticleContentResult struct {
 }
 
 type watchCategoryRun struct {
-	site               config.WatchSite
-	now                time.Time
-	stateKey           string
-	current            model.WatchIndexSnapshot
-	indexState         IndexState
-	articleState       ArticleState
-	fetchContent       watchArticleContentFetcher
-	articleConcurrency int
+	site                config.WatchSite
+	now                 time.Time
+	stateKey            string
+	current             model.WatchIndexSnapshot
+	indexState          IndexState
+	articleState        ArticleState
+	fetchContent        watchArticleContentFetcher
+	articleConcurrency  int
+	deepVerifyInterval  time.Duration
+	deepVerifyBatchSize int
 }
 
 func runWatchCategory(ctx context.Context, run watchCategoryRun) ([]model.Article, []model.WatchSeenArticle, []model.WatchEvent, error) {
@@ -197,12 +199,43 @@ func updateCurrentWatchArticleStates(ctx context.Context, run watchCategoryRun, 
 	for _, url := range changedURLs {
 		changed[url] = struct{}{}
 	}
-	items := make([]model.WatchIndexItem, 0, len(run.current.Items))
+	interval := run.deepVerifyInterval
+	if interval <= 0 {
+		interval = config.DefaultWatchDeepVerifyInterval
+	}
+	batchSize := run.deepVerifyBatchSize
+	if batchSize < 1 {
+		batchSize = config.DefaultWatchDeepVerifyBatchSize
+	}
+	type deepVerifyCandidate struct {
+		item        model.WatchIndexItem
+		lastChecked time.Time
+	}
+	candidates := make([]deepVerifyCandidate, 0, len(run.current.Items))
 	for _, item := range run.current.Items {
 		if _, ok := changed[item.URL]; ok {
 			continue
 		}
-		items = append(items, item)
+		state, ok := run.articleState[item.URL]
+		if !ok || state.LastCheckedAt.IsZero() || !run.now.Before(state.LastCheckedAt.Add(interval)) {
+			candidates = append(candidates, deepVerifyCandidate{item: item, lastChecked: state.LastCheckedAt})
+		}
+	}
+	slices.SortStableFunc(candidates, func(a, b deepVerifyCandidate) int {
+		if a.lastChecked.Equal(b.lastChecked) {
+			return a.item.Position - b.item.Position
+		}
+		if a.lastChecked.Before(b.lastChecked) {
+			return -1
+		}
+		return 1
+	})
+	if len(candidates) > batchSize {
+		candidates = candidates[:batchSize]
+	}
+	items := make([]model.WatchIndexItem, len(candidates))
+	for i := range candidates {
+		items[i] = candidates[i].item
 	}
 	results, err := fetchWatchArticleContents(ctx, items, run.fetchContent, run.articleConcurrency)
 	if err != nil {

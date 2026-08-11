@@ -61,6 +61,8 @@ const (
 	DefaultWatchBrowseboxProxyPort        = 17997
 	DefaultWatchBrowseboxControllerPort   = 17998
 	DefaultWatchArticleConcurrency        = 8
+	DefaultWatchDeepVerifyInterval        = 24 * time.Hour
+	DefaultWatchDeepVerifyBatchSize       = 48
 	DefaultXRefreshWaitTimeout            = 10 * time.Minute
 	DefaultXRefreshWaitInterval           = 5 * time.Second
 	DefaultXRefreshReconcileInterval      = time.Minute
@@ -137,10 +139,14 @@ type FetchConfig struct {
 }
 
 type WatchConfig struct {
-	Sites                 []WatchSite        `yaml:"sites"`
-	ArticleConcurrencyRaw *int               `yaml:"article_concurrency"`
-	ArticleConcurrency    int                `yaml:"-"`
-	ProxyProvider         WatchProxyProvider `yaml:"proxy_provider"`
+	Sites                  []WatchSite        `yaml:"sites"`
+	ArticleConcurrencyRaw  *int               `yaml:"article_concurrency"`
+	ArticleConcurrency     int                `yaml:"-"`
+	DeepVerifyIntervalRaw  string             `yaml:"deep_verify_interval"`
+	DeepVerifyInterval     time.Duration      `yaml:"-"`
+	DeepVerifyBatchSizeRaw *int               `yaml:"deep_verify_batch_size"`
+	DeepVerifyBatchSize    int                `yaml:"-"`
+	ProxyProvider          WatchProxyProvider `yaml:"proxy_provider"`
 }
 
 type WatchProxyProvider struct {
@@ -358,6 +364,19 @@ func applyWatchDefaults(watch *WatchConfig) error {
 		watch.ArticleConcurrency = DefaultWatchArticleConcurrency
 	} else {
 		watch.ArticleConcurrency = *watch.ArticleConcurrencyRaw
+	}
+	if strings.TrimSpace(watch.DeepVerifyIntervalRaw) == "" {
+		watch.DeepVerifyIntervalRaw = DefaultWatchDeepVerifyInterval.String()
+	}
+	deepVerifyInterval, err := time.ParseDuration(strings.TrimSpace(watch.DeepVerifyIntervalRaw))
+	if err != nil {
+		return fmt.Errorf("parse watch.deep_verify_interval: %w", err)
+	}
+	watch.DeepVerifyInterval = deepVerifyInterval
+	if watch.DeepVerifyBatchSizeRaw == nil {
+		watch.DeepVerifyBatchSize = DefaultWatchDeepVerifyBatchSize
+	} else {
+		watch.DeepVerifyBatchSize = *watch.DeepVerifyBatchSizeRaw
 	}
 	provider := &watch.ProxyProvider
 	if !provider.Enabled {
@@ -638,6 +657,12 @@ func (cfg *Config) Validate() error {
 	}
 	if cfg.Watch.ArticleConcurrency < 1 {
 		return fmt.Errorf("validate watch.article_concurrency: must be at least 1")
+	}
+	if cfg.Watch.DeepVerifyInterval <= 0 {
+		return fmt.Errorf("validate watch.deep_verify_interval: must be greater than 0")
+	}
+	if cfg.Watch.DeepVerifyBatchSize < 1 {
+		return fmt.Errorf("validate watch.deep_verify_batch_size: must be at least 1")
 	}
 	for i, site := range cfg.Watch.Sites {
 		if err := validateWatchSite(i, site); err != nil {

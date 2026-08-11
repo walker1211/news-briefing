@@ -103,6 +103,9 @@ type sourceFetchResult struct {
 	Candidates          []fetchedCandidate
 	FetchedCount        int
 	RedditRateLimitWait time.Duration
+	FetchDuration       time.Duration
+	ResponseBytes       int64
+	CacheStatus         string
 }
 
 type sourceFetchFunc func(context.Context, config.Source, []string, time.Time) (sourceFetchResult, error)
@@ -121,6 +124,7 @@ type curlFetchFunc func(context.Context, string) ([]byte, error)
 type Client struct {
 	httpClient *http.Client
 	fetchCurl  curlFetchFunc
+	rssCache   *rssFeedCache
 }
 
 func NewClient(httpClient *http.Client) *Client {
@@ -128,6 +132,13 @@ func NewClient(httpClient *http.Client) *Client {
 		httpClient = DefaultHTTPClient()
 	}
 	return &Client{httpClient: httpClient, fetchCurl: fetchFeedWithCurlContext}
+}
+
+func (c *Client) SetRSSCacheDir(dir string) {
+	if c == nil || strings.TrimSpace(dir) == "" {
+		return
+	}
+	c.rssCache = newRSSFeedCache(dir)
 }
 
 func fetchRSSSource(ctx context.Context, src config.Source, keywords []string, since time.Time) (sourceFetchResult, error) {
@@ -367,8 +378,14 @@ func (acc *sourceStatsAccumulator) statForArticle(article model.Article, fallbac
 }
 
 func (acc *sourceStatsAccumulator) countFetched(result sourceFetchResult) {
+	entry := acc.statForArticle(model.Article{}, result.Source)
+	entry.FetchDurationMS += result.FetchDuration.Milliseconds()
+	entry.ResponseBytes += result.ResponseBytes
+	if result.CacheStatus != "" {
+		entry.CacheStatus = result.CacheStatus
+	}
 	if result.FetchedCount > 0 {
-		acc.statForArticle(model.Article{}, result.Source).Fetched += result.FetchedCount
+		entry.Fetched += result.FetchedCount
 		return
 	}
 	for _, candidate := range result.Candidates {

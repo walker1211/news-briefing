@@ -370,6 +370,10 @@ fetch:
 
 watch:
   article_concurrency: 8
+  # Normal runs only fetch changed/new article bodies. A bounded oldest-first
+  # audit still detects silent body changes without downloading the full corpus.
+  deep_verify_interval: 24h
+  deep_verify_batch_size: 48
   sites:
     - name: Anthropic Claude Support
       type: anthropic_support
