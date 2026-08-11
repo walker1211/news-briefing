@@ -483,6 +483,8 @@ output:
 
 publish_hook:
   enabled: false
+  # fail marks the whole briefing run failed; warn keeps the generated briefing successful.
+  failure_policy: fail
   command: ./content-publisher
   args:
     - publish-all

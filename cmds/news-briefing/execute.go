@@ -1424,6 +1424,9 @@ func (app *app) runPostMarkdownActions(ctx context.Context, briefing *model.Brie
 	hookErr := <-hookDone
 	if hookErr != nil {
 		logutil.Errorf("publish hook failed: %v", hookErr)
+		if app.cfg.PublishHook.EffectiveFailurePolicy() == config.PublishHookFailurePolicyWarn {
+			hookErr = nil
+		}
 	}
 	return errors.Join(emailErr, hookErr)
 }
