@@ -51,6 +51,18 @@ func TestBriefingPromptRequiresOverviewEmojisAndDetailedStoryFields(t *testing.T
 	}
 }
 
+func TestBriefingPromptRequestsReusableXHSTopics(t *testing.T) {
+	for _, want := range []string{
+		`"xhs_topics": ["话题1", "话题2", "话题3"]`,
+		"xhs_topics 输出 3 个适合整篇简报的小红书话题",
+		"每项不要带 #、空格或特殊符号",
+	} {
+		if !strings.Contains(briefingPrompt, want) {
+			t.Fatalf("briefingPrompt missing XHS topic rule %q", want)
+		}
+	}
+}
+
 func TestBriefingPromptUsesFollowupDirectionsInsteadOfTopicSuggestions(t *testing.T) {
 	for _, want := range []string{
 		"directions",

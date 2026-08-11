@@ -106,10 +106,11 @@ type cardManifest struct {
 }
 
 type cardManifestDoc struct {
-	Title   string   `json:"title"`
-	Date    string   `json:"date,omitempty"`
-	Period  string   `json:"period"`
-	Summary []string `json:"summary"`
+	Title     string   `json:"title"`
+	Date      string   `json:"date,omitempty"`
+	Period    string   `json:"period"`
+	Summary   []string `json:"summary"`
+	XHSTopics []string `json:"xhs_topics,omitempty"`
 }
 
 type cardManifestItem struct {
@@ -152,10 +153,11 @@ func buildCardManifest(briefing *model.Briefing, localizedImages map[string]stri
 		return manifest
 	}
 	manifest.Document = cardManifestDoc{
-		Title:   briefingTitle(briefing.Date, briefing.Period),
-		Date:    isoBriefingDate(briefing.Date),
-		Period:  briefing.Period,
-		Summary: briefingManifestSummary(briefing.StructuredSummary),
+		Title:     briefingTitle(briefing.Date, briefing.Period),
+		Date:      isoBriefingDate(briefing.Date),
+		Period:    briefing.Period,
+		Summary:   briefingManifestSummary(briefing.StructuredSummary),
+		XHSTopics: briefingManifestXHSTopics(briefing.StructuredSummary),
 	}
 	if briefing.StructuredSummary == nil {
 		manifest.Items = []cardManifestItem{}
@@ -212,6 +214,29 @@ func briefingManifestSummary(summary *model.BriefingSummary) []string {
 		}
 	}
 	return items
+}
+
+func briefingManifestXHSTopics(summary *model.BriefingSummary) []string {
+	if summary == nil {
+		return nil
+	}
+	topics := make([]string, 0, min(len(summary.XHSTopics), 4))
+	seen := make(map[string]struct{}, len(summary.XHSTopics))
+	for _, topic := range summary.XHSTopics {
+		topic = strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(topic), "#"))
+		if topic == "" {
+			continue
+		}
+		if _, ok := seen[topic]; ok {
+			continue
+		}
+		seen[topic] = struct{}{}
+		topics = append(topics, topic)
+		if len(topics) == 4 {
+			break
+		}
+	}
+	return topics
 }
 
 func isoBriefingDate(date string) string {

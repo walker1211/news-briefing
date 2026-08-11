@@ -14,6 +14,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -104,6 +105,7 @@ func TestWriteMarkdownWritesCardManifestFromStructuredBriefing(t *testing.T) {
 		},
 		StructuredSummary: &model.BriefingSummary{
 			OverviewGroups: []model.BriefingOverviewGroup{{Category: "AI/科技", Items: []string{"要点一", "要点二"}}},
+			XHSTopics:      []string{"#AI新闻", "科技资讯", "AI新闻", "财经观察", "国际新闻"},
 			Stories: []model.BriefingStory{
 				{Category: "AI/科技", Title: "OpenAI 发布新功能", Summary: "摘要正文", Impact: "影响正文", ImageURL: imageURL, SourceArticleIDs: []int{1}},
 				{Category: "国际政治", Title: "外交新闻", Summary: "不应进入 manifest", SourceArticleIDs: []int{2}},
@@ -139,10 +141,11 @@ func TestWriteMarkdownWritesCardManifestFromStructuredBriefing(t *testing.T) {
 		SchemaVersion string `json:"schema_version"`
 		SourceApp     string `json:"source_app"`
 		Document      struct {
-			Title   string   `json:"title"`
-			Date    string   `json:"date"`
-			Period  string   `json:"period"`
-			Summary []string `json:"summary"`
+			Title     string   `json:"title"`
+			Date      string   `json:"date"`
+			Period    string   `json:"period"`
+			Summary   []string `json:"summary"`
+			XHSTopics []string `json:"xhs_topics"`
 		} `json:"document"`
 		Items []struct {
 			ID          string `json:"id"`
@@ -167,6 +170,9 @@ func TestWriteMarkdownWritesCardManifestFromStructuredBriefing(t *testing.T) {
 	}
 	if got.Document.Title != "国际资讯简报 26.06.16 晚间 18:00" || got.Document.Date != "2026-06-16" || got.Document.Period != "1800" {
 		t.Fatalf("manifest document = %#v", got.Document)
+	}
+	if want := []string{"AI新闻", "科技资讯", "财经观察", "国际新闻"}; !reflect.DeepEqual(got.Document.XHSTopics, want) {
+		t.Fatalf("manifest xhs_topics = %#v, want %#v", got.Document.XHSTopics, want)
 	}
 	if strings.Join(got.Document.Summary, ",") != "要点一,要点二" {
 		t.Fatalf("manifest summary = %#v", got.Document.Summary)
