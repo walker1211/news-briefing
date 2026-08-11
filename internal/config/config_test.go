@@ -1508,6 +1508,58 @@ ai: {}
 	}
 }
 
+func TestLoadAppliesWatchDeepVerificationDefaults(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	content := `sources: []
+keywords: []
+fetch: {}
+watch: {}
+email: {}
+schedule: []
+output: {}
+proxy: {}
+ai: {}
+`
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if cfg.Watch.DeepVerifyInterval != 24*time.Hour || cfg.Watch.DeepVerifyBatchSize != 48 {
+		t.Fatalf("watch deep verification = %s/%d", cfg.Watch.DeepVerifyInterval, cfg.Watch.DeepVerifyBatchSize)
+	}
+}
+
+func TestLoadAppliesConfiguredWatchDeepVerification(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	content := `sources: []
+keywords: []
+fetch: {}
+watch:
+  deep_verify_interval: 12h
+  deep_verify_batch_size: 16
+email: {}
+schedule: []
+output: {}
+proxy: {}
+ai: {}
+`
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if cfg.Watch.DeepVerifyInterval != 12*time.Hour || cfg.Watch.DeepVerifyBatchSize != 16 {
+		t.Fatalf("watch deep verification = %s/%d", cfg.Watch.DeepVerifyInterval, cfg.Watch.DeepVerifyBatchSize)
+	}
+}
+
 func TestLoadRejectsInvalidWatchArticleConcurrency(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.yaml")

@@ -20,16 +20,18 @@ type SourceStatsWindow struct {
 }
 
 type SourceStatsTotals struct {
-	Fetched             int `json:"fetched"`
-	InWindow            int `json:"in_window"`
-	KeywordMatched      int `json:"keyword_matched"`
-	Filtered            int `json:"filtered"`
-	FilteredKeywordMiss int `json:"filtered_keyword_miss"`
-	FilteredExcluded    int `json:"filtered_excluded"`
-	FilteredSourceLimit int `json:"filtered_source_limit"`
-	AcceptedBeforeDedup int `json:"accepted_before_dedup"`
-	AcceptedAfterDedup  int `json:"accepted_after_dedup"`
-	EnteredAI           int `json:"entered_ai"`
+	Fetched             int   `json:"fetched"`
+	InWindow            int   `json:"in_window"`
+	KeywordMatched      int   `json:"keyword_matched"`
+	Filtered            int   `json:"filtered"`
+	FilteredKeywordMiss int   `json:"filtered_keyword_miss"`
+	FilteredExcluded    int   `json:"filtered_excluded"`
+	FilteredSourceLimit int   `json:"filtered_source_limit"`
+	AcceptedBeforeDedup int   `json:"accepted_before_dedup"`
+	AcceptedAfterDedup  int   `json:"accepted_after_dedup"`
+	EnteredAI           int   `json:"entered_ai"`
+	FetchDurationMS     int64 `json:"fetch_duration_ms"`
+	ResponseBytes       int64 `json:"response_bytes"`
 }
 
 type SourceStatsEntry struct {
@@ -46,6 +48,9 @@ type SourceStatsEntry struct {
 	AcceptedBeforeDedup int    `json:"accepted_before_dedup"`
 	AcceptedAfterDedup  int    `json:"accepted_after_dedup"`
 	EnteredAI           int    `json:"entered_ai"`
+	FetchDurationMS     int64  `json:"fetch_duration_ms,omitempty"`
+	ResponseBytes       int64  `json:"response_bytes,omitempty"`
+	CacheStatus         string `json:"cache_status,omitempty"`
 }
 
 type SourceStatsError struct {
@@ -103,6 +108,8 @@ func (report *SourceStatsReport) RecalculateTotals() {
 		totals.AcceptedBeforeDedup += source.AcceptedBeforeDedup
 		totals.AcceptedAfterDedup += source.AcceptedAfterDedup
 		totals.EnteredAI += source.EnteredAI
+		totals.FetchDurationMS += source.FetchDurationMS
+		totals.ResponseBytes += source.ResponseBytes
 	}
 	report.Totals = totals
 }

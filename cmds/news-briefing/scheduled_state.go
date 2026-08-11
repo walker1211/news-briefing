@@ -43,6 +43,7 @@ type scheduledStateFile struct {
 }
 
 type scheduledWindowState struct {
+	RunID       string            `json:"runId,omitempty"`
 	Expr        string            `json:"expr"`
 	Period      string            `json:"period"`
 	From        time.Time         `json:"from"`
@@ -160,6 +161,10 @@ func (app *app) scheduledStatePath() string {
 
 func scheduledRunWindowKey(window scheduler.Window) string {
 	return window.From.UTC().Format("20060102T150405Z") + "_" + window.To.UTC().Format("20060102T150405Z")
+}
+
+func scheduledRunID(window scheduler.Window) string {
+	return scheduledRunWindowKey(window)
 }
 
 func scheduledWindowFromState(record scheduledWindowState) (scheduler.Window, error) {
@@ -306,6 +311,7 @@ func (app *app) registerScheduledWindow(window scheduler.Window, dueAt time.Time
 			return false, nil
 		}
 		state.Windows[key] = scheduledWindowState{
+			RunID:     scheduledRunID(window),
 			Expr:      window.Expr,
 			Period:    window.Period,
 			From:      window.From,
@@ -338,7 +344,10 @@ func (app *app) markScheduledRunWaitingX(window scheduler.Window, trigger string
 			return false, nil
 		}
 		if !ok {
-			record = scheduledWindowState{Expr: window.Expr, Period: window.Period, From: window.From, To: window.To, DueAt: window.To}
+			record = scheduledWindowState{RunID: scheduledRunID(window), Expr: window.Expr, Period: window.Period, From: window.From, To: window.To, DueAt: window.To}
+		}
+		if record.RunID == "" {
+			record.RunID = scheduledRunID(window)
 		}
 		record.Status = scheduledStatusWaitingX
 		record.Trigger = trigger
@@ -378,7 +387,10 @@ func (app *app) acquireScheduledRunWindow(window scheduler.Window, trigger strin
 			return false, nil
 		}
 		if !ok {
-			record = scheduledWindowState{Expr: window.Expr, Period: window.Period, From: window.From, To: window.To, DueAt: window.To}
+			record = scheduledWindowState{RunID: scheduledRunID(window), Expr: window.Expr, Period: window.Period, From: window.From, To: window.To, DueAt: window.To}
+		}
+		if record.RunID == "" {
+			record.RunID = scheduledRunID(window)
 		}
 		emailAlreadySent = !record.EmailSentAt.IsZero()
 		record.Status = scheduledStatusRunning
