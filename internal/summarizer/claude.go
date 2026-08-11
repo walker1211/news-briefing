@@ -38,8 +38,7 @@ JSON 顶层结构必须是：
       "image_url": "输入 Image 字段原值或空字符串",
       "summary": "2-4句话摘要",
       "impact": "2-3句话影响分析",
-      "source_article_ids": [1],
-      "source_line": "来源: 来源名 | 时间"
+      "source_article_ids": [1]
     }
   ],
   "situation": "3句话今日整体态势",
@@ -59,6 +58,7 @@ stories 按下面新闻条目里出现的分类顺序输出；每个分类内部
 summary 用2-4句话说明关键事实、背景、数字、参与方和最新进展，不要只做一句话标题复述；如果多条相关新闻合并为同一 story，要交代各条新闻之间的关系。
 impact 用2-3句话说明为什么重要、影响哪些人或机构、后续观察变量，避免空泛地写“值得关注后续进展”。
 source_article_ids 必须使用输入新闻条目的 1-based 编号；合并多条新闻时列出所有来源编号。
+每个 story 只能引用与自身 category 完全相同的新闻条目。不要输出 source_line；来源名称和时间会由程序根据 source_article_ids 确定性生成。
 image_url 只能使用输入新闻条目中的 Image 字段原值；没有可用图片时使用空字符串。不要编造、改写或重新托管图片 URL。不要使用 tracking pixel、RSS 统计图、透明占位图或与 story 主体事件无直接关系的配图。多条新闻合并为同一 story 时，如果无法明确判断哪张图直接对应主标题事件，就把 image_url 设为空字符串。AI/科技 分类下的重要 story 如果 source_article_ids 对应新闻有 Image 字段，应优先使用其中最相关且确定对应的一张。
 xhs_topics 输出 3 个适合整篇简报的小红书话题，最多 4 个；每项不要带 #、空格或特殊符号，优先使用平台上容易识别的通用话题，不要直接复制冗长标题。
 
@@ -610,8 +610,89 @@ func (r *Runner) SummarizeBriefingContext(ctx context.Context, articles []model.
 	if err != nil {
 		return model.BriefingSummary{}, "", fmt.Errorf("parse structured briefing: %w", err)
 	}
+	structured, err = validateAndNormalizeBriefingSummaryReferences(structured, promptArticles, loc)
+	if err != nil {
+		return model.BriefingSummary{}, "", fmt.Errorf("validate structured briefing references: %w", err)
+	}
 	structured = validateBriefingSummaryImages(structured, promptArticles)
 	return structured, output.StructuredBriefingMarkdown(structured, categoryOrder), nil
+}
+
+func validateAndNormalizeBriefingSummaryReferences(summary model.BriefingSummary, articles []model.Article, loc *time.Location) (model.BriefingSummary, error) {
+	if loc == nil {
+		loc = time.Local
+	}
+	for index := range summary.Stories {
+		story := &summary.Stories[index]
+		story.Category = strings.TrimSpace(story.Category)
+		if story.Category == "" {
+			return model.BriefingSummary{}, fmt.Errorf("story %d has an empty category", index+1)
+		}
+		if len(story.SourceArticleIDs) == 0 {
+			return model.BriefingSummary{}, fmt.Errorf("story %d (%s) has no source_article_ids", index+1, story.Title)
+		}
+
+		seen := make(map[int]struct{}, len(story.SourceArticleIDs))
+		normalizedIDs := make([]int, 0, len(story.SourceArticleIDs))
+		sources := make([]model.Article, 0, len(story.SourceArticleIDs))
+		for _, id := range story.SourceArticleIDs {
+			articleIndex := id - 1
+			if articleIndex < 0 || articleIndex >= len(articles) {
+				return model.BriefingSummary{}, fmt.Errorf("story %d (%s) references article %d outside 1..%d", index+1, story.Title, id, len(articles))
+			}
+			if _, ok := seen[id]; ok {
+				continue
+			}
+			article := articles[articleIndex]
+			articleCategory := strings.TrimSpace(article.Category)
+			if articleCategory != story.Category {
+				return model.BriefingSummary{}, fmt.Errorf("story %d (%s) category %q references article %d from category %q", index+1, story.Title, story.Category, id, articleCategory)
+			}
+			seen[id] = struct{}{}
+			normalizedIDs = append(normalizedIDs, id)
+			sources = append(sources, article)
+		}
+		story.SourceArticleIDs = normalizedIDs
+		story.SourceLine = deterministicBriefingSourceLine(sources, loc)
+	}
+	return summary, nil
+}
+
+func deterministicBriefingSourceLine(articles []model.Article, loc *time.Location) string {
+	sourceNames := make([]string, 0, len(articles))
+	seenSources := make(map[string]struct{}, len(articles))
+	var earliest time.Time
+	var latest time.Time
+	for _, article := range articles {
+		source := strings.TrimSpace(article.Source)
+		if source != "" {
+			if _, ok := seenSources[source]; !ok {
+				seenSources[source] = struct{}{}
+				sourceNames = append(sourceNames, source)
+			}
+		}
+		if article.Published.IsZero() {
+			continue
+		}
+		published := article.Published.In(loc)
+		if earliest.IsZero() || published.Before(earliest) {
+			earliest = published
+		}
+		if latest.IsZero() || published.After(latest) {
+			latest = published
+		}
+	}
+	if len(sourceNames) == 0 {
+		sourceNames = append(sourceNames, "未知来源")
+	}
+	line := "来源: " + strings.Join(sourceNames, "、")
+	if earliest.IsZero() {
+		return line
+	}
+	if earliest.Equal(latest) {
+		return line + " | " + earliest.Format("2006-01-02 15:04")
+	}
+	return line + " | " + earliest.Format("2006-01-02 15:04") + " 至 " + latest.Format("2006-01-02 15:04")
 }
 
 func parseBriefingSummaryJSON(raw string) (model.BriefingSummary, error) {

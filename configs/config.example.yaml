@@ -19,6 +19,7 @@ sources:
     url: https://openai.com/news/rss.xml
     type: rss
     category: AI/科技
+    max_items: 50
   - name: Google Blog AI
     url: https://blog.google/innovation-and-ai/technology/ai/rss/
     type: rss
@@ -27,6 +28,7 @@ sources:
     url: https://huggingface.co/blog/feed.xml
     type: rss
     category: AI/科技
+    max_items: 50
   - name: GitHub Blog
     url: https://github.blog/feed/
     type: rss
@@ -185,12 +187,22 @@ filters:
         - Claude
         - Gemini
         - DeepMind
-        - GitHub
         - 大模型
         - 智能体
+      # A strong keyword is sufficient; otherwise at least two weak keywords must match.
+      weak_keywords:
+        - Google
+        - Microsoft
+        - GitHub
+        - Meta
+        - 模型
+        - 机器人
+        - 训练
         - 算力
+        - 开源
         - 芯片
         - 航天
+      min_weak_keyword_matches: 2
     新闻财经:
       include_keywords:
         - 国务院
@@ -198,8 +210,6 @@ filters:
         - 财政部
         - 央行
         - 房地产
-        - 消费
-        - 就业
         - A股
         - 港股
         - IPO
@@ -216,6 +226,17 @@ filters:
         - 创业板
         - 科创板
         - 碳达峰
+      weak_keywords:
+        - 中国
+        - 国内
+        - 消费
+        - 就业
+        - 企业
+        - 投资
+        - 银行
+        - 金融
+        - 贸易
+      min_weak_keyword_matches: 2
       exclude_keywords:
         - 文旅
         - 体育
@@ -233,9 +254,6 @@ filters:
         - 足球
     国际政治:
       include_keywords:
-        - China
-        - trade
-        - tariff
         - geopolitics
         - military
         - sanction
@@ -244,6 +262,15 @@ filters:
         - Israel
         - Russia
         - Ukraine
+      weak_keywords:
+        - China
+        - trade
+        - tariff
+        - EU
+        - war
+        - attack
+        - strike
+      min_weak_keyword_matches: 2
       exclude_keywords:
         - World Cup
         - football
@@ -254,6 +281,15 @@ filters:
       priority: 100
     GitHub Changelog:
       priority: 90
+    InfoQ 中文:
+      max_articles: 6
+      priority: 60
+    中新网财经:
+      max_articles: 10
+      priority: 60
+    中新网时政:
+      max_articles: 6
+      priority: 50
     第一财经:
       max_articles: 6
       priority: 70
@@ -274,7 +310,7 @@ filters:
         - game
         - gaming
     IT之家:
-      max_articles: 15
+      max_articles: 10
       priority: 40
       exclude_keywords:
         - 游戏
@@ -292,8 +328,29 @@ filters:
         - 存储
         - MB/s
     Reddit Singularity:
-      max_articles: 6
+      max_articles: 5
       priority: 10
+    Al Jazeera:
+      max_articles: 6
+      priority: 50
+    BBC News World:
+      max_articles: 6
+      priority: 60
+    EU Press Corner:
+      max_articles: 6
+      priority: 80
+    NPR World:
+      max_articles: 6
+      priority: 60
+    Reddit WorldNews:
+      max_articles: 5
+      priority: 10
+    The Diplomat:
+      max_articles: 6
+      priority: 50
+    UN News:
+      max_articles: 6
+      priority: 80
     X Search/search:Codex limits:
       max_articles: 3
     X/@thsottiaux:

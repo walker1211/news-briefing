@@ -1953,6 +1953,10 @@ filters:
       include_keywords:
         - 央行
         - IPO
+      weak_keywords:
+        - 企业
+        - 投资
+      min_weak_keyword_matches: 2
       exclude_keywords:
         - 体育
   sources:
@@ -1978,6 +1982,12 @@ ai: {}
 	category := cfg.Filters.Categories["新闻财经"]
 	if !reflect.DeepEqual(category.IncludeKeywords, []string{"央行", "IPO"}) {
 		t.Fatalf("IncludeKeywords = %#v", category.IncludeKeywords)
+	}
+	if !reflect.DeepEqual(category.WeakKeywords, []string{"企业", "投资"}) {
+		t.Fatalf("WeakKeywords = %#v", category.WeakKeywords)
+	}
+	if category.MinWeakKeywordMatches != 2 {
+		t.Fatalf("MinWeakKeywordMatches = %d, want 2", category.MinWeakKeywordMatches)
 	}
 	if !reflect.DeepEqual(category.ExcludeKeywords, []string{"体育"}) {
 		t.Fatalf("ExcludeKeywords = %#v", category.ExcludeKeywords)
@@ -2020,6 +2030,21 @@ func TestLoadRejectsInvalidFilters(t *testing.T) {
 			filter:  "filters:\n  sources:\n    Hacker News:\n      exclude_keywords:\n        - Sport\n        - sport\n",
 			wantErr: "duplicate keyword",
 		},
+		{
+			name:    "negative weak match minimum",
+			filter:  "filters:\n  categories:\n    AI/科技:\n      weak_keywords:\n        - 模型\n      min_weak_keyword_matches: -1\n",
+			wantErr: "min_weak_keyword_matches",
+		},
+		{
+			name:    "weak minimum without weak keywords",
+			filter:  "filters:\n  categories:\n    AI/科技:\n      include_keywords:\n        - OpenAI\n      min_weak_keyword_matches: 2\n",
+			wantErr: "requires weak_keywords",
+		},
+		{
+			name:    "keyword appears in strong and weak lists",
+			filter:  "filters:\n  categories:\n    AI/科技:\n      include_keywords:\n        - Model\n      weak_keywords:\n        - model\n",
+			wantErr: "also appears in include_keywords",
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -2032,6 +2057,39 @@ func TestLoadRejectsInvalidFilters(t *testing.T) {
 			_, err := Load(path)
 			if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
 				t.Fatalf("Load() error = %v, want %q", err, tt.wantErr)
+			}
+		})
+	}
+}
+
+func TestLoadRejectsInvalidSourceItemLimits(t *testing.T) {
+	tests := []struct {
+		name    string
+		source  string
+		wantErr string
+	}{
+		{
+			name:    "negative",
+			source:  "  - name: Feed\n    url: https://example.com/feed.xml\n    type: rss\n    category: AI/科技\n    max_items: -1\n",
+			wantErr: "max_items",
+		},
+		{
+			name:    "non rss",
+			source:  "  - name: HN\n    type: hackernews\n    category: AI/科技\n    max_items: 10\n",
+			wantErr: "only rss sources",
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			path := filepath.Join(dir, "config.yaml")
+			content := "sources:\n" + tc.source + "keywords: []\nemail: {}\nschedule: []\noutput: {}\nproxy: {}\nai: {}\n"
+			if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+				t.Fatalf("write config: %v", err)
+			}
+			_, err := Load(path)
+			if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+				t.Fatalf("Load() error = %v, want %q", err, tc.wantErr)
 			}
 		})
 	}

@@ -101,6 +101,7 @@ type fetchedCandidate struct {
 type sourceFetchResult struct {
 	Source              config.Source
 	Candidates          []fetchedCandidate
+	FetchedCount        int
 	RedditRateLimitWait time.Duration
 }
 
@@ -202,6 +203,12 @@ type sourceStatsAccumulator struct {
 type filterContext struct {
 	cfg     *config.Config
 	sources map[string]config.Source
+}
+
+type includeKeywordRule struct {
+	strong  []string
+	weak    []string
+	minWeak int
 }
 
 func newFilterContext(cfg *config.Config) filterContext {
@@ -360,6 +367,10 @@ func (acc *sourceStatsAccumulator) statForArticle(article model.Article, fallbac
 }
 
 func (acc *sourceStatsAccumulator) countFetched(result sourceFetchResult) {
+	if result.FetchedCount > 0 {
+		acc.statForArticle(model.Article{}, result.Source).Fetched += result.FetchedCount
+		return
+	}
 	for _, candidate := range result.Candidates {
 		acc.statForArticle(candidate.Article, result.Source).Fetched++
 	}
@@ -426,21 +437,33 @@ func articleSourceName(article model.Article, fallback config.Source) string {
 }
 
 func (ctx filterContext) includeKeywords(article model.Article, fallback config.Source) []string {
+	rule := ctx.includeKeywordRule(article, fallback)
+	out := make([]string, 0, len(rule.strong)+len(rule.weak))
+	out = append(out, rule.strong...)
+	out = append(out, rule.weak...)
+	return out
+}
+
+func (ctx filterContext) includeKeywordRule(article model.Article, fallback config.Source) includeKeywordRule {
 	if ctx.cfg == nil {
-		return nil
+		return includeKeywordRule{}
 	}
 	sourceName := articleSourceName(article, fallback)
 	if sourceFilter, ok := ctx.cfg.Filters.Sources[sourceName]; ok && len(sourceFilter.IncludeKeywords) > 0 {
-		return sourceFilter.IncludeKeywords
+		return includeKeywordRule{strong: sourceFilter.IncludeKeywords}
 	}
 	if source, ok := ctx.sources[sourceName]; ok && len(source.Keywords) > 0 {
-		return source.Keywords
+		return includeKeywordRule{strong: source.Keywords}
 	}
 	category := filterCategory(article, fallback, ctx.sources[sourceName])
-	if categoryFilter, ok := ctx.cfg.Filters.Categories[category]; ok && len(categoryFilter.IncludeKeywords) > 0 {
-		return categoryFilter.IncludeKeywords
+	if categoryFilter, ok := ctx.cfg.Filters.Categories[category]; ok && (len(categoryFilter.IncludeKeywords) > 0 || len(categoryFilter.WeakKeywords) > 0) {
+		minWeak := categoryFilter.MinWeakKeywordMatches
+		if minWeak == 0 {
+			minWeak = 2
+		}
+		return includeKeywordRule{strong: categoryFilter.IncludeKeywords, weak: categoryFilter.WeakKeywords, minWeak: minWeak}
 	}
-	return ctx.cfg.Keywords
+	return includeKeywordRule{strong: ctx.cfg.Keywords}
 }
 
 func (ctx filterContext) excludeKeywords(article model.Article, fallback config.Source) []string {
@@ -489,7 +512,12 @@ func articleKeywordText(article model.Article) string {
 
 func filterCandidate(article model.Article, fallback config.Source, filters filterContext) (matched []string, excluded []string) {
 	text := articleKeywordText(article)
-	matched = matchedKeywords(text, filters.includeKeywords(article, fallback))
+	rule := filters.includeKeywordRule(article, fallback)
+	strongMatches := matchedKeywords(text, rule.strong)
+	weakMatches := matchedKeywords(text, rule.weak)
+	if len(strongMatches) > 0 || (rule.minWeak > 0 && len(weakMatches) >= rule.minWeak) {
+		matched = append(strongMatches, weakMatches...)
+	}
 	excluded = matchedKeywords(text, filters.excludeKeywords(article, fallback))
 	return matched, excluded
 }

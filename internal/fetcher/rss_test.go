@@ -64,6 +64,33 @@ func TestFetchRSSTruncatesSummaryOnUTF8Boundary(t *testing.T) {
 	}
 }
 
+func TestFetchRSSSkipsOldItemsAndAppliesNewestItemLimit(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		w.Header().Set("Content-Type", "application/rss+xml")
+		_, _ = io.WriteString(w, `<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0"><channel><title>History</title>
+<item><title>old</title><link>https://example.com/old</link><pubDate>Tue, 11 Aug 2026 08:00:00 GMT</pubDate><enclosure url="https://example.com/old.jpg" type="image/jpeg" /></item>
+<item><title>newest</title><link>https://example.com/newest</link><pubDate>Tue, 11 Aug 2026 11:00:00 GMT</pubDate><enclosure url="https://example.com/newest.jpg" type="image/jpeg" /></item>
+<item><title>third</title><link>https://example.com/third</link><pubDate>Tue, 11 Aug 2026 09:00:00 GMT</pubDate><enclosure url="https://example.com/third.jpg" type="image/jpeg" /></item>
+<item><title>second</title><link>https://example.com/second</link><pubDate>Tue, 11 Aug 2026 10:00:00 GMT</pubDate><enclosure url="https://example.com/second.jpg" type="image/jpeg" /></item>
+</channel></rss>`)
+	}))
+	defer server.Close()
+
+	result, err := NewClient(server.Client()).FetchRSS(config.Source{
+		Name: "History", URL: server.URL, Type: config.SourceTypeRSS, Category: "AI/科技", MaxItems: 2,
+	}, nil, time.Date(2026, 8, 11, 8, 30, 0, 0, time.UTC))
+	if err != nil {
+		t.Fatalf("FetchRSS() error = %v", err)
+	}
+	if result.FetchedCount != 4 {
+		t.Fatalf("FetchedCount = %d, want 4", result.FetchedCount)
+	}
+	if len(result.Candidates) != 2 || result.Candidates[0].Article.Title != "newest" || result.Candidates[1].Article.Title != "second" {
+		t.Fatalf("Candidates = %#v, want newest two in-window items", result.Candidates)
+	}
+}
+
 func TestFetchRSSAuthenticatesRSSHubRoute(t *testing.T) {
 	const accessKey = "test-master-key"
 	t.Setenv("RSSHUB_ACCESS_KEY", accessKey)

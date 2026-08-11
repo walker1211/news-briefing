@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -88,18 +89,27 @@ func (c *Client) fetchRSSContextWithOpenGraphOptions(ctx context.Context, source
 		headers = nil
 	}
 
-	result := sourceFetchResult{Source: source}
+	result := sourceFetchResult{Source: source, FetchedCount: len(feed.Items)}
 	isRedditRSS := isRedditURL(source.URL)
 	if isRedditRSS {
 		result.RedditRateLimitWait = redditRateLimitWaitFromHeader(headers)
 	}
 	redditOpenGraphFallbacks := 0
-	for _, item := range feed.Items {
-		pub := time.Now()
-		if item.PublishedParsed != nil {
-			pub = *item.PublishedParsed
-		} else if item.UpdatedParsed != nil {
-			pub = *item.UpdatedParsed
+	now := time.Now()
+	items := append([]*gofeed.Item(nil), feed.Items...)
+	sort.SliceStable(items, func(i, j int) bool {
+		return rssItemPublishedAt(items[i], now).After(rssItemPublishedAt(items[j], now))
+	})
+	for _, item := range items {
+		if item == nil {
+			continue
+		}
+		pub := rssItemPublishedAt(item, now)
+		if !since.IsZero() && pub.Before(since) {
+			continue
+		}
+		if source.MaxItems > 0 && len(result.Candidates) >= source.MaxItems {
+			break
 		}
 
 		summary := item.Description
@@ -139,6 +149,19 @@ func (c *Client) fetchRSSContextWithOpenGraphOptions(ctx context.Context, source
 	}
 
 	return result, nil
+}
+
+func rssItemPublishedAt(item *gofeed.Item, fallback time.Time) time.Time {
+	if item == nil {
+		return time.Time{}
+	}
+	if item.PublishedParsed != nil {
+		return *item.PublishedParsed
+	}
+	if item.UpdatedParsed != nil {
+		return *item.UpdatedParsed
+	}
+	return fallback
 }
 
 func authenticatedRSSURL(source config.Source) (string, error) {
@@ -415,6 +438,13 @@ func matchedKeywords(text string, keywords []string) []string {
 		}
 	}
 	return matched
+}
+
+// MatchKeywords returns configured keywords that occur in text using the same
+// boundary rules as source filtering. It is shared with candidate ranking so
+// filtering and ranking cannot disagree about short ASCII terms such as AI.
+func MatchKeywords(text string, keywords []string) []string {
+	return matchedKeywords(text, keywords)
 }
 
 func keywordMatches(lowerText string, keyword string) bool {

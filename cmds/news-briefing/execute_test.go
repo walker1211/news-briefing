@@ -1357,6 +1357,56 @@ func TestApplyBriefingArticleLimitsUsesSourcePriorityAndPreservesTimeOrder(t *te
 	}
 }
 
+func TestArticleRankingBalancesSourceKeywordsAndFreshness(t *testing.T) {
+	newest := time.Date(2026, 8, 11, 8, 0, 0, 0, time.UTC)
+	articles := []model.Article{
+		{Title: "General platform update", Summary: "Routine update", Source: "Official", Category: "AI/科技", Published: newest.Add(-time.Hour)},
+		{Title: "OpenAI launches GPT research model", Summary: "OpenAI GPT release", Source: "Specialist", Category: "AI/科技", Published: newest},
+		{Title: "OpenAI older note", Summary: "OpenAI", Source: "Specialist", Category: "AI/科技", Published: newest.Add(-20 * time.Hour)},
+	}
+	ranking := articleRankingConfig{
+		priorities: map[string]int{"Official": 100, "Specialist": 50},
+		categories: map[string]config.CategoryFilterConfig{"AI/科技": {IncludeKeywords: []string{"OpenAI", "GPT"}}},
+	}
+
+	limited := filterArticlesByCategoryLimitsWithRanking(articles, map[string]int{"AI/科技": 1}, ranking)
+	if got, want := articleTitles(limited), []string{"OpenAI launches GPT research model"}; !slices.Equal(got, want) {
+		t.Fatalf("limited titles = %v, want %v", got, want)
+	}
+}
+
+func TestArticleRankingPenalizesNearDuplicateTitles(t *testing.T) {
+	newest := time.Date(2026, 8, 11, 8, 0, 0, 0, time.UTC)
+	articles := []model.Article{
+		{Title: "OpenAI launches GPT research model today", Source: "Official", Category: "AI/科技", Published: newest},
+		{Title: "OpenAI launches GPT research model today!", Source: "Official", Category: "AI/科技", Published: newest.Add(-time.Minute)},
+		{Title: "Anthropic releases Claude security controls", Source: "Specialist", Category: "AI/科技", Published: newest.Add(-2 * time.Minute)},
+	}
+	ranking := articleRankingConfig{
+		priorities: map[string]int{"Official": 100, "Specialist": 50},
+		categories: map[string]config.CategoryFilterConfig{"AI/科技": {IncludeKeywords: []string{"OpenAI", "GPT", "Anthropic", "Claude"}}},
+	}
+
+	limited := filterArticlesByCategoryLimitsWithRanking(articles, map[string]int{"AI/科技": 2}, ranking)
+	if got, want := articleTitles(limited), []string{"OpenAI launches GPT research model today", "Anthropic releases Claude security controls"}; !slices.Equal(got, want) {
+		t.Fatalf("limited titles = %v, want %v", got, want)
+	}
+}
+
+func TestArticleRankingUsesNewestArticleAsFreshnessReference(t *testing.T) {
+	newest := time.Date(2026, 8, 11, 8, 0, 0, 0, time.UTC)
+	articles := []model.Article{
+		{Title: "OpenAI older", Source: "Source", Category: "AI/科技", Published: newest.Add(-10 * time.Hour)},
+		{Title: "OpenAI newest", Source: "Source", Category: "AI/科技", Published: newest},
+	}
+	ranking := articleRankingConfig{categories: map[string]config.CategoryFilterConfig{"AI/科技": {IncludeKeywords: []string{"OpenAI"}}}}
+
+	limited := filterArticlesByCategoryLimitsWithRanking(articles, map[string]int{"AI/科技": 1}, ranking)
+	if got, want := articleTitles(limited), []string{"OpenAI newest"}; !slices.Equal(got, want) {
+		t.Fatalf("limited titles = %v, want %v", got, want)
+	}
+}
+
 func TestRenderBriefingUsesComposedBodyForRun(t *testing.T) {
 	articles := sampleExecuteArticles()
 	var gotPath string
