@@ -16,6 +16,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -189,6 +190,60 @@ func TestWriteMarkdownWritesCardManifestFromStructuredBriefing(t *testing.T) {
 	}
 	if got.Items[1].Category != "国际政治" || got.Items[1].Title != "外交新闻" {
 		t.Fatalf("second manifest item = %#v", got.Items[1])
+	}
+}
+
+func TestWriteMarkdownManifestUsesAllReferencedSources(t *testing.T) {
+	briefing := &model.Briefing{
+		Date:   "26.06.16",
+		Period: "1800",
+		Articles: []model.Article{
+			{Source: "Source A", Link: "https://example.com/a", Category: "AI/科技"},
+			{Source: "Source B", Link: "https://example.com/b", Category: "AI/科技"},
+			{Source: "Source A", Link: "https://example.com/a2", Category: "AI/科技"},
+		},
+		StructuredSummary: &model.BriefingSummary{Stories: []model.BriefingStory{{
+			Category: "AI/科技", Title: "Merged story", Summary: "Summary", SourceArticleIDs: []int{1, 2, 3},
+		}}},
+	}
+
+	manifest := buildCardManifest(briefing, nil)
+	if got := manifest.Items[0].Source; got != "Source A / Source B" {
+		t.Fatalf("manifest source = %q, want all unique referenced sources", got)
+	}
+	if got := manifest.Items[0].URL; got != "https://example.com/a" {
+		t.Fatalf("manifest URL = %q, want first referenced article URL", got)
+	}
+}
+
+func TestLocalizeMarkdownImagesDownloadsWithBoundedConcurrency(t *testing.T) {
+	var active atomic.Int32
+	var peak atomic.Int32
+	download := func(_ string, path string) error {
+		current := active.Add(1)
+		defer active.Add(-1)
+		for {
+			previous := peak.Load()
+			if current <= previous || peak.CompareAndSwap(previous, current) {
+				break
+			}
+		}
+		time.Sleep(20 * time.Millisecond)
+		return os.WriteFile(path, []byte("image"), 0o644)
+	}
+	content := strings.Join([]string{
+		"![one](https://example.com/1.jpg)",
+		"![two](https://example.com/2.jpg)",
+		"![three](https://example.com/3.jpg)",
+		"![four](https://example.com/4.jpg)",
+	}, "\n")
+
+	got, localized := localizeMarkdownImages(content, t.TempDir(), "26.06.16", "1800", download)
+	if peak.Load() < 2 || peak.Load() > markdownImageDownloadConcurrency {
+		t.Fatalf("peak downloads = %d, want 2..%d", peak.Load(), markdownImageDownloadConcurrency)
+	}
+	if len(localized) != 4 || strings.Contains(got, "https://example.com") {
+		t.Fatalf("localized images = %d, content = %q", len(localized), got)
 	}
 }
 

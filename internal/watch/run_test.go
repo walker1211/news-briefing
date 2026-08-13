@@ -82,6 +82,33 @@ func TestRunContextReturnsContextErrorWhenCancelled(t *testing.T) {
 	}
 }
 
+func TestDedupeWatchArtifactsRemovesCrossCategoryURLDuplicates(t *testing.T) {
+	articles := dedupeWatchArticles([]model.Article{
+		{Title: "Article", Link: "https://example.com/article", Source: "Watch A"},
+		{Title: "Article", Link: "https://example.com/article", Source: "Watch A"},
+	})
+	if len(articles) != 1 {
+		t.Fatalf("articles = %d, want 1", len(articles))
+	}
+
+	seenItems := dedupeWatchSeenItems([]model.WatchSeenArticle{
+		{Title: "Article", URL: "https://example.com/article", WatchCategory: "Category A"},
+		{Title: "Article", URL: "https://example.com/article", WatchCategory: "Category B"},
+	})
+	if len(seenItems) != 1 || seenItems[0].WatchCategory != "Category A" {
+		t.Fatalf("seen items = %#v, want first unique item", seenItems)
+	}
+
+	events := dedupeWatchEvents([]model.WatchEvent{
+		{Source: "Watch A", Category: "Category A", EventType: "new_article", ArticleURL: "https://example.com/article"},
+		{Source: "Watch A", Category: "Category B", EventType: "new_article", ArticleURL: "https://example.com/article"},
+		{Source: "Watch A", Category: "Category B", EventType: "content_changed", ArticleURL: "https://example.com/article"},
+	})
+	if len(events) != 2 {
+		t.Fatalf("events = %#v, want one event per URL and event type", events)
+	}
+}
+
 func TestRunContextRetriesWatchFetchUsingFetchConfig(t *testing.T) {
 	responses := map[string]string{
 		"https://support.claude.com/zh-CN":                                  mustReadFixture(t, "anthropic/home.html"),
@@ -89,9 +116,13 @@ func TestRunContextRetriesWatchFetchUsingFetchConfig(t *testing.T) {
 		"https://support.claude.com/zh-CN/articles/14328960-claude-上的-身份验证": mustReadFixture(t, "anthropic/article_identity_verification.html"),
 	}
 	attempts := map[string]int{}
+	var attemptsMu sync.Mutex
 	fetchHTML := func(ctx context.Context, url string) (string, error) {
+		attemptsMu.Lock()
 		attempts[url]++
-		if url == "https://support.claude.com/zh-CN" && attempts[url] < 3 {
+		attempt := attempts[url]
+		attemptsMu.Unlock()
+		if url == "https://support.claude.com/zh-CN" && attempt < 3 {
 			return "", errors.New("EOF")
 		}
 		return responses[url], nil
@@ -114,6 +145,8 @@ func TestRunContextRetriesWatchFetchUsingFetchConfig(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Run() error = %v", err)
 	}
+	attemptsMu.Lock()
+	defer attemptsMu.Unlock()
 	if attempts["https://support.claude.com/zh-CN"] != 3 {
 		t.Fatalf("home attempts = %d, want 3", attempts["https://support.claude.com/zh-CN"])
 	}

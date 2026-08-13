@@ -598,7 +598,7 @@ func (r *Runner) SummarizeBriefingContext(ctx context.Context, articles []model.
 		return model.BriefingSummary{}, "今日暂无符合筛选条件的新闻。", nil
 	}
 
-	promptArticles := output.OrderedArticleList(articles, categoryOrder)
+	promptArticles, promptToOriginal := orderedPromptArticles(articles, categoryOrder)
 	input := output.GroupedArticleListView(promptArticles, categoryOrder, loc)
 	prompt := briefingPrompt + "\n\n---\n以下是今日新闻条目：\n\n" + input
 
@@ -615,7 +615,43 @@ func (r *Runner) SummarizeBriefingContext(ctx context.Context, articles []model.
 		return model.BriefingSummary{}, "", fmt.Errorf("validate structured briefing references: %w", err)
 	}
 	structured = validateBriefingSummaryImages(structured, promptArticles)
+	structured = remapBriefingSummarySourceArticleIDs(structured, promptToOriginal)
 	return structured, output.StructuredBriefingMarkdown(structured, categoryOrder), nil
+}
+
+// orderedPromptArticles preserves the exact category order shown to the model
+// and records where every prompt item came from in the caller's article slice.
+// The model returns 1-based prompt indexes; persisted briefing metadata must use
+// the caller's ordering because downstream sidecars receive that original slice.
+func orderedPromptArticles(articles []model.Article, categoryOrder []string) ([]model.Article, []int) {
+	ordered := make([]model.Article, 0, len(articles))
+	originalIndexes := make([]int, 0, len(articles))
+	for _, category := range output.OrderedCategories(articles, categoryOrder) {
+		for index, article := range articles {
+			if article.Category != category {
+				continue
+			}
+			ordered = append(ordered, article)
+			originalIndexes = append(originalIndexes, index)
+		}
+	}
+	return ordered, originalIndexes
+}
+
+func remapBriefingSummarySourceArticleIDs(summary model.BriefingSummary, promptToOriginal []int) model.BriefingSummary {
+	for index := range summary.Stories {
+		ids := summary.Stories[index].SourceArticleIDs
+		remapped := make([]int, 0, len(ids))
+		for _, id := range ids {
+			promptIndex := id - 1
+			if promptIndex < 0 || promptIndex >= len(promptToOriginal) {
+				continue
+			}
+			remapped = append(remapped, promptToOriginal[promptIndex]+1)
+		}
+		summary.Stories[index].SourceArticleIDs = remapped
+	}
+	return summary
 }
 
 func validateAndNormalizeBriefingSummaryReferences(summary model.BriefingSummary, articles []model.Article, loc *time.Location) (model.BriefingSummary, error) {
