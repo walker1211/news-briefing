@@ -19,6 +19,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/walker1211/news-briefing/internal/imageutil"
@@ -39,6 +40,7 @@ const minCardMarkdownImageLongEdge = 600
 const markdownImageDownloadAttempts = 3
 const markdownImageRetryDelay = 200 * time.Millisecond
 const markdownImageResizePercent = 80
+const markdownImageDownloadConcurrency = 3
 
 func WriteMarkdown(briefing *model.Briefing, outputDir string) (string, error) {
 	return writeMarkdownWithImageDownloader(briefing, outputDir, downloadMarkdownImage)
@@ -71,6 +73,18 @@ func localizeMarkdownImages(rawContent string, outputDir string, date string, pe
 	assetDir := filepath.Join(outputDir, "assets", assetDirName)
 	assetRelDir := filepath.ToSlash(filepath.Join("assets", assetDirName))
 	lines := strings.Split(rawContent, "\n")
+	type imageOccurrence struct {
+		line int
+		alt  string
+	}
+	type imageJob struct {
+		url         string
+		filename    string
+		occurrences []imageOccurrence
+		err         error
+	}
+	jobs := make([]imageJob, 0)
+	jobByURL := make(map[string]int)
 	for i, line := range lines {
 		alt, imageURL, ok := parseMarkdownImage(line)
 		imageURL = html.UnescapeString(imageURL)
@@ -81,19 +95,51 @@ func localizeMarkdownImages(rawContent string, outputDir string, date string, pe
 			lines[i] = ""
 			continue
 		}
-		filename := markdownImageFileName(imageURL)
-		localPath := filepath.Join(assetDir, filename)
-		if err := os.MkdirAll(assetDir, 0o755); err != nil {
+		jobIndex, exists := jobByURL[imageURL]
+		if !exists {
+			jobIndex = len(jobs)
+			jobByURL[imageURL] = jobIndex
+			jobs = append(jobs, imageJob{url: imageURL, filename: markdownImageFileName(imageURL)})
+		}
+		jobs[jobIndex].occurrences = append(jobs[jobIndex].occurrences, imageOccurrence{line: i, alt: alt})
+	}
+	if len(jobs) == 0 || download == nil {
+		return strings.Join(lines, "\n"), localized
+	}
+	if err := os.MkdirAll(assetDir, 0o755); err != nil {
+		return strings.Join(lines, "\n"), localized
+	}
+
+	workerCount := min(len(jobs), markdownImageDownloadConcurrency)
+	jobIndexes := make(chan int)
+	var wg sync.WaitGroup
+	for range workerCount {
+		wg.Go(func() {
+			for jobIndex := range jobIndexes {
+				job := &jobs[jobIndex]
+				job.err = download(job.url, filepath.Join(assetDir, job.filename))
+			}
+		})
+	}
+	for jobIndex := range jobs {
+		jobIndexes <- jobIndex
+	}
+	close(jobIndexes)
+	wg.Wait()
+
+	for _, job := range jobs {
+		if job.err != nil {
+			logutil.Warnf("Markdown image download failed: host=%s error=%v", markdownImageHost(job.url), job.err)
+			for _, occurrence := range job.occurrences {
+				lines[occurrence.line] = ""
+			}
 			continue
 		}
-		if err := download(imageURL, localPath); err != nil {
-			logutil.Warnf("Markdown image download failed: host=%s error=%v", markdownImageHost(imageURL), err)
-			lines[i] = ""
-			continue
+		relPath := filepath.ToSlash(filepath.Join(assetRelDir, job.filename))
+		localized[job.url] = relPath
+		for _, occurrence := range job.occurrences {
+			lines[occurrence.line] = fmt.Sprintf("![%s](%s)", occurrence.alt, relPath)
 		}
-		relPath := filepath.ToSlash(filepath.Join(assetRelDir, filename))
-		localized[imageURL] = relPath
-		lines[i] = fmt.Sprintf("![%s](%s)", alt, relPath)
 	}
 	return strings.Join(lines, "\n"), localized
 }
@@ -172,7 +218,7 @@ func buildCardManifest(briefing *model.Briefing, localizedImages map[string]stri
 			Impact:   strings.TrimSpace(story.Impact),
 		}
 		if source := firstSourceArticle(story.SourceArticleIDs, briefing.Articles); source != nil {
-			item.Source = strings.TrimSpace(source.Source)
+			item.Source = cardManifestSourceLabel(story.SourceArticleIDs, briefing.Articles)
 			item.URL = strings.TrimSpace(source.Link)
 			if !source.Published.IsZero() {
 				item.PublishedAt = source.Published.Format(time.RFC3339)
@@ -184,6 +230,27 @@ func buildCardManifest(briefing *model.Briefing, localizedImages map[string]stri
 		manifest.Items = append(manifest.Items, item)
 	}
 	return manifest
+}
+
+func cardManifestSourceLabel(ids []int, articles []model.Article) string {
+	sources := make([]string, 0, len(ids))
+	seen := make(map[string]struct{}, len(ids))
+	for _, id := range ids {
+		index := id - 1
+		if index < 0 || index >= len(articles) {
+			continue
+		}
+		source := strings.TrimSpace(articles[index].Source)
+		if source == "" {
+			continue
+		}
+		if _, exists := seen[source]; exists {
+			continue
+		}
+		seen[source] = struct{}{}
+		sources = append(sources, source)
+	}
+	return strings.Join(sources, " / ")
 }
 
 func cardManifestLocalImage(raw string, localizedImages map[string]string) string {

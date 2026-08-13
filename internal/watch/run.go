@@ -222,6 +222,9 @@ func runContext(ctx context.Context, cfg *config.Config, now time.Time, fetchHTM
 		articles = append(articles, siteArticles...)
 		seenItems = append(seenItems, siteSeenItems...)
 	}
+	articles = dedupeWatchArticles(articles)
+	seenItems = dedupeWatchSeenItems(seenItems)
+	report.Events = dedupeWatchEvents(report.Events)
 
 	if err := indexStore.Save(indexState); err != nil {
 		return nil, nil, err
@@ -363,6 +366,58 @@ func applyWatchEventPriorityAt(event *model.WatchEvent, now time.Time) {
 	}
 	event.IncludeInBriefing = false
 	event.Reason += "；旧日期锚点仅记录在 watch 报告"
+}
+
+func dedupeWatchArticles(articles []model.Article) []model.Article {
+	seen := make(map[string]struct{}, len(articles))
+	out := make([]model.Article, 0, len(articles))
+	for _, article := range articles {
+		key := strings.TrimSpace(article.Link)
+		if key == "" {
+			key = strings.TrimSpace(article.Source) + "\x00" + strings.TrimSpace(article.Title)
+		}
+		if _, exists := seen[key]; exists {
+			continue
+		}
+		seen[key] = struct{}{}
+		out = append(out, article)
+	}
+	return out
+}
+
+func dedupeWatchSeenItems(items []model.WatchSeenArticle) []model.WatchSeenArticle {
+	seen := make(map[string]struct{}, len(items))
+	out := make([]model.WatchSeenArticle, 0, len(items))
+	for _, item := range items {
+		key := strings.TrimSpace(item.URL)
+		if key == "" {
+			key = strings.TrimSpace(item.Source) + "\x00" + strings.TrimSpace(item.Title)
+		}
+		if _, exists := seen[key]; exists {
+			continue
+		}
+		seen[key] = struct{}{}
+		out = append(out, item)
+	}
+	return out
+}
+
+func dedupeWatchEvents(events []model.WatchEvent) []model.WatchEvent {
+	seen := make(map[string]struct{}, len(events))
+	out := make([]model.WatchEvent, 0, len(events))
+	for _, event := range events {
+		url := strings.TrimSpace(event.ArticleURL)
+		key := strings.TrimSpace(event.Source) + "\x00" + strings.TrimSpace(event.EventType) + "\x00" + url
+		if url == "" {
+			key += "\x00" + strings.TrimSpace(event.Category) + "\x00" + strings.TrimSpace(event.ArticleTitle) + "\x00" + strings.TrimSpace(event.Reason)
+		}
+		if _, exists := seen[key]; exists {
+			continue
+		}
+		seen[key] = struct{}{}
+		out = append(out, event)
+	}
+	return out
 }
 
 func matchedWatchKeywords(text string, keywords []string) []string {

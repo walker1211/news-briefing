@@ -328,6 +328,26 @@ func TestRunnerSummarizeValidatesImagesUsingPromptArticleOrder(t *testing.T) {
 	}
 }
 
+func TestRunnerSummarizeRemapsPromptSourceIDsToOriginalArticleOrder(t *testing.T) {
+	setupFakeCLIOutput(t, "claude", `{"overview_groups":[],"stories":[{"category":"AI/科技","title":"AI story","summary":"AI summary.","impact":"AI impact.","source_article_ids":[1]}],"situation":"","directions":[]}`)
+	runner := NewRunner("claude", nil, false, "", "")
+	articles := []model.Article{
+		{Title: "Politics story", Source: "Politics Source", Category: "国际政治"},
+		{Title: "AI story", Source: "AI Source", Category: "AI/科技"},
+	}
+
+	got, _, err := runner.SummarizeBriefingContext(context.Background(), articles, []string{"AI/科技", "国际政治"}, time.UTC)
+	if err != nil {
+		t.Fatalf("SummarizeBriefingContext() error = %v", err)
+	}
+	if want := []int{2}; !reflect.DeepEqual(got.Stories[0].SourceArticleIDs, want) {
+		t.Fatalf("source ids = %v, want original article ids %v", got.Stories[0].SourceArticleIDs, want)
+	}
+	if got.Stories[0].SourceLine != "来源: AI Source" {
+		t.Fatalf("source line = %q", got.Stories[0].SourceLine)
+	}
+}
+
 func TestDeepDivePromptUsesTopicDeepDivePackWording(t *testing.T) {
 	for _, want := range []string{
 		"你是一个资深新闻调研员和话题研究助手。",
