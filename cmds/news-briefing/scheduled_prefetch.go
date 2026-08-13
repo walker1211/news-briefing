@@ -26,11 +26,17 @@ const (
 	scheduledPrefetchStatusRunning = "running"
 	scheduledPrefetchStatusSuccess = "succeeded"
 	scheduledPrefetchStatusFailed  = "failed"
-	scheduledPrefetchWaitTimeout   = 4 * time.Minute
 	scheduledPrefetchPollInterval  = 250 * time.Millisecond
 	scheduledPrefetchStaleAfter    = 15 * time.Minute
 	scheduledPrefetchRetention     = 72 * time.Hour
 )
+
+func (app *app) scheduledPrefetchWaitTimeout() time.Duration {
+	if app != nil && app.cfg != nil && app.cfg.SchedulePrefetchWaitTimeout > 0 {
+		return app.cfg.SchedulePrefetchWaitTimeout
+	}
+	return config.DefaultSchedulePrefetchWaitTimeout
+}
 
 type scheduledPrefetchWindow struct {
 	Period string    `json:"period"`
@@ -245,7 +251,7 @@ func (app *app) waitForScheduledPrefetch(ctx context.Context, window scheduler.W
 	if err != nil {
 		return briefingFetchResult{}, false, err.Error()
 	}
-	deadline := time.Now().Add(scheduledPrefetchWaitTimeout)
+	deadline := time.Now().Add(app.scheduledPrefetchWaitTimeout())
 	for {
 		snapshot, readErr := app.readScheduledPrefetch(window)
 		if os.IsNotExist(readErr) {

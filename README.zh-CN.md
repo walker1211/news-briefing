@@ -318,9 +318,12 @@ schedule:
   - "0 8 * * *"
   - "0 18 * * *"
 schedule_delay: 10m
+schedule_prefetch_wait_timeout: 2m
 ```
 
 `serve` 的抓取窗口是按“当前触发时间”向前回推到“当前 `schedule` 中上一个计划时间点”计算的。`schedule_delay: 10m` 会把实际执行锚定在约 08:10 / 18:10；如果 cron 晚触发，只等待剩余时间，超过目标时间则立即执行。窗口边界仍保持在 08:00 / 18:00，便于上游本地抓取先落地数据。
+
+在 08:00 / 18:00 准点触发时，`serve` 会让普通 RSS、Watch 抓取与外部 X 刷新并行执行，并把非 X 结果原子写入 `output/state/briefing-prefetch/`。X 就绪后，正式流程会校验快照版本、精确窗口和配置指纹，最多等待 `schedule_prefetch_wait_timeout`（默认 2 分钟），随后只读取 X 结果并合并。预取缺失、过期、失败、不匹配或等待超时时，会自动回退到原有完整抓取流程；预取本身不会发送邮件或触发发布钩子，超过 72 小时的快照会自动清理。
 
 服务实际观察到 08:00 / 18:00 触发时，会把该窗口登记到唯一的长期状态文件 `output/state/briefing-scheduler.json`。只有处于 `pending`、`waiting_x` 或 `running` 的已登记窗口才有 watcher；默认每 1 分钟检查一次，进入 `done` / `failed` 后立即停止。若同窗口的 X 状态仍为 `running` 且 heartbeat 新鲜，窗口切到 `waiting_x`；X 进入终态或 heartbeat 超过 3 分钟未更新时，watcher 接管执行。简报自身也每分钟更新 heartbeat，超过 3 分钟可由重启后的 watcher 接管。cron、X 回调和 watcher 通过短期文件锁原子竞争同一窗口的 lease，所以同一窗口只会有一个有效执行者；旧 lease 不能覆盖接管后的状态。邮件成功时间也保存在同一记录中，接管时不会重复发送已经确认成功的邮件。短期 `.lock` 和原子写临时文件只在更新状态时存在，不是长期 marker。
 
