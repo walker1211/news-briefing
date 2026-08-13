@@ -112,6 +112,47 @@ func TestFetchWindowUsesExplicitBounds(t *testing.T) {
 	}
 }
 
+func TestFetchWindowOrdinaryDetailedExcludesXVisibleInputs(t *testing.T) {
+	dir := t.TempDir()
+	from := time.Date(2026, 8, 13, 0, 0, 0, 0, time.UTC)
+	to := from.Add(10 * time.Hour)
+	ordinary := model.Article{
+		Title:     "Codex ordinary feed update",
+		Link:      "https://example.com/ordinary",
+		Source:    "Ordinary RSS",
+		Category:  "AI/科技",
+		Published: from.Add(time.Hour),
+	}
+	fetchAll := func(ctx context.Context, cfg *config.Config, since time.Time) ([]sourceFetchResult, []FailedSource, error) {
+		return []sourceFetchResult{{
+			Source:     config.Source{Name: ordinary.Source, Type: config.SourceTypeRSS, Category: ordinary.Category},
+			Candidates: []fetchedCandidate{{Article: ordinary}},
+		}}, nil, nil
+	}
+	cfg := &config.Config{
+		Keywords: []string{"Codex"},
+		Output:   config.OutputCfg{Dir: dir},
+		XAccounts: config.XAccountsConfig{
+			Enabled:            true,
+			AccountsPath:       filepath.Join(dir, "missing-accounts.ndjson"),
+			SearchesPath:       filepath.Join(dir, "missing-searches.ndjson"),
+			Category:           "AI/科技",
+			RefreshWaitTimeout: time.Millisecond,
+		},
+	}
+
+	result, err := fetchWindowOrdinaryDetailedContext(context.Background(), cfg, from, to, false, true, fetchAll)
+	if err != nil {
+		t.Fatalf("fetchWindowOrdinaryDetailedContext() error = %v", err)
+	}
+	if !reflect.DeepEqual(result.Articles, []model.Article{ordinary}) {
+		t.Fatalf("Articles = %#v, want only ordinary source", result.Articles)
+	}
+	if len(result.Failed) != 0 {
+		t.Fatalf("Failed = %#v, X inputs must not be read", result.Failed)
+	}
+}
+
 func TestFetchWindowReturnsFailedSourcesWhenDedupErrors(t *testing.T) {
 	dir := t.TempDir()
 	canonicalDir := filepath.Join(dir, "output", "state")

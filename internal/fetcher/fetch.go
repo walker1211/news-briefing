@@ -331,6 +331,19 @@ func (c *Client) FetchWindowDetailedContext(ctx context.Context, cfg *config.Con
 	return fetchWindowDetailedContext(ctx, cfg, from, to, markSeen, ignoreSeen, c.fetchAllSourcesDetailed)
 }
 
+// FetchWindowOrdinaryDetailedContext fetches and filters configured non-X
+// sources for an exact briefing window. It is used by the scheduler prefetch so
+// ordinary feeds can run in parallel with the external X refresh job.
+func (c *Client) FetchWindowOrdinaryDetailedContext(ctx context.Context, cfg *config.Config, from, to time.Time, markSeen bool, ignoreSeen bool) (FetchResult, error) {
+	return fetchWindowOrdinaryDetailedContext(ctx, cfg, from, to, markSeen, ignoreSeen, c.fetchAllSourcesDetailed)
+}
+
+// FetchWindowXDetailedContext reads and filters only the completed X refresh
+// output for an exact briefing window.
+func (c *Client) FetchWindowXDetailedContext(ctx context.Context, cfg *config.Config, from, to time.Time, markSeen bool, ignoreSeen bool) (FetchResult, error) {
+	return fetchWindowXDetailedContext(ctx, cfg, from, to, markSeen, ignoreSeen)
+}
+
 func FetchWindowDetailedWithXVisibleHistoryContext(ctx context.Context, cfg *config.Config, from, to time.Time, markSeen bool, ignoreSeen bool, historyDir string) (FetchResult, error) {
 	return fetchWindowDetailedContextWithOptions(ctx, cfg, from, to, markSeen, ignoreSeen, fetchAllSourcesDetailed, false, xVisibleReadOptions{useHistory: true, historyDir: historyDir})
 }
@@ -588,7 +601,38 @@ func fetchWindowDetailedContextWithOptions(ctx context.Context, cfg *config.Conf
 	if err := ctx.Err(); err != nil {
 		return FetchResult{}, err
 	}
+	return filterWindowFetchResults(ctx, cfg, from, to, xFrom, markSeen, ignoreSeen, results, failed)
+}
 
+func fetchWindowOrdinaryDetailedContext(ctx context.Context, cfg *config.Config, from, to time.Time, markSeen bool, ignoreSeen bool, fetchAll fetchAllSourcesDetailedFunc) (FetchResult, error) {
+	if err := ctx.Err(); err != nil {
+		return FetchResult{}, err
+	}
+	results, failed, err := fetchAll(ctx, cfg, from)
+	if err != nil {
+		return FetchResult{}, err
+	}
+	return filterWindowFetchResults(ctx, cfg, from, to, from, markSeen, ignoreSeen, results, failed)
+}
+
+func fetchWindowXDetailedContext(ctx context.Context, cfg *config.Config, from, to time.Time, markSeen bool, ignoreSeen bool) (FetchResult, error) {
+	if err := ctx.Err(); err != nil {
+		return FetchResult{}, err
+	}
+	filters := newFilterContext(cfg)
+	results, failed, err := fetchXVisibleNDJSONWithOptions(ctx, cfg.XAccounts, filters.includeKeywords(model.Article{Category: cfg.XAccounts.Category}, config.Source{Name: xVisibleSourceName, Category: cfg.XAccounts.Category}), from, to, xVisibleReadOptions{})
+	if err != nil {
+		return FetchResult{}, err
+	}
+	return filterWindowFetchResults(ctx, cfg, from, to, from, markSeen, ignoreSeen, results, failed)
+}
+
+func filterWindowFetchResults(ctx context.Context, cfg *config.Config, from, to, xFrom time.Time, markSeen bool, ignoreSeen bool, results []sourceFetchResult, failed []FailedSource) (FetchResult, error) {
+	if err := ctx.Err(); err != nil {
+		return FetchResult{}, err
+	}
+
+	filters := newFilterContext(cfg)
 	accepted := make([]model.Article, 0)
 	filtered := make([]model.Article, 0)
 	stats := newSourceStatsAccumulator(cfg, from, to)

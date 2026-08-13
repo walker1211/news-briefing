@@ -318,7 +318,9 @@ schedule:
 schedule_delay: 10m
 ```
 
-The scheduled fetch window is derived by taking the current trigger time and walking back to the previous planned time point in the current `schedule`. `schedule_delay: 10m` anchors actual execution at around 08:10 / 18:10; if cron fires late, the scheduler waits only for the remaining time and runs immediately once that target has passed. Window boundaries remain anchored at 08:00 / 18:00 so upstream local fetching can finish writing data first.
+The scheduled fetch window is derived by taking the current trigger time and walking back to the previous planned time point in the current `schedule`. `schedule_delay: 10m` anchors the cron fallback at around 08:10 / 18:10; if cron fires late, the scheduler waits only for the remaining time and runs immediately once that target has passed. Window boundaries remain anchored at 08:00 / 18:00.
+
+At the exact 08:00 / 18:00 trigger, `serve` starts ordinary RSS and Watch fetching immediately, in parallel with the external X refresh. The completed non-X result is written atomically under `output/state/briefing-prefetch/`. When X reports ready, the final run validates the snapshot schema, exact window, and configuration fingerprint, reads only the X output, and merges both result sets. A missing, stale, failed, or mismatched snapshot falls back to the original complete fetch path. Prefetch never sends email or calls the publish hook by itself, and snapshots older than 72 hours are removed automatically.
 
 When the service actually observes an 08:00 / 18:00 trigger, it records that window in the single long-lived state file `output/state/briefing-scheduler.json`. A watcher exists only for a recorded `pending`, `waiting_x`, or `running` window; it checks once per minute by default and stops immediately at `done` / `failed`. If X is still `running` for the same window with a fresh heartbeat, the window moves to `waiting_x`. The watcher takes over when X reaches a terminal state or its heartbeat is more than three minutes stale. The briefing run also refreshes its heartbeat every minute and can be recovered after three stale minutes following a restart. Cron, the X callback, and the watcher atomically contend for the same per-window lease through a short-lived file lock, and an old lease cannot overwrite a takeover. The same record stores confirmed email delivery time so recovery does not resend an already confirmed message. The transient `.lock` and atomic-write temp file exist only while updating state; they are not persistent markers.
 
@@ -339,6 +341,7 @@ With the default `output.dir=output`:
 - briefing Markdown: `output/26.03.18-午间-1400.md`
 - deep-dive material: `output/deep/26.03.18-topic.md`
 - seen state: `output/state/seen.json`
+- scheduled non-X prefetch handoff: `output/state/briefing-prefetch/*.json`
 
 Example email subjects:
 
