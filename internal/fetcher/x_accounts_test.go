@@ -50,6 +50,37 @@ func TestFetchWindowDetailedIncludesXVisibleNDJSON(t *testing.T) {
 	}
 }
 
+func TestFetchWindowXDetailedReadsOnlyXVisibleOutput(t *testing.T) {
+	dir := t.TempDir()
+	accountsPath := filepath.Join(dir, "accounts.ndjson")
+	content := `{"kind":"x-visible-article","schemaVersion":1,"targetRaw":"/twitter/user/OpenAI","targetType":"account","targetUrl":"https://x.com/OpenAI","sourceUrl":"https://x.com/OpenAI","finalUrl":"https://x.com/OpenAI","text":"OpenAI shipped a Codex update","datetime":"2026-08-13T01:00:00.000Z","statusUrl":"https://x.com/OpenAI/status/x-only","statusLinks":["https://x.com/OpenAI/status/x-only"]}
+`
+	if err := os.WriteFile(accountsPath, []byte(content), 0o644); err != nil {
+		t.Fatalf("write accounts ndjson: %v", err)
+	}
+	cfg := &config.Config{
+		Sources:  []config.Source{{Name: "ordinary source must not run", URL: "://invalid", Type: config.SourceTypeRSS}},
+		Keywords: []string{"Codex"},
+		Output:   config.OutputCfg{Dir: dir},
+		XAccounts: config.XAccountsConfig{
+			Enabled:      true,
+			AccountsPath: accountsPath,
+			Category:     "AI/科技",
+			Accounts:     []config.XAccountConfig{{Handle: "OpenAI"}},
+		},
+	}
+	from := time.Date(2026, 8, 13, 0, 0, 0, 0, time.UTC)
+	to := from.Add(10 * time.Hour)
+
+	result, err := fetchWindowXDetailedContext(context.Background(), cfg, from, to, false, true)
+	if err != nil {
+		t.Fatalf("fetchWindowXDetailedContext() error = %v", err)
+	}
+	if len(result.Articles) != 1 || result.Articles[0].Link != "https://x.com/OpenAI/status/x-only" {
+		t.Fatalf("Articles = %#v, want one X-only article", result.Articles)
+	}
+}
+
 func TestFetchXVisibleNDJSONWaitsForRunningRefresh(t *testing.T) {
 	dir := t.TempDir()
 	accountsPath := filepath.Join(dir, "accounts.ndjson")

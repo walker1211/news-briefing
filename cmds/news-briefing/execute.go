@@ -45,15 +45,17 @@ type schedulerDeps struct {
 }
 
 type fetchDeps struct {
-	fetchAll                          func(*config.Config, bool) ([]model.Article, []fetcher.FailedSource, error)
-	fetchAllContext                   func(context.Context, *config.Config, bool) ([]model.Article, []fetcher.FailedSource, error)
-	fetchAllDetailedContext           func(context.Context, *config.Config, bool) (fetcher.FetchResult, error)
-	fetchWindow                       func(*config.Config, time.Time, time.Time, bool, bool) ([]model.Article, []fetcher.FailedSource, error)
-	fetchWindowContext                func(context.Context, *config.Config, time.Time, time.Time, bool, bool) ([]model.Article, []fetcher.FailedSource, error)
-	fetchWindowDetailedContext        func(context.Context, *config.Config, time.Time, time.Time, bool, bool) (fetcher.FetchResult, error)
-	fetchWindowDetailedHistoryContext func(context.Context, *config.Config, time.Time, time.Time, bool, bool, string) (fetcher.FetchResult, error)
-	fetchXAlertsContext               func(context.Context, *config.Config, time.Time) (fetcher.FetchResult, error)
-	markSeen                          func([]model.Article) error
+	fetchAll                           func(*config.Config, bool) ([]model.Article, []fetcher.FailedSource, error)
+	fetchAllContext                    func(context.Context, *config.Config, bool) ([]model.Article, []fetcher.FailedSource, error)
+	fetchAllDetailedContext            func(context.Context, *config.Config, bool) (fetcher.FetchResult, error)
+	fetchWindow                        func(*config.Config, time.Time, time.Time, bool, bool) ([]model.Article, []fetcher.FailedSource, error)
+	fetchWindowContext                 func(context.Context, *config.Config, time.Time, time.Time, bool, bool) ([]model.Article, []fetcher.FailedSource, error)
+	fetchWindowDetailedContext         func(context.Context, *config.Config, time.Time, time.Time, bool, bool) (fetcher.FetchResult, error)
+	fetchWindowOrdinaryDetailedContext func(context.Context, *config.Config, time.Time, time.Time, bool, bool) (fetcher.FetchResult, error)
+	fetchWindowXDetailedContext        func(context.Context, *config.Config, time.Time, time.Time, bool, bool) (fetcher.FetchResult, error)
+	fetchWindowDetailedHistoryContext  func(context.Context, *config.Config, time.Time, time.Time, bool, bool, string) (fetcher.FetchResult, error)
+	fetchXAlertsContext                func(context.Context, *config.Config, time.Time) (fetcher.FetchResult, error)
+	markSeen                           func([]model.Article) error
 }
 
 type watchDeps struct {
@@ -112,14 +114,16 @@ func newApp(cfg *config.Config) *app {
 			},
 		},
 		fetch: fetchDeps{
-			fetchAll:                          fetchClient.FetchAll,
-			fetchAllContext:                   fetchClient.FetchAllContext,
-			fetchAllDetailedContext:           fetchClient.FetchAllDetailedContext,
-			fetchWindow:                       fetchClient.FetchWindow,
-			fetchWindowContext:                fetchClient.FetchWindowContext,
-			fetchWindowDetailedContext:        fetchClient.FetchWindowDetailedContext,
-			fetchWindowDetailedHistoryContext: fetchClient.FetchWindowDetailedWithXVisibleHistoryContext,
-			fetchXAlertsContext:               fetcher.FetchXAlertsContext,
+			fetchAll:                           fetchClient.FetchAll,
+			fetchAllContext:                    fetchClient.FetchAllContext,
+			fetchAllDetailedContext:            fetchClient.FetchAllDetailedContext,
+			fetchWindow:                        fetchClient.FetchWindow,
+			fetchWindowContext:                 fetchClient.FetchWindowContext,
+			fetchWindowDetailedContext:         fetchClient.FetchWindowDetailedContext,
+			fetchWindowOrdinaryDetailedContext: fetchClient.FetchWindowOrdinaryDetailedContext,
+			fetchWindowXDetailedContext:        fetchClient.FetchWindowXDetailedContext,
+			fetchWindowDetailedHistoryContext:  fetchClient.FetchWindowDetailedWithXVisibleHistoryContext,
+			fetchXAlertsContext:                fetcher.FetchXAlertsContext,
 			markSeen: func(articles []model.Article) error {
 				return fetcher.MarkArticlesSeen(cfg.Output.Dir, articles)
 			},
@@ -246,6 +250,7 @@ func executeContext(ctx context.Context, app *app, cmd command) error {
 			if err := app.registerScheduledWindow(window, dueAt); err != nil {
 				return err
 			}
+			app.startScheduledPrefetch(ctx, window)
 			if dueAt.After(app.currentTime()) {
 				app.startScheduledWindowWatcher(ctx, window)
 			}
@@ -436,6 +441,7 @@ type briefingFetchResult struct {
 	articles              []model.Article
 	filteredArticles      []model.Article
 	seenArticles          []model.Article
+	watchArticles         []model.Article
 	failed                []fetcher.FailedSource
 	sourceStats           model.SourceStatsReport
 	watchSiteErrorNotices []string
@@ -484,11 +490,16 @@ func (app *app) fetchBriefingArticlesWithWatch(ctx context.Context, watchTime ti
 	}
 	seenArticles := append([]model.Article(nil), result.Articles...)
 	watchSiteErrorNotices := []string(nil)
-	result.Articles, watchSiteErrorNotices, err = app.mergeWatchFetchResult(ctx, result.Articles, waitWatch(), sidecarDate, period)
+	watchResult := waitWatch()
+	result.Articles, watchSiteErrorNotices, err = app.mergeWatchFetchResult(ctx, result.Articles, watchResult, sidecarDate, period)
 	if err != nil {
 		return briefingFetchResult{}, err
 	}
-	return briefingFetchResult{articles: result.Articles, filteredArticles: result.FilteredArticles, seenArticles: seenArticles, failed: result.Failed, sourceStats: result.SourceStats, watchSiteErrorNotices: watchSiteErrorNotices}, nil
+	var watchArticles []model.Article
+	if watchResult.err == nil {
+		watchArticles = watchResult.articles
+	}
+	return briefingFetchResult{articles: result.Articles, filteredArticles: result.FilteredArticles, seenArticles: seenArticles, watchArticles: watchArticles, failed: result.Failed, sourceStats: result.SourceStats, watchSiteErrorNotices: watchSiteErrorNotices}, nil
 }
 
 func (app *app) summarizeArticles(ctx context.Context, articles []model.Article, categoryOrder []string, loc *time.Location) (string, error) {
@@ -666,9 +677,7 @@ func (app *app) runScheduledBriefingContextWithReporter(ctx context.Context, win
 	loc := app.displayLocation()
 	date := window.To.In(loc).Format("06.01.02")
 	fetchStarted := time.Now()
-	result, err := app.fetchBriefingArticlesWithWatch(ctx, window.To, date, window.Period, func(ctx context.Context) (fetcher.FetchResult, error) {
-		return app.fetchWindowArticlesDetailed(ctx, window.From, window.To, false, false)
-	})
+	result, err := app.fetchScheduledBriefingArticles(ctx, window, date)
 	if err != nil {
 		return err
 	}
