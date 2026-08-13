@@ -69,6 +69,12 @@ func TestScheduledPrefetchPersistsOrdinaryAndWatchThenMergesX(t *testing.T) {
 	}
 }
 
+func TestScheduledPrefetchWaitTimeoutCoversSlowParallelFetch(t *testing.T) {
+	if scheduledPrefetchWaitTimeout != 4*time.Minute {
+		t.Fatalf("scheduledPrefetchWaitTimeout = %s, want 4m", scheduledPrefetchWaitTimeout)
+	}
+}
+
 func TestScheduledPrefetchConfigChangeFallsBackToFullFetch(t *testing.T) {
 	now := time.Date(2026, 8, 13, 18, 0, 0, 0, time.UTC)
 	window := scheduler.Window{Period: "1800", From: now.Add(-10 * time.Hour), To: now}

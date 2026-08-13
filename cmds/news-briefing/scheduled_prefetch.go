@@ -26,7 +26,7 @@ const (
 	scheduledPrefetchStatusRunning = "running"
 	scheduledPrefetchStatusSuccess = "succeeded"
 	scheduledPrefetchStatusFailed  = "failed"
-	scheduledPrefetchWaitTimeout   = 2 * time.Minute
+	scheduledPrefetchWaitTimeout   = 4 * time.Minute
 	scheduledPrefetchPollInterval  = 250 * time.Millisecond
 	scheduledPrefetchStaleAfter    = 15 * time.Minute
 	scheduledPrefetchRetention     = 72 * time.Hour
