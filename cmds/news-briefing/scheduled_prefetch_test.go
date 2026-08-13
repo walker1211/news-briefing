@@ -69,9 +69,17 @@ func TestScheduledPrefetchPersistsOrdinaryAndWatchThenMergesX(t *testing.T) {
 	}
 }
 
-func TestScheduledPrefetchWaitTimeoutCoversSlowParallelFetch(t *testing.T) {
-	if scheduledPrefetchWaitTimeout != 4*time.Minute {
-		t.Fatalf("scheduledPrefetchWaitTimeout = %s, want 4m", scheduledPrefetchWaitTimeout)
+func TestScheduledPrefetchWaitTimeoutUsesConfiguredValue(t *testing.T) {
+	app := &app{cfg: &config.Config{SchedulePrefetchWaitTimeout: 4 * time.Minute}}
+	if got := app.scheduledPrefetchWaitTimeout(); got != 4*time.Minute {
+		t.Fatalf("scheduledPrefetchWaitTimeout() = %s, want 4m", got)
+	}
+}
+
+func TestScheduledPrefetchWaitTimeoutUsesPublicDefault(t *testing.T) {
+	app := &app{cfg: &config.Config{}}
+	if got := app.scheduledPrefetchWaitTimeout(); got != config.DefaultSchedulePrefetchWaitTimeout {
+		t.Fatalf("scheduledPrefetchWaitTimeout() = %s, want %s", got, config.DefaultSchedulePrefetchWaitTimeout)
 	}
 }
 

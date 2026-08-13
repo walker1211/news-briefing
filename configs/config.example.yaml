@@ -457,6 +457,9 @@ schedule:
 # Optional. Grace delay before cron fallback runs while keeping the schedule window boundaries above.
 # Upstream X visible refresh can trigger the same window earlier with `news-briefing x ready`.
 schedule_delay: 10m
+# Optional. Maximum wait for an in-progress RSS/Watch prefetch after X becomes ready.
+# Defaults to 2m; increase it when ordinary feeds usually take longer than X refresh.
+schedule_prefetch_wait_timeout: 2m
 
 # Optional. Defaults to the machine's local timezone when omitted.
 # schedule_timezone: Asia/Shanghai

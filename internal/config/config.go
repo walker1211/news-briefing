@@ -17,22 +17,24 @@ import (
 )
 
 type Config struct {
-	Sources          []Source          `yaml:"sources"`
-	Keywords         []string          `yaml:"keywords"`
-	Filters          FiltersConfig     `yaml:"filters"`
-	Fetch            FetchConfig       `yaml:"fetch"`
-	Watch            WatchConfig       `yaml:"watch"`
-	XAccounts        XAccountsConfig   `yaml:"x_accounts"`
-	Email            Email             `yaml:"email"`
-	Schedule         Schedule          `yaml:"schedule"`
-	ScheduleDelayRaw string            `yaml:"schedule_delay"`
-	ScheduleDelay    time.Duration     `yaml:"-"`
-	ScheduleTimezone string            `yaml:"schedule_timezone"`
-	ScheduleLocation *time.Location    `yaml:"-"`
-	Output           OutputCfg         `yaml:"output"`
-	PublishHook      PublishHookConfig `yaml:"publish_hook"`
-	Proxy            Proxy             `yaml:"proxy"`
-	AI               AICfg             `yaml:"ai"`
+	Sources                        []Source          `yaml:"sources"`
+	Keywords                       []string          `yaml:"keywords"`
+	Filters                        FiltersConfig     `yaml:"filters"`
+	Fetch                          FetchConfig       `yaml:"fetch"`
+	Watch                          WatchConfig       `yaml:"watch"`
+	XAccounts                      XAccountsConfig   `yaml:"x_accounts"`
+	Email                          Email             `yaml:"email"`
+	Schedule                       Schedule          `yaml:"schedule"`
+	ScheduleDelayRaw               string            `yaml:"schedule_delay"`
+	ScheduleDelay                  time.Duration     `yaml:"-"`
+	SchedulePrefetchWaitTimeoutRaw string            `yaml:"schedule_prefetch_wait_timeout"`
+	SchedulePrefetchWaitTimeout    time.Duration     `yaml:"-"`
+	ScheduleTimezone               string            `yaml:"schedule_timezone"`
+	ScheduleLocation               *time.Location    `yaml:"-"`
+	Output                         OutputCfg         `yaml:"output"`
+	PublishHook                    PublishHookConfig `yaml:"publish_hook"`
+	Proxy                          Proxy             `yaml:"proxy"`
+	AI                             AICfg             `yaml:"ai"`
 }
 
 const (
@@ -68,6 +70,7 @@ const (
 	DefaultXRefreshReconcileInterval      = time.Minute
 	DefaultXRefreshHeartbeatStaleAfter    = 3 * time.Minute
 	DefaultXMaxPostsPerTarget             = 10
+	DefaultSchedulePrefetchWaitTimeout    = 2 * time.Minute
 	DefaultAIModel                        = "gpt-5.6-sol"
 	DefaultAITranslationModel             = "gpt-5.3-codex-spark"
 )
@@ -321,6 +324,23 @@ func applyScheduleDelay(cfg *Config) error {
 		return fmt.Errorf("validate schedule_delay: must be zero or greater")
 	}
 	cfg.ScheduleDelay = delay
+	return nil
+}
+
+func applySchedulePrefetchWaitTimeout(cfg *Config) error {
+	raw := strings.TrimSpace(cfg.SchedulePrefetchWaitTimeoutRaw)
+	if raw == "" {
+		cfg.SchedulePrefetchWaitTimeout = DefaultSchedulePrefetchWaitTimeout
+		return nil
+	}
+	timeout, err := time.ParseDuration(raw)
+	if err != nil {
+		return fmt.Errorf("parse schedule_prefetch_wait_timeout: %w", err)
+	}
+	if timeout <= 0 {
+		return fmt.Errorf("validate schedule_prefetch_wait_timeout: must be greater than zero")
+	}
+	cfg.SchedulePrefetchWaitTimeout = timeout
 	return nil
 }
 
@@ -1088,6 +1108,9 @@ func Load(configPath string) (*Config, error) {
 	}
 	cfg.ScheduleLocation = loc
 	if err := applyScheduleDelay(&cfg); err != nil {
+		return nil, err
+	}
+	if err := applySchedulePrefetchWaitTimeout(&cfg); err != nil {
 		return nil, err
 	}
 	if err := applyFetchDefaults(&cfg.Fetch); err != nil {

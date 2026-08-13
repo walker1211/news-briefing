@@ -748,6 +748,76 @@ proxy: {}
 	}
 }
 
+func TestLoadAppliesSchedulePrefetchWaitTimeout(t *testing.T) {
+	tests := []struct {
+		name string
+		raw  string
+		want time.Duration
+	}{
+		{name: "default", want: DefaultSchedulePrefetchWaitTimeout},
+		{name: "configured", raw: "4m", want: 4 * time.Minute},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dir := t.TempDir()
+			path := filepath.Join(dir, "config.yaml")
+			content := `sources: []
+keywords: []
+email:
+  smtp_host: smtp.example.com
+  smtp_port: 465
+  from: from@example.com
+  to: to@example.com
+schedule: []
+output: {}
+proxy: {}
+`
+			if tt.raw != "" {
+				content += "schedule_prefetch_wait_timeout: " + tt.raw + "\n"
+			}
+			if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+				t.Fatalf("write config: %v", err)
+			}
+
+			cfg, err := Load(path)
+			if err != nil {
+				t.Fatalf("Load() error = %v", err)
+			}
+			if cfg.SchedulePrefetchWaitTimeout != tt.want {
+				t.Fatalf("SchedulePrefetchWaitTimeout = %v, want %v", cfg.SchedulePrefetchWaitTimeout, tt.want)
+			}
+		})
+	}
+}
+
+func TestLoadRejectsInvalidSchedulePrefetchWaitTimeout(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	content := `sources: []
+keywords: []
+email:
+  smtp_host: smtp.example.com
+  smtp_port: 465
+  from: from@example.com
+  to: to@example.com
+schedule: []
+schedule_prefetch_wait_timeout: 0s
+output: {}
+proxy: {}
+`
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	_, err := Load(path)
+	if err == nil {
+		t.Fatal("Load() error = nil, want schedule_prefetch_wait_timeout error")
+	}
+	if !strings.Contains(err.Error(), "schedule_prefetch_wait_timeout") {
+		t.Fatalf("Load() error = %q, want mention schedule_prefetch_wait_timeout", err)
+	}
+}
+
 func TestLoadRejectsNegativeScheduleDelay(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.yaml")
