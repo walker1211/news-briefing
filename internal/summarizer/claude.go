@@ -143,6 +143,7 @@ type Runner struct {
 	translationEffort         string
 	summaryParallelByCategory bool
 	summaryMaxConcurrency     int
+	summaryLaunchStagger      time.Duration
 	appendSystemPrompt        bool
 	proxyEnv                  []string
 	retrySleep                sleepFunc
@@ -170,11 +171,12 @@ func IsInvalidPromptError(err error) bool {
 }
 
 const (
-	callKindSummarize       callKind = "summarize"
-	callKindTranslate       callKind = "translate"
-	callKindDeepDive        callKind = "deep"
-	defaultModel                     = "gpt-5.6-terra"
-	defaultTranslationModel          = "gpt-5.3-codex-spark"
+	callKindSummarize        callKind = "summarize"
+	callKindTranslate        callKind = "translate"
+	callKindDeepDive         callKind = "deep"
+	defaultModel                      = "gpt-5.6-terra"
+	defaultTranslationModel           = "gpt-5.3-codex-spark"
+	directCodexLaunchStagger          = 5 * time.Second
 )
 
 var (
@@ -302,7 +304,7 @@ func NewRunnerWithRetryDelays(command string, args []string, appendSystemPrompt 
 		proxyEnv = append(proxyEnv, "all_proxy="+socks5Proxy, "ALL_PROXY="+socks5Proxy)
 	}
 
-	return &Runner{
+	runner := &Runner{
 		commandName:        name,
 		commandArgs:        runnerArgs,
 		defaultModel:       configuredDefaultModel,
@@ -313,6 +315,10 @@ func NewRunnerWithRetryDelays(command string, args []string, appendSystemPrompt 
 		retryDelays:        cloneDurations(retryDelays),
 		failureLogPath:     defaultFailureLogPath,
 	}
+	if isDirectCodexCommand(name) {
+		runner.summaryLaunchStagger = directCodexLaunchStagger
+	}
+	return runner
 }
 
 // SetModels configures task-specific models for direct Codex execution.
@@ -707,6 +713,19 @@ func (r *Runner) summarizeBriefingParallelContext(ctx context.Context, articles 
 	for index, category := range categories {
 		index, category := index, category
 		wg.Go(func() {
+			// Direct Codex processes share one rotating OAuth file. A small launch
+			// offset lets the first process finish an expired-token refresh before
+			// the remaining category calls read the credentials.
+			if delay := time.Duration(index) * r.summaryLaunchStagger; delay > 0 {
+				timer := time.NewTimer(delay)
+				defer timer.Stop()
+				select {
+				case <-timer.C:
+				case <-ctx.Done():
+					results[index].err = ctx.Err()
+					return
+				}
+			}
 			select {
 			case semaphore <- struct{}{}:
 				defer func() { <-semaphore }()
