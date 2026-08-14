@@ -13,6 +13,7 @@ import (
 
 	"github.com/walker1211/news-briefing/internal/config"
 	"github.com/walker1211/news-briefing/internal/fetcher"
+	"github.com/walker1211/news-briefing/internal/imageutil"
 	"github.com/walker1211/news-briefing/internal/logutil"
 	"github.com/walker1211/news-briefing/internal/model"
 	"github.com/walker1211/news-briefing/internal/output"
@@ -32,6 +33,7 @@ type app struct {
 	email                   emailDeps
 	publishHook             func(context.Context, config.PublishHookConfig, publishHookRequest) error
 	suppressPublishHook     bool
+	imageFilter             imageutil.Filter
 	scheduledWindowMu       sync.Mutex
 	scheduledWindowWatchers map[string]*scheduledWindowWatcher
 }
@@ -99,9 +101,11 @@ func newApp(cfg *config.Config) *app {
 	aiRunner := summarizer.NewRunnerWithRetryDelays(cfg.AI.Command, cfg.AI.Args, cfg.AI.ShouldAppendSystemPrompt(), cfg.Proxy.HTTP, cfg.Proxy.Socks5, cfg.AI.Retry.Delays)
 	aiRunner.SetModels(cfg.AI.Models.Default, cfg.AI.Models.Translation)
 	emailSender := output.NewEmailSender()
+	imageFilter := imageFilterFromConfig(cfg.ImageFilter)
 	return &app{
-		cfg: cfg,
-		now: time.Now,
+		cfg:         cfg,
+		now:         time.Now,
+		imageFilter: imageFilter,
 		scheduler: schedulerDeps{
 			startCron:                   scheduler.Start,
 			startCronContext:            scheduler.StartContext,
@@ -152,8 +156,10 @@ func newApp(cfg *config.Config) *app {
 				}
 				printArticles(articles, categoryOrderFromSources(cfg.Sources), loc)
 			},
-			printCLI:           output.PrintCLI,
-			writeMarkdown:      output.WriteMarkdown,
+			printCLI: output.PrintCLI,
+			writeMarkdown: func(briefing *model.Briefing, outputDir string) (string, error) {
+				return output.WriteMarkdownWithImageFilter(briefing, outputDir, imageFilter)
+			},
 			writeWatchMarkdown: output.WriteWatchMarkdown,
 			writeDeepDive:      output.WriteDeepDive,
 		},
@@ -165,6 +171,24 @@ func newApp(cfg *config.Config) *app {
 		},
 		publishHook: runPublishHook,
 	}
+}
+
+func imageFilterFromConfig(cfg config.ImageFilterConfig) imageutil.Filter {
+	rules := make([]imageutil.ExactURLRule, 0, len(cfg.BlockedURLs))
+	for _, rule := range cfg.BlockedURLs {
+		rules = append(rules, imageutil.ExactURLRule{Host: rule.Host, Path: rule.Path})
+	}
+	return imageutil.NewFilter(rules)
+}
+
+func (app *app) filterArticleImages(articles []model.Article) []model.Article {
+	filtered := append([]model.Article(nil), articles...)
+	for i := range filtered {
+		if !app.imageFilter.IsUsableRemoteImageURL(filtered[i].ImageURL) {
+			filtered[i].ImageURL = ""
+		}
+	}
+	return filtered
 }
 
 func defaultPrintText(s string) {
@@ -1286,6 +1310,8 @@ func (app *app) renderBriefingContextWithReporter(ctx context.Context, commandPa
 }
 
 func (app *app) renderBriefingContextWithReporterAndSourceStats(ctx context.Context, commandPath string, date string, period string, articles []model.Article, filteredArticles []model.Article, seenArticles []model.Article, failed []fetcher.FailedSource, showRaw bool, sendEmail bool, reporter *scheduledRunReporter, sourceStats *model.SourceStatsReport, watchSiteErrorNotices ...string) error {
+	articles = app.filterArticleImages(articles)
+	filteredArticles = app.filterArticleImages(filteredArticles)
 	logutil.Printf("Found %d articles after filtering.", len(articles))
 	app.output.printFailed(failed)
 	app.ensureBriefingOutputDeps()

@@ -46,14 +46,22 @@ func WriteMarkdown(briefing *model.Briefing, outputDir string) (string, error) {
 	return writeMarkdownWithImageDownloader(briefing, outputDir, downloadMarkdownImage)
 }
 
+func WriteMarkdownWithImageFilter(briefing *model.Briefing, outputDir string, filter imageutil.Filter) (string, error) {
+	return writeMarkdownWithImageDownloaderAndFilter(briefing, outputDir, downloadMarkdownImage, filter)
+}
+
 func writeMarkdownWithImageDownloader(briefing *model.Briefing, outputDir string, download markdownImageDownloader) (string, error) {
+	return writeMarkdownWithImageDownloaderAndFilter(briefing, outputDir, download, imageutil.Filter{})
+}
+
+func writeMarkdownWithImageDownloaderAndFilter(briefing *model.Briefing, outputDir string, download markdownImageDownloader, filter imageutil.Filter) (string, error) {
 	filename := briefingFileName(briefing.Date, briefing.Period)
 	path := filepath.Join(outputDir, filename)
 
 	rawContent := briefing.RawContent
 	localizedImages := map[string]string{}
 	if download != nil {
-		rawContent, localizedImages = localizeMarkdownImages(rawContent, outputDir, briefing.Date, briefing.Period, download)
+		rawContent, localizedImages = localizeMarkdownImagesWithFilter(rawContent, outputDir, briefing.Date, briefing.Period, download, filter)
 	}
 	content := briefingHeaderBlock(briefing) + rawContent
 
@@ -68,6 +76,10 @@ func writeMarkdownWithImageDownloader(briefing *model.Briefing, outputDir string
 }
 
 func localizeMarkdownImages(rawContent string, outputDir string, date string, period string, download markdownImageDownloader) (string, map[string]string) {
+	return localizeMarkdownImagesWithFilter(rawContent, outputDir, date, period, download, imageutil.Filter{})
+}
+
+func localizeMarkdownImagesWithFilter(rawContent string, outputDir string, date string, period string, download markdownImageDownloader, filter imageutil.Filter) (string, map[string]string) {
 	localized := make(map[string]string)
 	assetDirName := briefingAssetDirName(date, period)
 	assetDir := filepath.Join(outputDir, "assets", assetDirName)
@@ -91,7 +103,7 @@ func localizeMarkdownImages(rawContent string, outputDir string, date string, pe
 		if !ok || !isRemoteMarkdownImage(imageURL) {
 			continue
 		}
-		if imageutil.IsTrackingImageURL(imageURL) {
+		if !filter.IsUsableRemoteImageURL(imageURL) {
 			lines[i] = ""
 			continue
 		}

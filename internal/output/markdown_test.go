@@ -20,6 +20,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/walker1211/news-briefing/internal/imageutil"
 	"github.com/walker1211/news-briefing/internal/model"
 )
 
@@ -512,6 +513,36 @@ func TestWriteMarkdownRemovesTrackingPixelImage(t *testing.T) {
 	got := string(data)
 	if strings.Contains(got, imageURL) || strings.Contains(got, "![Claude 旧模型退役]") {
 		t.Fatalf("markdown kept tracking image: %q", got)
+	}
+}
+
+func TestWriteMarkdownRemovesConfiguredBlockedImage(t *testing.T) {
+	outputDir := t.TempDir()
+	downloadCalled := false
+	download := func(rawURL string, path string) error {
+		downloadCalled = true
+		return nil
+	}
+	imageURL := "https://media.example.com/promo/download.jpg?campaign=app"
+	briefing := &model.Briefing{
+		Date:       "26.08.14",
+		Period:     "1800",
+		RawContent: "### Story\n![Story](" + imageURL + ")\n**摘要：** ...",
+	}
+	filter := imageutil.NewFilter([]imageutil.ExactURLRule{{Host: "media.example.com", Path: "/promo/download.jpg"}})
+	path, err := writeMarkdownWithImageDownloaderAndFilter(briefing, outputDir, download, filter)
+	if err != nil {
+		t.Fatalf("writeMarkdownWithImageDownloaderAndFilter() error = %v", err)
+	}
+	if downloadCalled {
+		t.Fatal("download called for configured blocked image")
+	}
+	data, err := os.ReadFile(filepath.Clean(path))
+	if err != nil {
+		t.Fatalf("ReadFile() error = %v", err)
+	}
+	if got := string(data); strings.Contains(got, imageURL) || strings.Contains(got, "![Story]") {
+		t.Fatalf("markdown kept configured blocked image: %q", got)
 	}
 }
 
