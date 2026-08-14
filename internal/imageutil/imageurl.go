@@ -20,7 +20,10 @@ func IsUsableRemoteImageURL(raw string) bool {
 func isGenericSitePreviewImageURL(parsed *url.URL) bool {
 	host := strings.ToLower(parsed.Hostname())
 	path := strings.ToLower(strings.TrimSuffix(parsed.EscapedPath(), "/"))
-	return (host == "readhub.cn" || host == "www.readhub.cn") && path == "/social-image.webp"
+	if (host == "readhub.cn" || host == "www.readhub.cn") && path == "/social-image.webp" {
+		return true
+	}
+	return host == "file.caixin.com" && path == "/images/common/images/shareimg.jpg"
 }
 
 func IsTrackingImageURL(raw string) bool {

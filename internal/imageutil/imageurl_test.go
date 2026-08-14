@@ -19,3 +19,21 @@ func TestIsUsableRemoteImageURLKeepsReadhubArticleImage(t *testing.T) {
 		t.Fatalf("IsUsableRemoteImageURL(%q) = false, want true for article image", rawURL)
 	}
 }
+
+func TestIsUsableRemoteImageURLRejectsCaixinGenericShareImage(t *testing.T) {
+	for _, rawURL := range []string{
+		"https://file.caixin.com/images/common/images/shareimg.jpg",
+		"https://file.caixin.com/images/common/images/shareimg.jpg?from=rss",
+	} {
+		if IsUsableRemoteImageURL(rawURL) {
+			t.Fatalf("IsUsableRemoteImageURL(%q) = true, want false for Caixin generic share image", rawURL)
+		}
+	}
+}
+
+func TestIsUsableRemoteImageURLKeepsCaixinArticleImage(t *testing.T) {
+	rawURL := "https://file.caixin.com/images/2026/08/story.jpg"
+	if !IsUsableRemoteImageURL(rawURL) {
+		t.Fatalf("IsUsableRemoteImageURL(%q) = false, want true for Caixin article image", rawURL)
+	}
+}
