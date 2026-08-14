@@ -554,6 +554,7 @@ rm -f "$input"
 		{Title: "Finance", Source: "Finance Source", Category: "新闻财经", Published: time.Date(2026, 8, 15, 9, 0, 0, 0, time.UTC)},
 	}
 	runner := NewRunner("codex", []string{"exec"}, false, "", "")
+	runner.summaryLaunchStagger = 0
 	runner.SetSummaryOptions(true, 2)
 	summary, markdown, err := runner.SummarizeBriefingContext(context.Background(), articles, []string{"AI/科技", "新闻财经"}, time.UTC)
 	if err != nil {
@@ -570,6 +571,18 @@ rm -f "$input"
 	}
 	if !strings.Contains(markdown, "两个分类共同呈现结构变化") {
 		t.Fatalf("markdown = %q, want synthesized situation", markdown)
+	}
+}
+
+func TestNewRunnerStaggersOnlyDirectCodexParallelLaunches(t *testing.T) {
+	direct := NewRunner("codex", []string{"exec"}, false, "", "")
+	if got := direct.summaryLaunchStagger; got != directCodexLaunchStagger {
+		t.Fatalf("direct Codex launch stagger = %s, want %s", got, directCodexLaunchStagger)
+	}
+
+	wrapped := NewRunner("custom-ai", []string{"run"}, false, "", "")
+	if got := wrapped.summaryLaunchStagger; got != 0 {
+		t.Fatalf("custom command launch stagger = %s, want 0", got)
 	}
 }
 
