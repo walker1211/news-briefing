@@ -72,6 +72,40 @@ deep_command 格式为 ./news-briefing deep "关键词" --ignore-seen。
 优先参考这种风格：Sanders AOC AI data center bill、ICE data brokers surveillance。
 关键词应尽量具体且可直接用于 deep 命令。`
 
+const categoryBriefingPrompt = `你是一个国际新闻编辑。请只整理输入中的一个新闻分类。
+
+只输出合法 JSON，不要输出 Markdown、代码块、过程说明或额外字段。JSON 结构必须是：
+{
+  "overview_groups": [{"category": "输入分类名", "items": ["emoji 新闻要点"]}],
+  "stories": [{
+    "category": "输入分类名",
+    "title": "中文标题",
+    "image_url": "输入 Image 字段原值或空字符串",
+    "summary": "2-4句话摘要",
+    "impact": "2-3句话影响分析",
+    "source_article_ids": [1]
+  }]
+}
+
+同一事件的多条新闻应合并；stories 按重要程度排序。summary 要包含关键事实、背景、数字、参与方和最新进展，impact 要具体说明影响对象与后续变量。
+source_article_ids 必须使用输入条目的 1-based 编号，且只能引用当前分类。image_url 只能原样使用对应来源条目的 Image 字段；没有明确相关的可用图片时输出空字符串。overview_groups 必须且只能包含当前分类。`
+
+const briefingSynthesisPrompt = `你是一个国际新闻主编。下面是已经按分类完成的结构化新闻摘要。
+
+请只输出合法 JSON，不要输出 Markdown、代码块、过程说明或额外字段。JSON 结构必须是：
+{
+  "situation": "3句话今日整体态势",
+  "xhs_topics": ["话题1", "话题2", "话题3"],
+  "directions": [{
+    "title": "方向标题",
+    "why": "1-2句话说明为什么值得追",
+    "next": "1句话说明后续观察变量或节点",
+    "deep_command": "./news-briefing deep \"关键词\" --ignore-seen"
+  }]
+}
+
+situation 必须综合不同分类之间的共同趋势，不要逐分类机械复述。xhs_topics 输出 3 个、最多 4 个适合整篇简报的通用话题，不带 #、空格或特殊符号。directions 输出 2-4 个高质量方向；相近方向应合并。deep_command 的关键词优先使用 2-6 个词的英文实体或英文新闻短语。`
+
 const nonInteractiveBriefingSystemPrompt = `这是一次无人值守的单轮批处理任务，不是对话。
 你不能向用户提问，不能请求确认口径、风格或范围，不能给出 A/B 选项，不能输出“如果你愿意我可以……”之类的引导语。
 如有风格歧义，默认按提示词要求的结构化中文简报数据输出，语言自然，偏自然、可直接阅读的中文研究简报风格。
@@ -101,15 +135,19 @@ const deepDivePrompt = `你是一个资深新闻调研员和话题研究助手�
 - 可以继续追踪的延伸问题`
 
 type Runner struct {
-	commandName        string
-	commandArgs        []string
-	defaultModel       string
-	translationModel   string
-	appendSystemPrompt bool
-	proxyEnv           []string
-	retrySleep         sleepFunc
-	retryDelays        []time.Duration
-	failureLogPath     string
+	commandName               string
+	commandArgs               []string
+	defaultModel              string
+	defaultEffort             string
+	translationModel          string
+	translationEffort         string
+	summaryParallelByCategory bool
+	summaryMaxConcurrency     int
+	appendSystemPrompt        bool
+	proxyEnv                  []string
+	retrySleep                sleepFunc
+	retryDelays               []time.Duration
+	failureLogPath            string
 }
 
 type callKind string
@@ -135,7 +173,7 @@ const (
 	callKindSummarize       callKind = "summarize"
 	callKindTranslate       callKind = "translate"
 	callKindDeepDive        callKind = "deep"
-	defaultModel                     = "gpt-5.6-sol"
+	defaultModel                     = "gpt-5.6-terra"
 	defaultTranslationModel          = "gpt-5.3-codex-spark"
 )
 
@@ -286,6 +324,24 @@ func (r *Runner) SetModels(defaultTaskModel, translationTaskModel string) {
 	if model := strings.TrimSpace(translationTaskModel); model != "" {
 		r.translationModel = model
 	}
+}
+
+// SetModelOptions configures task-specific models and reasoning effort for
+// direct Codex execution. Other AI commands keep receiving only their base
+// arguments because their CLIs may not recognize Codex configuration flags.
+func (r *Runner) SetModelOptions(defaultTaskModel, defaultTaskEffort, translationTaskModel, translationTaskEffort string) {
+	r.SetModels(defaultTaskModel, translationTaskModel)
+	r.defaultEffort = strings.TrimSpace(defaultTaskEffort)
+	r.translationEffort = strings.TrimSpace(translationTaskEffort)
+}
+
+// SetSummaryOptions controls the optional category-parallel summary pipeline.
+func (r *Runner) SetSummaryOptions(parallelByCategory bool, maxConcurrency int) {
+	r.summaryParallelByCategory = parallelByCategory
+	if maxConcurrency < 1 {
+		maxConcurrency = 1
+	}
+	r.summaryMaxConcurrency = maxConcurrency
 }
 
 func withoutModelArgs(args []string) ([]string, string) {
@@ -597,7 +653,13 @@ func (r *Runner) SummarizeBriefingContext(ctx context.Context, articles []model.
 	if len(articles) == 0 {
 		return model.BriefingSummary{}, "今日暂无符合筛选条件的新闻。", nil
 	}
+	if r.summaryParallelByCategory && r.summaryMaxConcurrency > 1 && len(populatedCategories(articles, categoryOrder)) > 1 {
+		return r.summarizeBriefingParallelContext(ctx, articles, categoryOrder, loc)
+	}
+	return r.summarizeBriefingSingleContext(ctx, articles, categoryOrder, loc)
+}
 
+func (r *Runner) summarizeBriefingSingleContext(ctx context.Context, articles []model.Article, categoryOrder []string, loc *time.Location) (model.BriefingSummary, string, error) {
 	promptArticles, promptToOriginal := orderedPromptArticles(articles, categoryOrder)
 	input := output.GroupedArticleListView(promptArticles, categoryOrder, loc)
 	prompt := briefingPrompt + "\n\n---\n以下是今日新闻条目：\n\n" + input
@@ -617,6 +679,172 @@ func (r *Runner) SummarizeBriefingContext(ctx context.Context, articles []model.
 	structured = validateBriefingSummaryImages(structured, promptArticles)
 	structured = remapBriefingSummarySourceArticleIDs(structured, promptToOriginal)
 	return structured, output.StructuredBriefingMarkdown(structured, categoryOrder), nil
+}
+
+type categorySummaryResult struct {
+	summary model.BriefingSummary
+	err     error
+}
+
+type briefingSynthesis struct {
+	Situation  string                    `json:"situation"`
+	XHSTopics  []string                  `json:"xhs_topics"`
+	Directions []model.BriefingDirection `json:"directions"`
+}
+
+func (r *Runner) summarizeBriefingParallelContext(ctx context.Context, articles []model.Article, categoryOrder []string, loc *time.Location) (model.BriefingSummary, string, error) {
+	categories := populatedCategories(articles, categoryOrder)
+	results := make([]categorySummaryResult, len(categories))
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	maxConcurrency := r.summaryMaxConcurrency
+	if maxConcurrency > len(categories) {
+		maxConcurrency = len(categories)
+	}
+	semaphore := make(chan struct{}, maxConcurrency)
+	var wg sync.WaitGroup
+	for index, category := range categories {
+		index, category := index, category
+		wg.Go(func() {
+			select {
+			case semaphore <- struct{}{}:
+				defer func() { <-semaphore }()
+			case <-ctx.Done():
+				results[index].err = ctx.Err()
+				return
+			}
+			summary, err := r.summarizeCategoryContext(ctx, articles, category, loc)
+			results[index] = categorySummaryResult{summary: summary, err: err}
+			if err != nil {
+				cancel()
+			}
+		})
+	}
+	wg.Wait()
+
+	failedCategory := ""
+	var summaryErr error
+	for index, result := range results {
+		if result.err == nil {
+			continue
+		}
+		if summaryErr == nil || (errors.Is(summaryErr, context.Canceled) && !errors.Is(result.err, context.Canceled)) {
+			failedCategory = categories[index]
+			summaryErr = result.err
+		}
+	}
+	if summaryErr != nil {
+		return model.BriefingSummary{}, "", fmt.Errorf("summarize category %s: %w", failedCategory, summaryErr)
+	}
+
+	combined := model.BriefingSummary{}
+	for _, result := range results {
+		combined.OverviewGroups = append(combined.OverviewGroups, result.summary.OverviewGroups...)
+		combined.Stories = append(combined.Stories, result.summary.Stories...)
+	}
+
+	synthesis, err := r.synthesizeBriefingContext(ctx, combined)
+	if err != nil {
+		return model.BriefingSummary{}, "", err
+	}
+	combined.Situation = synthesis.Situation
+	combined.XHSTopics = synthesis.XHSTopics
+	combined.Directions = synthesis.Directions
+	return combined, output.StructuredBriefingMarkdown(combined, categoryOrder), nil
+}
+
+func populatedCategories(articles []model.Article, categoryOrder []string) []string {
+	counts := make(map[string]int)
+	for _, article := range articles {
+		counts[strings.TrimSpace(article.Category)]++
+	}
+	categories := make([]string, 0, len(counts))
+	for _, category := range output.OrderedCategories(articles, categoryOrder) {
+		category = strings.TrimSpace(category)
+		if category == "" || counts[category] == 0 {
+			continue
+		}
+		categories = append(categories, category)
+	}
+	return categories
+}
+
+func (r *Runner) summarizeCategoryContext(ctx context.Context, articles []model.Article, category string, loc *time.Location) (model.BriefingSummary, error) {
+	categoryArticles := make([]model.Article, 0)
+	originalIndexes := make([]int, 0)
+	for index, article := range articles {
+		if article.Category != category {
+			continue
+		}
+		categoryArticles = append(categoryArticles, article)
+		originalIndexes = append(originalIndexes, index)
+	}
+	if len(categoryArticles) == 0 {
+		return model.BriefingSummary{}, fmt.Errorf("category has no articles")
+	}
+
+	input := output.GroupedArticleListView(categoryArticles, []string{category}, loc)
+	prompt := categoryBriefingPrompt + "\n\n---\n当前分类：" + category + "\n\n以下是新闻条目：\n\n" + input
+	raw, err := r.callClaudeContext(ctx, prompt, r.summarizeRuntimeArgs()...)
+	if err != nil {
+		return model.BriefingSummary{}, err
+	}
+	structured, err := parseBriefingSummaryJSON(raw)
+	if err != nil {
+		return model.BriefingSummary{}, fmt.Errorf("parse structured category briefing: %w", err)
+	}
+	structured, err = validateAndNormalizeBriefingSummaryReferences(structured, categoryArticles, loc)
+	if err != nil {
+		return model.BriefingSummary{}, fmt.Errorf("validate category briefing references: %w", err)
+	}
+	structured = validateBriefingSummaryImages(structured, categoryArticles)
+	structured = remapBriefingSummarySourceArticleIDs(structured, originalIndexes)
+	structured.OverviewGroups, err = normalizedCategoryOverview(structured.OverviewGroups, category)
+	if err != nil {
+		return model.BriefingSummary{}, err
+	}
+	return structured, nil
+}
+
+func normalizedCategoryOverview(groups []model.BriefingOverviewGroup, category string) ([]model.BriefingOverviewGroup, error) {
+	for _, group := range groups {
+		if strings.TrimSpace(group.Category) != category || len(group.Items) == 0 {
+			continue
+		}
+		group.Category = category
+		return []model.BriefingOverviewGroup{group}, nil
+	}
+	return nil, fmt.Errorf("category %s has no matching overview group", category)
+}
+
+func (r *Runner) synthesizeBriefingContext(ctx context.Context, partial model.BriefingSummary) (briefingSynthesis, error) {
+	payload, err := json.Marshal(struct {
+		OverviewGroups []model.BriefingOverviewGroup `json:"overview_groups"`
+		Stories        []model.BriefingStory         `json:"stories"`
+	}{OverviewGroups: partial.OverviewGroups, Stories: partial.Stories})
+	if err != nil {
+		return briefingSynthesis{}, fmt.Errorf("marshal category summaries: %w", err)
+	}
+	prompt := briefingSynthesisPrompt + "\n\n---\n分类摘要 JSON：\n" + string(payload)
+	raw, err := r.callClaudeContext(ctx, prompt, r.summarizeRuntimeArgs()...)
+	if err != nil {
+		return briefingSynthesis{}, fmt.Errorf("synthesize briefing: %w", err)
+	}
+	var synthesis briefingSynthesis
+	if err := json.Unmarshal([]byte(stripJSONCodeFence(strings.TrimSpace(raw))), &synthesis); err != nil {
+		return briefingSynthesis{}, fmt.Errorf("parse briefing synthesis: %w", err)
+	}
+	if strings.TrimSpace(synthesis.Situation) == "" {
+		return briefingSynthesis{}, fmt.Errorf("validate briefing synthesis: empty situation")
+	}
+	if len(synthesis.XHSTopics) < 1 || len(synthesis.XHSTopics) > 4 {
+		return briefingSynthesis{}, fmt.Errorf("validate briefing synthesis: xhs_topics must contain 1-4 items")
+	}
+	if len(synthesis.Directions) < 2 || len(synthesis.Directions) > 4 {
+		return briefingSynthesis{}, fmt.Errorf("validate briefing synthesis: directions must contain 2-4 items")
+	}
+	return synthesis, nil
 }
 
 // orderedPromptArticles preserves the exact category order shown to the model
@@ -834,7 +1062,7 @@ func usableArticleImage(article model.Article) string {
 }
 
 func (r *Runner) summarizeRuntimeArgs() []string {
-	return r.taskRuntimeArgs(r.defaultModel, nonInteractiveBriefingSystemPrompt)
+	return r.taskRuntimeArgs(r.defaultModel, r.defaultEffort, nonInteractiveBriefingSystemPrompt)
 }
 
 func shouldSanitizeCLIOutput() bool {
@@ -857,7 +1085,7 @@ func (r *Runner) DeepDiveContext(ctx context.Context, topic string, articles []m
 }
 
 func (r *Runner) deepDiveRuntimeArgs() []string {
-	return r.taskRuntimeArgs(r.defaultModel, nonInteractiveDeepDiveSystemPrompt)
+	return r.taskRuntimeArgs(r.defaultModel, r.defaultEffort, nonInteractiveDeepDiveSystemPrompt)
 }
 
 const translatePrompt = `将以下新闻列表翻译成中文。要求：
@@ -883,13 +1111,18 @@ func (r *Runner) TranslateContext(ctx context.Context, articles []model.Article,
 }
 
 func (r *Runner) translateRuntimeArgs() []string {
-	return r.taskRuntimeArgs(r.translationModel, nonInteractiveBriefingSystemPrompt)
+	return r.taskRuntimeArgs(r.translationModel, r.translationEffort, nonInteractiveBriefingSystemPrompt)
 }
 
-func (r *Runner) taskRuntimeArgs(model, systemPrompt string) []string {
+func (r *Runner) taskRuntimeArgs(model, effort, systemPrompt string) []string {
 	var args []string
-	if isDirectCodexCommand(r.commandName) && strings.TrimSpace(model) != "" {
-		args = append(args, "--model", strings.TrimSpace(model))
+	if isDirectCodexCommand(r.commandName) {
+		if model = strings.TrimSpace(model); model != "" {
+			args = append(args, "--model", model)
+		}
+		if effort = strings.TrimSpace(effort); effort != "" {
+			args = append(args, "-c", "model_reasoning_effort="+strconv.Quote(effort))
+		}
 	}
 	return append(args, r.systemPromptRuntimeArgs(systemPrompt)...)
 }

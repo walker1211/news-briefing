@@ -72,8 +72,11 @@ const (
 	DefaultXRefreshHeartbeatStaleAfter    = 3 * time.Minute
 	DefaultXMaxPostsPerTarget             = 10
 	DefaultSchedulePrefetchWaitTimeout    = 2 * time.Minute
-	DefaultAIModel                        = "gpt-5.6-sol"
+	DefaultAIModel                        = "gpt-5.6-terra"
+	DefaultAIEffort                       = "medium"
 	DefaultAITranslationModel             = "gpt-5.3-codex-spark"
+	DefaultAITranslationEffort            = "high"
+	DefaultAISummaryMaxConcurrency        = 1
 )
 
 var (
@@ -284,14 +287,22 @@ type AICfg struct {
 	Command            string       `yaml:"command"`
 	Args               []string     `yaml:"args"`
 	Models             AIModelsCfg  `yaml:"models"`
+	Summary            AISummaryCfg `yaml:"summary"`
 	AppendSystemPrompt *bool        `yaml:"append_system_prompt"`
 	Retry              AIRetryCfg   `yaml:"retry"`
 	Timeout            AITimeoutCfg `yaml:"timeout"`
 }
 
 type AIModelsCfg struct {
-	Default     string `yaml:"default"`
-	Translation string `yaml:"translation"`
+	Default           string `yaml:"default"`
+	DefaultEffort     string `yaml:"default_effort"`
+	Translation       string `yaml:"translation"`
+	TranslationEffort string `yaml:"translation_effort"`
+}
+
+type AISummaryCfg struct {
+	ParallelByCategory bool `yaml:"parallel_by_category"`
+	MaxConcurrency     int  `yaml:"max_concurrency"`
 }
 
 type AIRetryCfg struct {
@@ -306,6 +317,15 @@ type AITimeoutCfg struct {
 
 func (cfg AICfg) ShouldAppendSystemPrompt() bool {
 	return cfg.AppendSystemPrompt == nil || *cfg.AppendSystemPrompt
+}
+
+func validateAIEffort(field, value string) error {
+	switch strings.TrimSpace(value) {
+	case "low", "medium", "high", "xhigh", "max", "ultra":
+		return nil
+	default:
+		return fmt.Errorf("validate %s: unsupported effort %q", field, value)
+	}
 }
 
 func resolveScheduleLocation(name string) (*time.Location, error) {
@@ -665,6 +685,15 @@ func (cfg *Config) Validate() error {
 	}
 	if strings.TrimSpace(cfg.AI.Models.Translation) == "" {
 		return fmt.Errorf("validate ai.models.translation: must not be empty")
+	}
+	if err := validateAIEffort("ai.models.default_effort", cfg.AI.Models.DefaultEffort); err != nil {
+		return err
+	}
+	if err := validateAIEffort("ai.models.translation_effort", cfg.AI.Models.TranslationEffort); err != nil {
+		return err
+	}
+	if cfg.AI.Summary.MaxConcurrency < 1 {
+		return fmt.Errorf("validate ai.summary.max_concurrency: must be at least 1")
 	}
 	for i, delay := range cfg.AI.Retry.Delays {
 		if delay <= 0 {
@@ -1135,6 +1164,15 @@ func Load(configPath string) (*Config, error) {
 	}
 	if cfg.AI.Models.Translation == "" {
 		cfg.AI.Models.Translation = DefaultAITranslationModel
+	}
+	if cfg.AI.Models.DefaultEffort == "" {
+		cfg.AI.Models.DefaultEffort = DefaultAIEffort
+	}
+	if cfg.AI.Models.TranslationEffort == "" {
+		cfg.AI.Models.TranslationEffort = DefaultAITranslationEffort
+	}
+	if cfg.AI.Summary.MaxConcurrency == 0 {
+		cfg.AI.Summary.MaxConcurrency = DefaultAISummaryMaxConcurrency
 	}
 	if cfg.AI.Retry.Delays == nil {
 		cfg.AI.Retry.Delays = cloneDurations(DefaultAIRetryDelays)

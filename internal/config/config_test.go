@@ -58,6 +58,15 @@ proxy: {}
 	if cfg.AI.Models.Translation != DefaultAITranslationModel {
 		t.Fatalf("AI.Models.Translation = %q, want %q", cfg.AI.Models.Translation, DefaultAITranslationModel)
 	}
+	if cfg.AI.Models.DefaultEffort != DefaultAIEffort {
+		t.Fatalf("AI.Models.DefaultEffort = %q, want %q", cfg.AI.Models.DefaultEffort, DefaultAIEffort)
+	}
+	if cfg.AI.Models.TranslationEffort != DefaultAITranslationEffort {
+		t.Fatalf("AI.Models.TranslationEffort = %q, want %q", cfg.AI.Models.TranslationEffort, DefaultAITranslationEffort)
+	}
+	if cfg.AI.Summary.MaxConcurrency != DefaultAISummaryMaxConcurrency {
+		t.Fatalf("AI.Summary.MaxConcurrency = %d, want %d", cfg.AI.Summary.MaxConcurrency, DefaultAISummaryMaxConcurrency)
+	}
 	if !cfg.AI.ShouldAppendSystemPrompt() {
 		t.Fatalf("AI.ShouldAppendSystemPrompt() = false, want true")
 	}
