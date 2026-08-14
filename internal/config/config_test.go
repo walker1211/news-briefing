@@ -98,6 +98,59 @@ proxy: {}
 	}
 }
 
+func TestLoadParsesExactImageFilterRules(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	content := `sources: []
+keywords: []
+image_filter:
+  blocked_urls:
+    - host: media.example.com
+      path: /promo/download.jpg
+email: {}
+schedule: []
+output: {}
+proxy: {}
+`
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	want := []ImageURLRule{{Host: "media.example.com", Path: "/promo/download.jpg"}}
+	if !reflect.DeepEqual(cfg.ImageFilter.BlockedURLs, want) {
+		t.Fatalf("ImageFilter.BlockedURLs = %#v, want %#v", cfg.ImageFilter.BlockedURLs, want)
+	}
+}
+
+func TestLoadRejectsInvalidExactImageFilterRules(t *testing.T) {
+	tests := []struct {
+		name string
+		rule string
+	}{
+		{name: "scheme", rule: "    - host: https://media.example.com\n      path: /promo.jpg\n"},
+		{name: "wildcard", rule: "    - host: '*.example.com'\n      path: /promo.jpg\n"},
+		{name: "query", rule: "    - host: media.example.com\n      path: /promo.jpg?campaign=app\n"},
+		{name: "duplicate", rule: "    - host: media.example.com\n      path: /promo.jpg\n    - host: MEDIA.EXAMPLE.COM\n      path: /promo.jpg/\n"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			path := filepath.Join(dir, "config.yaml")
+			content := "sources: []\nkeywords: []\nimage_filter:\n  blocked_urls:\n" + tc.rule + "email: {}\nschedule: []\noutput: {}\nproxy: {}\n"
+			if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+				t.Fatalf("write config: %v", err)
+			}
+			if _, err := Load(path); err == nil || !strings.Contains(err.Error(), "image_filter.blocked_urls") {
+				t.Fatalf("Load() error = %v, want image_filter.blocked_urls validation error", err)
+			}
+		})
+	}
+}
+
 func TestLoadParsesAIDurationsAndFallbackLevels(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.yaml")

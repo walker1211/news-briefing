@@ -20,6 +20,7 @@ type Config struct {
 	Sources                        []Source          `yaml:"sources"`
 	Keywords                       []string          `yaml:"keywords"`
 	Filters                        FiltersConfig     `yaml:"filters"`
+	ImageFilter                    ImageFilterConfig `yaml:"image_filter"`
 	Fetch                          FetchConfig       `yaml:"fetch"`
 	Watch                          WatchConfig       `yaml:"watch"`
 	XAccounts                      XAccountsConfig   `yaml:"x_accounts"`
@@ -124,6 +125,15 @@ type SourceFilterConfig struct {
 	ExcludeKeywords []string `yaml:"exclude_keywords"`
 	MaxArticles     int      `yaml:"max_articles"`
 	Priority        int      `yaml:"priority"`
+}
+
+type ImageFilterConfig struct {
+	BlockedURLs []ImageURLRule `yaml:"blocked_urls"`
+}
+
+type ImageURLRule struct {
+	Host string `yaml:"host"`
+	Path string `yaml:"path"`
 }
 
 type FetchConfig struct {
@@ -639,6 +649,9 @@ func (cfg *Config) Validate() error {
 	if err := validateFilters(cfg.Filters); err != nil {
 		return err
 	}
+	if err := validateImageFilter(cfg.ImageFilter); err != nil {
+		return err
+	}
 	if strings.TrimSpace(cfg.AI.Command) == "" {
 		return fmt.Errorf("validate ai.command: must not be empty")
 	}
@@ -788,6 +801,32 @@ func validateFilters(filters FiltersConfig) error {
 		if err := validateKeywordList(field+".exclude_keywords", filter.ExcludeKeywords); err != nil {
 			return err
 		}
+	}
+	return nil
+}
+
+func validateImageFilter(filter ImageFilterConfig) error {
+	seen := make(map[string]struct{}, len(filter.BlockedURLs))
+	for i, rule := range filter.BlockedURLs {
+		field := fmt.Sprintf("image_filter.blocked_urls[%d]", i)
+		host := strings.TrimSpace(rule.Host)
+		if host == "" {
+			return fmt.Errorf("validate %s.host: must not be empty", field)
+		}
+		parsedHost, err := url.Parse("https://" + host)
+		if err != nil || strings.Contains(host, "*") || parsedHost.Hostname() == "" || !strings.EqualFold(parsedHost.Hostname(), host) || parsedHost.Port() != "" || parsedHost.User != nil {
+			return fmt.Errorf("validate %s.host: must be an exact hostname without scheme, port, or wildcard", field)
+		}
+		path := strings.TrimSpace(rule.Path)
+		parsedPath, err := url.Parse(path)
+		if path == "" || err != nil || !strings.HasPrefix(path, "/") || parsedPath.IsAbs() || parsedPath.Host != "" || parsedPath.RawQuery != "" || parsedPath.Fragment != "" {
+			return fmt.Errorf("validate %s.path: must be an exact URL path without query or fragment", field)
+		}
+		key := strings.ToLower(host) + "\x00" + strings.TrimSuffix(parsedPath.EscapedPath(), "/")
+		if _, ok := seen[key]; ok {
+			return fmt.Errorf("validate %s: duplicate exact URL rule", field)
+		}
+		seen[key] = struct{}{}
 	}
 	return nil
 }

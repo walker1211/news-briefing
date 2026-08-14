@@ -360,6 +360,13 @@ filters:
     X Search/search:OpenAI outage:
       max_articles: 4
 
+# Exact host/path matches only; URL query parameters are ignored.
+# Built-in safety rules still reject known generic previews and tracking pixels.
+image_filter:
+  blocked_urls:
+    - host: file.caixin.com
+      path: /images/common/images/shareimg.jpg
+
 fetch:
   timeout: 30s
   retry_times: 3

@@ -37,3 +37,21 @@ func TestIsUsableRemoteImageURLKeepsCaixinArticleImage(t *testing.T) {
 		t.Fatalf("IsUsableRemoteImageURL(%q) = false, want true for Caixin article image", rawURL)
 	}
 }
+
+func TestFilterRejectsConfiguredExactURLAndIgnoresQuery(t *testing.T) {
+	filter := NewFilter([]ExactURLRule{{Host: "media.example.com", Path: "/promo/download.jpg"}})
+	for _, rawURL := range []string{
+		"https://media.example.com/promo/download.jpg",
+		"https://MEDIA.EXAMPLE.COM/promo/download.jpg?campaign=app",
+	} {
+		if filter.IsUsableRemoteImageURL(rawURL) {
+			t.Fatalf("Filter.IsUsableRemoteImageURL(%q) = true, want false", rawURL)
+		}
+	}
+	if !filter.IsUsableRemoteImageURL("https://media.example.com/news/download.jpg") {
+		t.Fatal("Filter rejected a different path on the configured host")
+	}
+	if !filter.IsUsableRemoteImageURL("https://cdn.example.com/promo/download.jpg") {
+		t.Fatal("Filter rejected the configured path on a different host")
+	}
+}

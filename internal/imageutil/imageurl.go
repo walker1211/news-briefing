@@ -6,6 +6,43 @@ import (
 	"strings"
 )
 
+type ExactURLRule struct {
+	Host string
+	Path string
+}
+
+type Filter struct {
+	blockedExactURLs map[string]struct{}
+}
+
+func NewFilter(rules []ExactURLRule) Filter {
+	blocked := make(map[string]struct{}, len(rules))
+	for _, rule := range rules {
+		path := strings.TrimSpace(rule.Path)
+		if parsed, err := url.Parse(path); err == nil {
+			path = parsed.EscapedPath()
+		}
+		blocked[exactURLKey(rule.Host, path)] = struct{}{}
+	}
+	return Filter{blockedExactURLs: blocked}
+}
+
+func (f Filter) IsUsableRemoteImageURL(raw string) bool {
+	if !IsUsableRemoteImageURL(raw) {
+		return false
+	}
+	parsed, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil {
+		return false
+	}
+	_, blocked := f.blockedExactURLs[exactURLKey(parsed.Hostname(), parsed.EscapedPath())]
+	return !blocked
+}
+
+func exactURLKey(host string, path string) string {
+	return strings.ToLower(strings.TrimSpace(host)) + "\x00" + strings.TrimSuffix(strings.TrimSpace(path), "/")
+}
+
 func IsUsableRemoteImageURL(raw string) bool {
 	parsed, err := url.Parse(strings.TrimSpace(raw))
 	if err != nil {

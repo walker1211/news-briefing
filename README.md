@@ -84,6 +84,17 @@ Notes:
 
 `email.*` only affects email delivery; source fetching and Watch pages use the `fetch.*` settings above.
 
+Generic promotional or QR-code images can be rejected with exact hostname/path rules:
+
+```yaml
+image_filter:
+  blocked_urls:
+    - host: media.example.com
+      path: /images/app-download.jpg
+```
+
+The match is exact, hostname matching is case-insensitive, and URL query parameters are ignored. Schemes, ports, wildcards, queries, and fragments are rejected in these rules so a broad pattern cannot accidentally hide normal article images. Built-in tracking-pixel and known generic-preview rules remain active as a safety baseline.
+
 Repository config layout:
 
 - `configs/config.example.yaml`: template config committed to git

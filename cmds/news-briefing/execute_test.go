@@ -67,6 +67,28 @@ func TestNewAppWiresInstanceDependencies(t *testing.T) {
 	}
 }
 
+func TestAppFiltersConfiguredArticleImagesWithoutMutatingInput(t *testing.T) {
+	app := &app{imageFilter: imageFilterFromConfig(config.ImageFilterConfig{BlockedURLs: []config.ImageURLRule{{
+		Host: "media.example.com",
+		Path: "/promo/download.jpg",
+	}}})}
+	articles := []model.Article{
+		{Title: "blocked", ImageURL: "https://media.example.com/promo/download.jpg?campaign=app"},
+		{Title: "kept", ImageURL: "https://media.example.com/news/story.jpg"},
+	}
+
+	got := app.filterArticleImages(articles)
+	if got[0].ImageURL != "" {
+		t.Fatalf("blocked ImageURL = %q, want empty", got[0].ImageURL)
+	}
+	if got[1].ImageURL != articles[1].ImageURL {
+		t.Fatalf("kept ImageURL = %q, want %q", got[1].ImageURL, articles[1].ImageURL)
+	}
+	if articles[0].ImageURL == "" {
+		t.Fatal("filterArticleImages mutated its input")
+	}
+}
+
 func TestNewAppMarkSeenUsesConfiguredOutputDir(t *testing.T) {
 	cfg := executeTestConfig(t, model.OutputModeOriginalOnly)
 	app := newApp(cfg)
