@@ -174,12 +174,17 @@ ai:
     - --disable
     - remote_plugin
   models:
-    default: gpt-5.6-sol
+    default: gpt-5.6-terra
+    default_effort: medium
     translation: gpt-5.3-codex-spark
+    translation_effort: high
+  summary:
+    parallel_by_category: true
+    max_concurrency: 3
   append_system_prompt: true
 ```
 
-The runner sends each prompt to `codex exec` over stdin and appends the `-` input marker automatically. Do not put `-p`, `--model`, or the trailing `-` into `args`: Codex uses `-p` for config profiles, while the runner selects `models.default` for summaries and deep dives and `models.translation` for translation. When `append_system_prompt` is enabled, the runner maps the batch-only instructions to a per-run `developer_instructions` override.
+The runner sends each prompt to `codex exec` over stdin and appends the `-` input marker automatically. Do not put `-p`, `--model`, or the trailing `-` into `args`: Codex uses `-p` for config profiles, while the runner selects `models.default` for summaries and deep dives and `models.translation` for translation, applying the corresponding effort to each task. With `summary.parallel_by_category` enabled, category summaries run concurrently up to `max_concurrency`, followed by one short cross-category synthesis for the situation and follow-up directions. When `append_system_prompt` is enabled, the runner maps the batch-only instructions to a per-run `developer_instructions` override.
 
 `--ignore-user-config` and the three feature disables keep this unattended batch job isolated from personal MCP servers, apps, and plugins. They do not modify the user's `~/.codex/config.toml` or affect Codex App features such as Computer Use.
 

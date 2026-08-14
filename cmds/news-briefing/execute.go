@@ -99,7 +99,8 @@ func newApp(cfg *config.Config) *app {
 	fetchClient.SetRSSCacheDir(filepath.Join(cfg.Output.Dir, "state", "rss-cache"))
 	watchRunner := watch.NewRunner(httpClient)
 	aiRunner := summarizer.NewRunnerWithRetryDelays(cfg.AI.Command, cfg.AI.Args, cfg.AI.ShouldAppendSystemPrompt(), cfg.Proxy.HTTP, cfg.Proxy.Socks5, cfg.AI.Retry.Delays)
-	aiRunner.SetModels(cfg.AI.Models.Default, cfg.AI.Models.Translation)
+	aiRunner.SetModelOptions(cfg.AI.Models.Default, cfg.AI.Models.DefaultEffort, cfg.AI.Models.Translation, cfg.AI.Models.TranslationEffort)
+	aiRunner.SetSummaryOptions(cfg.AI.Summary.ParallelByCategory, cfg.AI.Summary.MaxConcurrency)
 	emailSender := output.NewEmailSender()
 	imageFilter := imageFilterFromConfig(cfg.ImageFilter)
 	return &app{
