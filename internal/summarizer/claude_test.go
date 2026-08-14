@@ -554,7 +554,6 @@ rm -f "$input"
 		{Title: "Finance", Source: "Finance Source", Category: "新闻财经", Published: time.Date(2026, 8, 15, 9, 0, 0, 0, time.UTC)},
 	}
 	runner := NewRunner("codex", []string{"exec"}, false, "", "")
-	runner.summaryLaunchStagger = 0
 	runner.SetSummaryOptions(true, 2)
 	summary, markdown, err := runner.SummarizeBriefingContext(context.Background(), articles, []string{"AI/科技", "新闻财经"}, time.UTC)
 	if err != nil {
@@ -571,18 +570,6 @@ rm -f "$input"
 	}
 	if !strings.Contains(markdown, "两个分类共同呈现结构变化") {
 		t.Fatalf("markdown = %q, want synthesized situation", markdown)
-	}
-}
-
-func TestNewRunnerStaggersOnlyDirectCodexParallelLaunches(t *testing.T) {
-	direct := NewRunner("codex", []string{"exec"}, false, "", "")
-	if got := direct.summaryLaunchStagger; got != directCodexLaunchStagger {
-		t.Fatalf("direct Codex launch stagger = %s, want %s", got, directCodexLaunchStagger)
-	}
-
-	wrapped := NewRunner("custom-ai", []string{"run"}, false, "", "")
-	if got := wrapped.summaryLaunchStagger; got != 0 {
-		t.Fatalf("custom command launch stagger = %s, want 0", got)
 	}
 }
 
@@ -834,6 +821,130 @@ func TestCallClaudeRetriesGenericRetryableAPIError(t *testing.T) {
 	}
 	if strings.TrimSpace(string(data)) != "2" {
 		t.Fatalf("attempt count = %q, want %q", strings.TrimSpace(string(data)), "2")
+	}
+}
+
+func TestIsRetryableOAuthCredentialErrorMatchesOnlyKnownRotationFailures(t *testing.T) {
+	tests := []struct {
+		name   string
+		stdout string
+		stderr string
+		want   bool
+	}{
+		{name: "refresh token reused", stderr: "Refresh token has already been used", want: true},
+		{name: "revoked code", stdout: `{"code":"token_revoked"}`, want: true},
+		{name: "invalidated token", stderr: "Encountered invalidated OAuth token for user", want: true},
+		{name: "generic unauthorized", stderr: "401 Unauthorized", want: false},
+		{name: "unrelated token error", stderr: "token budget exceeded", want: false},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			got := isRetryableOAuthCredentialError(errors.New("exit status 1"), test.stdout, test.stderr)
+			if got != test.want {
+				t.Fatalf("isRetryableOAuthCredentialError() = %t, want %t", got, test.want)
+			}
+		})
+	}
+}
+
+func TestCallClaudeRetriesOAuthCredentialErrorOnceThenSucceeds(t *testing.T) {
+	dir := t.TempDir()
+	oldPath := os.Getenv("PATH")
+	t.Cleanup(func() {
+		_ = os.Setenv("PATH", oldPath)
+		ResetCommandForTest()
+	})
+
+	statePath := filepath.Join(dir, "attempts.txt")
+	commandName := "oauth-refresh-ai"
+	if runtime.GOOS == "windows" {
+		commandName += ".bat"
+	}
+	commandPath := filepath.Join(dir, commandName)
+	script := "#!/bin/sh\n" +
+		"COUNT=0\n" +
+		"if [ -f \"" + statePath + "\" ]; then COUNT=$(cat \"" + statePath + "\"); fi\n" +
+		"COUNT=$((COUNT+1))\n" +
+		"printf '%s' \"$COUNT\" > \"" + statePath + "\"\n" +
+		"if [ \"$COUNT\" -eq 1 ]; then\n" +
+		"  >&2 printf 'Encountered invalidated oauth token for user, failing request'\n" +
+		"  exit 1\n" +
+		"fi\n" +
+		"printf 'final body'\n"
+	if err := os.WriteFile(commandPath, []byte(script), 0o755); err != nil {
+		t.Fatalf("write fake cli: %v", err)
+	}
+	if err := os.Setenv("PATH", dir+string(os.PathListSeparator)+oldPath); err != nil {
+		t.Fatalf("set PATH: %v", err)
+	}
+
+	runner := NewRunnerWithRetryDelays(commandName, nil, true, "", "", []time.Duration{time.Minute})
+	var slept []time.Duration
+	runner.retrySleep = func(_ context.Context, delay time.Duration) error {
+		slept = append(slept, delay)
+		return nil
+	}
+	got, err := runner.callClaudeWithKind(callKindSummarize, "hello world")
+	if err != nil {
+		t.Fatalf("callClaudeWithKind() error = %v", err)
+	}
+	if got != "final body" {
+		t.Fatalf("callClaudeWithKind() = %q, want final body", got)
+	}
+	if want := []time.Duration{oauthCredentialRetryDelay}; !reflect.DeepEqual(slept, want) {
+		t.Fatalf("retry sleeps = %v, want %v", slept, want)
+	}
+}
+
+func TestCallClaudeStopsAfterOneOAuthCredentialRetry(t *testing.T) {
+	dir := t.TempDir()
+	oldPath := os.Getenv("PATH")
+	t.Cleanup(func() {
+		_ = os.Setenv("PATH", oldPath)
+		ResetCommandForTest()
+	})
+
+	statePath := filepath.Join(dir, "attempts.txt")
+	commandName := "revoked-oauth-ai"
+	if runtime.GOOS == "windows" {
+		commandName += ".bat"
+	}
+	commandPath := filepath.Join(dir, commandName)
+	script := "#!/bin/sh\n" +
+		"COUNT=0\n" +
+		"if [ -f \"" + statePath + "\" ]; then COUNT=$(cat \"" + statePath + "\"); fi\n" +
+		"COUNT=$((COUNT+1))\n" +
+		"printf '%s' \"$COUNT\" > \"" + statePath + "\"\n" +
+		" >&2 printf 'token_revoked'\n" +
+		"exit 1\n"
+	if err := os.WriteFile(commandPath, []byte(script), 0o755); err != nil {
+		t.Fatalf("write fake cli: %v", err)
+	}
+	if err := os.Setenv("PATH", dir+string(os.PathListSeparator)+oldPath); err != nil {
+		t.Fatalf("set PATH: %v", err)
+	}
+
+	runner := NewRunnerWithRetryDelays(commandName, nil, true, "", "", []time.Duration{time.Minute})
+	runner.failureLogPath = filepath.Join(dir, "ai-cli-failures.log")
+	var slept []time.Duration
+	runner.retrySleep = func(_ context.Context, delay time.Duration) error {
+		slept = append(slept, delay)
+		return nil
+	}
+	_, err := runner.callClaudeWithKind(callKindSummarize, "hello world")
+	if err == nil || !strings.Contains(err.Error(), "after 2 attempts") {
+		t.Fatalf("callClaudeWithKind() error = %v, want two-attempt failure", err)
+	}
+	data, readErr := os.ReadFile(statePath)
+	if readErr != nil {
+		t.Fatalf("ReadFile() attempts error = %v", readErr)
+	}
+	if got := strings.TrimSpace(string(data)); got != "2" {
+		t.Fatalf("attempt count = %q, want 2", got)
+	}
+	if want := []time.Duration{oauthCredentialRetryDelay}; !reflect.DeepEqual(slept, want) {
+		t.Fatalf("retry sleeps = %v, want %v", slept, want)
 	}
 }
 

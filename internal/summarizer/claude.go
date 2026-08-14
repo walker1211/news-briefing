@@ -143,7 +143,6 @@ type Runner struct {
 	translationEffort         string
 	summaryParallelByCategory bool
 	summaryMaxConcurrency     int
-	summaryLaunchStagger      time.Duration
 	appendSystemPrompt        bool
 	proxyEnv                  []string
 	retrySleep                sleepFunc
@@ -171,12 +170,12 @@ func IsInvalidPromptError(err error) bool {
 }
 
 const (
-	callKindSummarize        callKind = "summarize"
-	callKindTranslate        callKind = "translate"
-	callKindDeepDive         callKind = "deep"
-	defaultModel                      = "gpt-5.6-terra"
-	defaultTranslationModel           = "gpt-5.3-codex-spark"
-	directCodexLaunchStagger          = 5 * time.Second
+	callKindSummarize         callKind = "summarize"
+	callKindTranslate         callKind = "translate"
+	callKindDeepDive          callKind = "deep"
+	defaultModel                       = "gpt-5.6-terra"
+	defaultTranslationModel            = "gpt-5.3-codex-spark"
+	oauthCredentialRetryDelay          = 3 * time.Second
 )
 
 var (
@@ -304,7 +303,7 @@ func NewRunnerWithRetryDelays(command string, args []string, appendSystemPrompt 
 		proxyEnv = append(proxyEnv, "all_proxy="+socks5Proxy, "ALL_PROXY="+socks5Proxy)
 	}
 
-	runner := &Runner{
+	return &Runner{
 		commandName:        name,
 		commandArgs:        runnerArgs,
 		defaultModel:       configuredDefaultModel,
@@ -315,10 +314,6 @@ func NewRunnerWithRetryDelays(command string, args []string, appendSystemPrompt 
 		retryDelays:        cloneDurations(retryDelays),
 		failureLogPath:     defaultFailureLogPath,
 	}
-	if isDirectCodexCommand(name) {
-		runner.summaryLaunchStagger = directCodexLaunchStagger
-	}
-	return runner
 }
 
 // SetModels configures task-specific models for direct Codex execution.
@@ -433,6 +428,24 @@ func isRetryableAICLIError(err error, stdout string, stderr string) bool {
 	return false
 }
 
+func isRetryableOAuthCredentialError(err error, stdout string, stderr string) bool {
+	if err == nil {
+		return false
+	}
+	combined := strings.ToLower(strings.Join([]string{err.Error(), stdout, stderr}, "\n"))
+	for _, marker := range []string{
+		"refresh token has already been used",
+		"refresh token already used",
+		"token_revoked",
+		"invalidated oauth token",
+	} {
+		if strings.Contains(combined, marker) {
+			return true
+		}
+	}
+	return false
+}
+
 type sleepFunc func(context.Context, time.Duration) error
 
 func retrySleep(ctx context.Context, d time.Duration) error {
@@ -452,18 +465,20 @@ func (r *Runner) callClaudeWithKind(kind callKind, prompt string, runtimeArgs ..
 
 func (r *Runner) callClaudeWithKindContext(ctx context.Context, kind callKind, prompt string, runtimeArgs ...string) (string, error) {
 	var lastErr error
-	for attempt := 0; attempt <= len(r.retryDelays); attempt++ {
+	attempts := 0
+	genericRetries := 0
+	oauthRetryUsed := false
+	nextDelay := time.Duration(0)
+	for {
 		if err := ctx.Err(); err != nil {
 			return "", err
 		}
-		if attempt > 0 {
-			delay := r.retryDelays[attempt-1]
-			if delay > 0 {
-				if err := r.retrySleep(ctx, delay); err != nil {
-					return "", err
-				}
+		if nextDelay > 0 {
+			if err := r.retrySleep(ctx, nextDelay); err != nil {
+				return "", err
 			}
 		}
+		attempts++
 		out, stdoutText, stderrText, err := r.runClaudeCommandContext(ctx, prompt, runtimeArgs...)
 		if err == nil {
 			body := strings.TrimSpace(out)
@@ -471,22 +486,31 @@ func (r *Runner) callClaudeWithKindContext(ctx context.Context, kind callKind, p
 				body = sanitizeCLIOutput(out)
 			}
 			if body != "" {
-				if attempt > 0 {
-					logutil.Warnf("AI CLI retry succeeded on attempt %d", attempt+1)
+				if attempts > 1 {
+					logutil.Warnf("AI CLI retry succeeded on attempt %d", attempts)
 				}
 				return body, nil
 			}
 			err = fmt.Errorf("ai cli returned empty content")
 			stdoutText = strings.TrimSpace(out)
 		}
-		lastErr = buildRetryableCallError(attempt+1, err, stdoutText, stderrText)
-		if !isRetryableAICLIError(err, stdoutText, stderrText) || attempt == len(r.retryDelays) {
-			finalErr := fmt.Errorf("ai cli failed after %d attempts: %w", attempt+1, lastErr)
-			r.appendAICLIFailureLog(kind, attempt+1, stdoutText, stderrText, finalErr)
-			return "", finalErr
+		lastErr = buildRetryableCallError(attempts, err, stdoutText, stderrText)
+		if isRetryableOAuthCredentialError(err, stdoutText, stderrText) {
+			if !oauthRetryUsed {
+				oauthRetryUsed = true
+				nextDelay = oauthCredentialRetryDelay
+				continue
+			}
+		} else if isRetryableAICLIError(err, stdoutText, stderrText) && genericRetries < len(r.retryDelays) {
+			nextDelay = r.retryDelays[genericRetries]
+			genericRetries++
+			continue
 		}
+
+		finalErr := fmt.Errorf("ai cli failed after %d attempts: %w", attempts, lastErr)
+		r.appendAICLIFailureLog(kind, attempts, stdoutText, stderrText, finalErr)
+		return "", finalErr
 	}
-	return "", lastErr
 }
 
 func (r *Runner) callClaude(prompt string, runtimeArgs ...string) (string, error) {
@@ -713,19 +737,6 @@ func (r *Runner) summarizeBriefingParallelContext(ctx context.Context, articles 
 	for index, category := range categories {
 		index, category := index, category
 		wg.Go(func() {
-			// Direct Codex processes share one rotating OAuth file. A small launch
-			// offset lets the first process finish an expired-token refresh before
-			// the remaining category calls read the credentials.
-			if delay := time.Duration(index) * r.summaryLaunchStagger; delay > 0 {
-				timer := time.NewTimer(delay)
-				defer timer.Stop()
-				select {
-				case <-timer.C:
-				case <-ctx.Done():
-					results[index].err = ctx.Err()
-					return
-				}
-			}
 			select {
 			case semaphore <- struct{}{}:
 				defer func() { <-semaphore }()
