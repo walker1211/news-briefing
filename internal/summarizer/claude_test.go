@@ -948,6 +948,58 @@ func TestCallClaudeStopsAfterOneOAuthCredentialRetry(t *testing.T) {
 	}
 }
 
+func TestCallClaudeSerializesConcurrentOAuthCredentialRetries(t *testing.T) {
+	dir := t.TempDir()
+	oldPath := os.Getenv("PATH")
+	t.Cleanup(func() {
+		_ = os.Setenv("PATH", oldPath)
+		ResetCommandForTest()
+	})
+
+	commandName := "concurrent-oauth-ai"
+	if runtime.GOOS == "windows" {
+		commandName += ".bat"
+	}
+	commandPath := filepath.Join(dir, commandName)
+	if err := os.WriteFile(commandPath, []byte("#!/bin/sh\n>&2 printf 'refresh token already used'\nexit 1\n"), 0o755); err != nil {
+		t.Fatalf("write fake cli: %v", err)
+	}
+	if err := os.Setenv("PATH", dir+string(os.PathListSeparator)+oldPath); err != nil {
+		t.Fatalf("set PATH: %v", err)
+	}
+
+	runner := NewRunner(commandName, nil, true, "", "")
+	runner.failureLogPath = ""
+	var mu sync.Mutex
+	activeSleeps := 0
+	maxActiveSleeps := 0
+	runner.retrySleep = func(_ context.Context, _ time.Duration) error {
+		mu.Lock()
+		activeSleeps++
+		if activeSleeps > maxActiveSleeps {
+			maxActiveSleeps = activeSleeps
+		}
+		mu.Unlock()
+		time.Sleep(20 * time.Millisecond)
+		mu.Lock()
+		activeSleeps--
+		mu.Unlock()
+		return nil
+	}
+
+	var wg sync.WaitGroup
+	for range 3 {
+		wg.Go(func() {
+			_, _ = runner.callClaudeWithKind(callKindSummarize, "hello world")
+		})
+	}
+	wg.Wait()
+
+	if maxActiveSleeps != 1 {
+		t.Fatalf("max concurrent OAuth retry sleeps = %d, want 1", maxActiveSleeps)
+	}
+}
+
 func TestCallClaudeRetriesCCSStartupLockError(t *testing.T) {
 	dir := t.TempDir()
 	oldPath := os.Getenv("PATH")
