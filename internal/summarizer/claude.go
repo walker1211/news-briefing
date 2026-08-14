@@ -147,6 +147,7 @@ type Runner struct {
 	proxyEnv                  []string
 	retrySleep                sleepFunc
 	retryDelays               []time.Duration
+	oauthRetryGate            chan struct{}
 	failureLogPath            string
 }
 
@@ -312,6 +313,7 @@ func NewRunnerWithRetryDelays(command string, args []string, appendSystemPrompt 
 		proxyEnv:           proxyEnv,
 		retrySleep:         retrySleep,
 		retryDelays:        cloneDurations(retryDelays),
+		oauthRetryGate:     make(chan struct{}, 1),
 		failureLogPath:     defaultFailureLogPath,
 	}
 }
@@ -459,6 +461,15 @@ func retrySleep(ctx context.Context, d time.Duration) error {
 	}
 }
 
+func (r *Runner) acquireOAuthRetryGate(ctx context.Context) (func(), error) {
+	select {
+	case r.oauthRetryGate <- struct{}{}:
+		return func() { <-r.oauthRetryGate }, nil
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+}
+
 func (r *Runner) callClaudeWithKind(kind callKind, prompt string, runtimeArgs ...string) (string, error) {
 	return r.callClaudeWithKindContext(context.Background(), kind, prompt, runtimeArgs...)
 }
@@ -468,18 +479,34 @@ func (r *Runner) callClaudeWithKindContext(ctx context.Context, kind callKind, p
 	attempts := 0
 	genericRetries := 0
 	oauthRetryUsed := false
+	oauthRetryPending := false
 	nextDelay := time.Duration(0)
 	for {
 		if err := ctx.Err(); err != nil {
 			return "", err
 		}
+		var releaseOAuthRetryGate func()
+		if oauthRetryPending {
+			var err error
+			releaseOAuthRetryGate, err = r.acquireOAuthRetryGate(ctx)
+			if err != nil {
+				return "", err
+			}
+		}
 		if nextDelay > 0 {
 			if err := r.retrySleep(ctx, nextDelay); err != nil {
+				if releaseOAuthRetryGate != nil {
+					releaseOAuthRetryGate()
+				}
 				return "", err
 			}
 		}
 		attempts++
 		out, stdoutText, stderrText, err := r.runClaudeCommandContext(ctx, prompt, runtimeArgs...)
+		if releaseOAuthRetryGate != nil {
+			releaseOAuthRetryGate()
+		}
+		oauthRetryPending = false
 		if err == nil {
 			body := strings.TrimSpace(out)
 			if r.shouldSanitizeCLIOutput() {
@@ -498,6 +525,7 @@ func (r *Runner) callClaudeWithKindContext(ctx context.Context, kind callKind, p
 		if isRetryableOAuthCredentialError(err, stdoutText, stderrText) {
 			if !oauthRetryUsed {
 				oauthRetryUsed = true
+				oauthRetryPending = true
 				nextDelay = oauthCredentialRetryDelay
 				continue
 			}
