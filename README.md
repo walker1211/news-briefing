@@ -53,13 +53,35 @@ fetch:
   timeout: 30s
   retry_times: 3
   retry_wait_time: 200ms
+  retry_backoff_factor: 3
+  retry_max_wait_time: 2s
+  retry_jitter: 200ms
 ```
 
 Notes:
 
 - `timeout`: HTTP fetch timeout
 - `retry_times`: total fetch attempts for news sources and Watch pages
-- `retry_wait_time`: wait duration between failed fetch attempts
+- `retry_wait_time`: base wait before the first retry
+- `retry_backoff_factor`: multiplier applied to later retry waits
+- `retry_max_wait_time`: upper bound for one retry wait
+- `retry_jitter`: random delay added after the first retry to spread bursts
+
+Optional scheduled-run source health policy:
+
+```yaml
+source_health:
+  alert_after_consecutive_failures: 2
+```
+
+With a threshold of `2`, the first failed formal window is recorded silently,
+the second consecutive failure is included in the briefing, and the first later
+success is included once as a recovery notice. Re-running the same window does
+not increment the counter.
+
+When Watch uses Browsebox, `watch.fallback_to_direct_on_last_retry: true` makes
+the final transport attempt use the normal HTTP client. That client still obeys
+`proxy.http` / `proxy.socks5` when configured.
 
 Example email delivery config:
 

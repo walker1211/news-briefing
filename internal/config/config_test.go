@@ -1023,6 +1023,12 @@ proxy: {}
 	if cfg.Fetch.RetryWaitTime != 200*time.Millisecond {
 		t.Fatalf("Fetch.RetryWaitTime = %v, want %v", cfg.Fetch.RetryWaitTime, 200*time.Millisecond)
 	}
+	if cfg.Fetch.RetryBackoffFactor != 1 || cfg.Fetch.RetryMaxWaitTime != 30*time.Second || cfg.Fetch.RetryJitter != 0 {
+		t.Fatalf("Fetch retry backoff defaults = factor %d max %v jitter %v", cfg.Fetch.RetryBackoffFactor, cfg.Fetch.RetryMaxWaitTime, cfg.Fetch.RetryJitter)
+	}
+	if cfg.SourceHealth.AlertAfterConsecutiveFailures != 1 {
+		t.Fatalf("SourceHealth.AlertAfterConsecutiveFailures = %d, want 1", cfg.SourceHealth.AlertAfterConsecutiveFailures)
+	}
 }
 
 func TestLoadParsesConfiguredFetchConfig(t *testing.T) {
@@ -1034,6 +1040,13 @@ fetch:
   timeout: 45s
   retry_times: 5
   retry_wait_time: 750ms
+  retry_backoff_factor: 3
+  retry_max_wait_time: 12s
+  retry_jitter: 2s
+source_health:
+  alert_after_consecutive_failures: 2
+watch:
+  fallback_to_direct_on_last_retry: true
 email:
   smtp_host: smtp.example.com
   smtp_port: 465
@@ -1060,6 +1073,15 @@ proxy: {}
 	}
 	if cfg.Fetch.RetryWaitTime != 750*time.Millisecond {
 		t.Fatalf("Fetch.RetryWaitTime = %v, want %v", cfg.Fetch.RetryWaitTime, 750*time.Millisecond)
+	}
+	if cfg.Fetch.RetryBackoffFactor != 3 || cfg.Fetch.RetryMaxWaitTime != 12*time.Second || cfg.Fetch.RetryJitter != 2*time.Second {
+		t.Fatalf("Fetch retry backoff = factor %d max %v jitter %v", cfg.Fetch.RetryBackoffFactor, cfg.Fetch.RetryMaxWaitTime, cfg.Fetch.RetryJitter)
+	}
+	if cfg.SourceHealth.AlertAfterConsecutiveFailures != 2 {
+		t.Fatalf("SourceHealth.AlertAfterConsecutiveFailures = %d, want 2", cfg.SourceHealth.AlertAfterConsecutiveFailures)
+	}
+	if !cfg.Watch.FallbackToDirectOnLastRetry {
+		t.Fatal("Watch.FallbackToDirectOnLastRetry = false, want true")
 	}
 }
 

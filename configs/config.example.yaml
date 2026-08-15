@@ -371,12 +371,25 @@ fetch:
   timeout: 30s
   retry_times: 3
   retry_wait_time: 200ms
+  # Keep the first retry short, then spread later retries to avoid synchronized bursts.
+  retry_backoff_factor: 3
+  retry_max_wait_time: 2s
+  retry_jitter: 200ms
   reddit_source_delay_min: 60s
   reddit_source_delay_max: 70s
   reddit_rate_limit_wait_max: 120s
 
+# A single failed formal window is retained as state but omitted from the
+# briefing. The second consecutive failure is shown; a later success is shown
+# once as a recovery notice.
+source_health:
+  alert_after_consecutive_failures: 2
+
 watch:
   article_concurrency: 8
+  # When Browsebox transport retries are exhausted, make the final attempt with
+  # the normal HTTP client (which may still use proxy.http/proxy.socks5).
+  fallback_to_direct_on_last_retry: true
   # Normal runs only fetch changed/new article bodies. A bounded oldest-first
   # audit still detects silent body changes without downloading the full corpus.
   deep_verify_interval: 24h

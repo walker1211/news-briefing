@@ -152,6 +152,37 @@ func TestRunContextRetriesWatchFetchUsingFetchConfig(t *testing.T) {
 	}
 }
 
+func TestRetryingFetchHTMLUsesFallbackOnlyAfterFinalPrimaryFailure(t *testing.T) {
+	primaryAttempts := 0
+	fallbackAttempts := 0
+	primary := func(context.Context, string) (string, error) {
+		primaryAttempts++
+		return "", errors.New("temporary")
+	}
+	fallback := func(context.Context, string) (string, error) {
+		fallbackAttempts++
+		return "fallback", nil
+	}
+	fetch := retryingFetchHTML(primary, watchFetchRetrySettings{times: 3, wait: 0, backoffFactor: 1, maxWait: 0}, fallback)
+	html, err := fetch(context.Background(), "https://example.com")
+	if err != nil {
+		t.Fatalf("fetch() error = %v", err)
+	}
+	if html != "fallback" || primaryAttempts != 3 || fallbackAttempts != 1 {
+		t.Fatalf("html=%q primary=%d fallback=%d", html, primaryAttempts, fallbackAttempts)
+	}
+}
+
+func TestWatchRetryDelayUsesTieredBackoff(t *testing.T) {
+	settings := watchFetchRetrySettings{wait: 3 * time.Second, backoffFactor: 3, maxWait: 12 * time.Second}
+	if got := watchRetryDelay(settings, 1); got != 3*time.Second {
+		t.Fatalf("first retry delay = %v, want 3s", got)
+	}
+	if got := watchRetryDelay(settings, 2); got != 9*time.Second {
+		t.Fatalf("second retry delay = %v, want 9s", got)
+	}
+}
+
 func TestRunContextTurnsAnthropicSupportFetchFailureIntoSiteError(t *testing.T) {
 	attempts := 0
 	fetchHTML := func(ctx context.Context, url string) (string, error) {

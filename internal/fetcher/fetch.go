@@ -22,8 +22,11 @@ const (
 )
 
 type fetchRetrySettings struct {
-	times int
-	wait  time.Duration
+	times         int
+	wait          time.Duration
+	backoffFactor int
+	maxWait       time.Duration
+	jitter        time.Duration
 }
 
 type sleepFunc func(context.Context, time.Duration) error
@@ -79,18 +82,48 @@ func sleepContext(ctx context.Context, d time.Duration) error {
 }
 
 func defaultFetchRetrySettings() fetchRetrySettings {
-	return fetchRetrySettings{times: config.DefaultFetchRetryTimes, wait: config.DefaultFetchRetryWaitTime}
+	return fetchRetrySettings{times: config.DefaultFetchRetryTimes, wait: config.DefaultFetchRetryWaitTime, backoffFactor: config.DefaultFetchRetryBackoffFactor, maxWait: config.DefaultFetchRetryMaxWaitTime}
 }
 
 func fetchRetrySettingsFromConfig(cfg *config.Config) fetchRetrySettings {
 	if cfg == nil || cfg.Fetch.RetryTimes < 1 {
 		return defaultFetchRetrySettings()
 	}
-	settings := fetchRetrySettings{times: cfg.Fetch.RetryTimes, wait: cfg.Fetch.RetryWaitTime}
+	settings := fetchRetrySettings{times: cfg.Fetch.RetryTimes, wait: cfg.Fetch.RetryWaitTime, backoffFactor: cfg.Fetch.RetryBackoffFactor, maxWait: cfg.Fetch.RetryMaxWaitTime, jitter: cfg.Fetch.RetryJitter}
 	if settings.wait < 0 {
 		settings.wait = config.DefaultFetchRetryWaitTime
 	}
+	if settings.backoffFactor < 1 {
+		settings.backoffFactor = config.DefaultFetchRetryBackoffFactor
+	}
+	if settings.maxWait < settings.wait {
+		settings.maxWait = config.DefaultFetchRetryMaxWaitTime
+	}
 	return settings
+}
+
+func fetchRetryDelay(settings fetchRetrySettings, failedAttempt int) time.Duration {
+	if settings.backoffFactor < 1 {
+		settings.backoffFactor = 1
+	}
+	if settings.maxWait < settings.wait {
+		settings.maxWait = settings.wait
+	}
+	delay := settings.wait
+	for attempt := 1; attempt < failedAttempt; attempt++ {
+		if delay >= settings.maxWait/time.Duration(settings.backoffFactor) {
+			delay = settings.maxWait
+			break
+		}
+		delay *= time.Duration(settings.backoffFactor)
+	}
+	if failedAttempt > 1 && settings.jitter > 0 && delay < settings.maxWait {
+		delay += randomDuration(0, settings.jitter)
+	}
+	if delay > settings.maxWait {
+		return settings.maxWait
+	}
+	return delay
 }
 
 type fetchedCandidate struct {
@@ -891,7 +924,7 @@ func fetchWithRetryUsing(ctx context.Context, src config.Source, keywords []stri
 			break
 		}
 		if attempt < settings.times {
-			if err := sleep(ctx, settings.wait); err != nil {
+			if err := sleep(ctx, fetchRetryDelay(settings, attempt)); err != nil {
 				return sourceFetchResult{}, err
 			}
 		}
