@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math/rand/v2"
 	"net/http"
 	"slices"
 	"strings"
@@ -38,8 +39,11 @@ func (r *Runner) fetchWatchHTML(ctx context.Context, url string) (string, error)
 }
 
 type watchFetchRetrySettings struct {
-	times int
-	wait  time.Duration
+	times         int
+	wait          time.Duration
+	backoffFactor int
+	maxWait       time.Duration
+	jitter        time.Duration
 }
 
 type nonRetryableWatchFetchError struct {
@@ -72,16 +76,22 @@ func fetchWatchHTMLWith(ctx context.Context, client *http.Client, url string) (s
 
 func watchFetchRetrySettingsFromConfig(cfg *config.Config) watchFetchRetrySettings {
 	if cfg == nil || cfg.Fetch.RetryTimes < 1 {
-		return watchFetchRetrySettings{times: config.DefaultFetchRetryTimes, wait: config.DefaultFetchRetryWaitTime}
+		return watchFetchRetrySettings{times: config.DefaultFetchRetryTimes, wait: config.DefaultFetchRetryWaitTime, backoffFactor: config.DefaultFetchRetryBackoffFactor, maxWait: config.DefaultFetchRetryMaxWaitTime}
 	}
-	settings := watchFetchRetrySettings{times: cfg.Fetch.RetryTimes, wait: cfg.Fetch.RetryWaitTime}
+	settings := watchFetchRetrySettings{times: cfg.Fetch.RetryTimes, wait: cfg.Fetch.RetryWaitTime, backoffFactor: cfg.Fetch.RetryBackoffFactor, maxWait: cfg.Fetch.RetryMaxWaitTime, jitter: cfg.Fetch.RetryJitter}
 	if settings.wait < 0 {
 		settings.wait = config.DefaultFetchRetryWaitTime
+	}
+	if settings.backoffFactor < 1 {
+		settings.backoffFactor = config.DefaultFetchRetryBackoffFactor
+	}
+	if settings.maxWait < settings.wait {
+		settings.maxWait = config.DefaultFetchRetryMaxWaitTime
 	}
 	return settings
 }
 
-func retryingFetchHTML(fetchHTML fetchHTMLFunc, settings watchFetchRetrySettings) fetchHTMLFunc {
+func retryingFetchHTML(fetchHTML fetchHTMLFunc, settings watchFetchRetrySettings, fallback ...fetchHTMLFunc) fetchHTMLFunc {
 	return func(ctx context.Context, url string) (string, error) {
 		var lastErr error
 		for attempt := 1; attempt <= settings.times; attempt++ {
@@ -100,14 +110,45 @@ func retryingFetchHTML(fetchHTML fetchHTMLFunc, settings watchFetchRetrySettings
 				return "", ctxErr
 			}
 			lastErr = err
+			if attempt == settings.times && len(fallback) > 0 && fallback[0] != nil {
+				fallbackHTML, fallbackErr := fallback[0](ctx, url)
+				if fallbackErr == nil {
+					return fallbackHTML, nil
+				}
+				lastErr = fmt.Errorf("primary and fallback watch fetch failed: %w", errors.Join(err, fallbackErr))
+			}
 			if attempt < settings.times {
-				if err := sleepWatchRetry(ctx, settings.wait); err != nil {
+				if err := sleepWatchRetry(ctx, watchRetryDelay(settings, attempt)); err != nil {
 					return "", err
 				}
 			}
 		}
 		return "", lastErr
 	}
+}
+
+func watchRetryDelay(settings watchFetchRetrySettings, failedAttempt int) time.Duration {
+	if settings.backoffFactor < 1 {
+		settings.backoffFactor = 1
+	}
+	if settings.maxWait < settings.wait {
+		settings.maxWait = settings.wait
+	}
+	delay := settings.wait
+	for attempt := 1; attempt < failedAttempt; attempt++ {
+		if delay >= settings.maxWait/time.Duration(settings.backoffFactor) {
+			delay = settings.maxWait
+			break
+		}
+		delay *= time.Duration(settings.backoffFactor)
+	}
+	if failedAttempt > 1 && settings.jitter > 0 && delay < settings.maxWait {
+		delay += time.Duration(rand.Int64N(int64(settings.jitter) + 1))
+	}
+	if delay > settings.maxWait {
+		return settings.maxWait
+	}
+	return delay
 }
 
 func sleepWatchRetry(ctx context.Context, d time.Duration) error {
@@ -148,8 +189,12 @@ func runContext(ctx context.Context, cfg *config.Config, now time.Time, fetchHTM
 	if cfg == nil || len(cfg.Watch.Sites) == 0 {
 		return nil, report, nil
 	}
+	var finalFallback fetchHTMLFunc
 	if watchProxyProviderEnabled(cfg) {
 		directFetchHTML := fetchHTML
+		if cfg.Watch.FallbackToDirectOnLastRetry {
+			finalFallback = directFetchHTML
+		}
 		session, err := startBrowseboxProxy(ctx, cfg)
 		if err != nil {
 			return nil, nil, err
@@ -177,7 +222,7 @@ func runContext(ctx context.Context, cfg *config.Config, now time.Time, fetchHTM
 			return fallbackHTML, nil
 		}
 	}
-	fetchHTML = retryingFetchHTML(fetchHTML, watchFetchRetrySettingsFromConfig(cfg))
+	fetchHTML = retryingFetchHTML(fetchHTML, watchFetchRetrySettingsFromConfig(cfg), finalFallback)
 
 	indexStore := NewIndexStore(cfg.Output.Dir)
 	articleStore := NewArticleStore(cfg.Output.Dir)

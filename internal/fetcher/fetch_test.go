@@ -700,6 +700,19 @@ func TestFetchAllSourcesDetailedUsesConfiguredRetry(t *testing.T) {
 	}
 }
 
+func TestFetchRetryDelayUsesTieredBackoff(t *testing.T) {
+	settings := fetchRetrySettings{wait: 3 * time.Second, backoffFactor: 3, maxWait: 12 * time.Second}
+	if got := fetchRetryDelay(settings, 1); got != 3*time.Second {
+		t.Fatalf("first retry delay = %v, want 3s", got)
+	}
+	if got := fetchRetryDelay(settings, 2); got != 9*time.Second {
+		t.Fatalf("second retry delay = %v, want 9s", got)
+	}
+	if got := fetchRetryDelay(settings, 3); got != 12*time.Second {
+		t.Fatalf("capped retry delay = %v, want 12s", got)
+	}
+}
+
 func TestFetchWithRetryReturnsContextErrorWhenCancelled(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()

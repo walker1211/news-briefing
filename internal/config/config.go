@@ -17,25 +17,26 @@ import (
 )
 
 type Config struct {
-	Sources                        []Source          `yaml:"sources"`
-	Keywords                       []string          `yaml:"keywords"`
-	Filters                        FiltersConfig     `yaml:"filters"`
-	ImageFilter                    ImageFilterConfig `yaml:"image_filter"`
-	Fetch                          FetchConfig       `yaml:"fetch"`
-	Watch                          WatchConfig       `yaml:"watch"`
-	XAccounts                      XAccountsConfig   `yaml:"x_accounts"`
-	Email                          Email             `yaml:"email"`
-	Schedule                       Schedule          `yaml:"schedule"`
-	ScheduleDelayRaw               string            `yaml:"schedule_delay"`
-	ScheduleDelay                  time.Duration     `yaml:"-"`
-	SchedulePrefetchWaitTimeoutRaw string            `yaml:"schedule_prefetch_wait_timeout"`
-	SchedulePrefetchWaitTimeout    time.Duration     `yaml:"-"`
-	ScheduleTimezone               string            `yaml:"schedule_timezone"`
-	ScheduleLocation               *time.Location    `yaml:"-"`
-	Output                         OutputCfg         `yaml:"output"`
-	PublishHook                    PublishHookConfig `yaml:"publish_hook"`
-	Proxy                          Proxy             `yaml:"proxy"`
-	AI                             AICfg             `yaml:"ai"`
+	Sources                        []Source           `yaml:"sources"`
+	Keywords                       []string           `yaml:"keywords"`
+	Filters                        FiltersConfig      `yaml:"filters"`
+	ImageFilter                    ImageFilterConfig  `yaml:"image_filter"`
+	Fetch                          FetchConfig        `yaml:"fetch"`
+	Watch                          WatchConfig        `yaml:"watch"`
+	SourceHealth                   SourceHealthConfig `yaml:"source_health"`
+	XAccounts                      XAccountsConfig    `yaml:"x_accounts"`
+	Email                          Email              `yaml:"email"`
+	Schedule                       Schedule           `yaml:"schedule"`
+	ScheduleDelayRaw               string             `yaml:"schedule_delay"`
+	ScheduleDelay                  time.Duration      `yaml:"-"`
+	SchedulePrefetchWaitTimeoutRaw string             `yaml:"schedule_prefetch_wait_timeout"`
+	SchedulePrefetchWaitTimeout    time.Duration      `yaml:"-"`
+	ScheduleTimezone               string             `yaml:"schedule_timezone"`
+	ScheduleLocation               *time.Location     `yaml:"-"`
+	Output                         OutputCfg          `yaml:"output"`
+	PublishHook                    PublishHookConfig  `yaml:"publish_hook"`
+	Proxy                          Proxy              `yaml:"proxy"`
+	AI                             AICfg              `yaml:"ai"`
 }
 
 const (
@@ -54,6 +55,9 @@ const (
 	DefaultFetchTimeout                   = 30 * time.Second
 	DefaultFetchRetryTimes                = 3
 	DefaultFetchRetryWaitTime             = 200 * time.Millisecond
+	DefaultFetchRetryBackoffFactor        = 1
+	DefaultFetchRetryMaxWaitTime          = 30 * time.Second
+	DefaultSourceHealthAlertAfter         = 1
 	DefaultFetchRedditSourceDelayMin      = 2 * time.Second
 	DefaultFetchRedditSourceDelayMax      = 4 * time.Second
 	DefaultFetchRedditRateLimitWaitMax    = 120 * time.Second
@@ -148,26 +152,38 @@ type FetchConfig struct {
 	TimeoutRaw                string        `yaml:"timeout"`
 	RetryTimesRaw             *int          `yaml:"retry_times"`
 	RetryWaitTimeRaw          string        `yaml:"retry_wait_time"`
+	RetryBackoffFactorRaw     *int          `yaml:"retry_backoff_factor"`
+	RetryMaxWaitTimeRaw       string        `yaml:"retry_max_wait_time"`
+	RetryJitterRaw            string        `yaml:"retry_jitter"`
 	RedditSourceDelayMinRaw   string        `yaml:"reddit_source_delay_min"`
 	RedditSourceDelayMaxRaw   string        `yaml:"reddit_source_delay_max"`
 	RedditRateLimitWaitMaxRaw string        `yaml:"reddit_rate_limit_wait_max"`
 	Timeout                   time.Duration `yaml:"-"`
 	RetryTimes                int           `yaml:"-"`
 	RetryWaitTime             time.Duration `yaml:"-"`
+	RetryBackoffFactor        int           `yaml:"-"`
+	RetryMaxWaitTime          time.Duration `yaml:"-"`
+	RetryJitter               time.Duration `yaml:"-"`
 	RedditSourceDelayMin      time.Duration `yaml:"-"`
 	RedditSourceDelayMax      time.Duration `yaml:"-"`
 	RedditRateLimitWaitMax    time.Duration `yaml:"-"`
 }
 
 type WatchConfig struct {
-	Sites                  []WatchSite        `yaml:"sites"`
-	ArticleConcurrencyRaw  *int               `yaml:"article_concurrency"`
-	ArticleConcurrency     int                `yaml:"-"`
-	DeepVerifyIntervalRaw  string             `yaml:"deep_verify_interval"`
-	DeepVerifyInterval     time.Duration      `yaml:"-"`
-	DeepVerifyBatchSizeRaw *int               `yaml:"deep_verify_batch_size"`
-	DeepVerifyBatchSize    int                `yaml:"-"`
-	ProxyProvider          WatchProxyProvider `yaml:"proxy_provider"`
+	Sites                       []WatchSite        `yaml:"sites"`
+	ArticleConcurrencyRaw       *int               `yaml:"article_concurrency"`
+	ArticleConcurrency          int                `yaml:"-"`
+	DeepVerifyIntervalRaw       string             `yaml:"deep_verify_interval"`
+	DeepVerifyInterval          time.Duration      `yaml:"-"`
+	DeepVerifyBatchSizeRaw      *int               `yaml:"deep_verify_batch_size"`
+	DeepVerifyBatchSize         int                `yaml:"-"`
+	ProxyProvider               WatchProxyProvider `yaml:"proxy_provider"`
+	FallbackToDirectOnLastRetry bool               `yaml:"fallback_to_direct_on_last_retry"`
+}
+
+type SourceHealthConfig struct {
+	AlertAfterConsecutiveFailuresRaw *int `yaml:"alert_after_consecutive_failures"`
+	AlertAfterConsecutiveFailures    int  `yaml:"-"`
 }
 
 type WatchProxyProvider struct {
@@ -504,6 +520,16 @@ func applyFetchDefaults(fetch *FetchConfig) error {
 	if strings.TrimSpace(fetch.RetryWaitTimeRaw) == "" {
 		fetch.RetryWaitTimeRaw = DefaultFetchRetryWaitTime.String()
 	}
+	if fetch.RetryBackoffFactorRaw == nil {
+		value := DefaultFetchRetryBackoffFactor
+		fetch.RetryBackoffFactorRaw = &value
+	}
+	if strings.TrimSpace(fetch.RetryMaxWaitTimeRaw) == "" {
+		fetch.RetryMaxWaitTimeRaw = DefaultFetchRetryMaxWaitTime.String()
+	}
+	if strings.TrimSpace(fetch.RetryJitterRaw) == "" {
+		fetch.RetryJitterRaw = "0s"
+	}
 	if strings.TrimSpace(fetch.RedditSourceDelayMinRaw) == "" {
 		fetch.RedditSourceDelayMinRaw = DefaultFetchRedditSourceDelayMin.String()
 	}
@@ -528,6 +554,23 @@ func applyFetchDefaults(fetch *FetchConfig) error {
 	}
 	if wait < 0 {
 		return fmt.Errorf("validate fetch.retry_wait_time: must be zero or greater")
+	}
+	retryMaxWait, err := time.ParseDuration(strings.TrimSpace(fetch.RetryMaxWaitTimeRaw))
+	if err != nil {
+		return fmt.Errorf("parse fetch.retry_max_wait_time: %w", err)
+	}
+	if retryMaxWait < wait {
+		return fmt.Errorf("validate fetch.retry_max_wait_time: must be greater than or equal to retry_wait_time")
+	}
+	retryJitter, err := time.ParseDuration(strings.TrimSpace(fetch.RetryJitterRaw))
+	if err != nil {
+		return fmt.Errorf("parse fetch.retry_jitter: %w", err)
+	}
+	if retryJitter < 0 {
+		return fmt.Errorf("validate fetch.retry_jitter: must be zero or greater")
+	}
+	if *fetch.RetryBackoffFactorRaw < 1 {
+		return fmt.Errorf("validate fetch.retry_backoff_factor: must be at least 1")
 	}
 	redditDelayMin, err := time.ParseDuration(strings.TrimSpace(fetch.RedditSourceDelayMinRaw))
 	if err != nil {
@@ -560,9 +603,24 @@ func applyFetchDefaults(fetch *FetchConfig) error {
 	fetch.Timeout = timeout
 	fetch.RetryTimes = *fetch.RetryTimesRaw
 	fetch.RetryWaitTime = wait
+	fetch.RetryBackoffFactor = *fetch.RetryBackoffFactorRaw
+	fetch.RetryMaxWaitTime = retryMaxWait
+	fetch.RetryJitter = retryJitter
 	fetch.RedditSourceDelayMin = redditDelayMin
 	fetch.RedditSourceDelayMax = redditDelayMax
 	fetch.RedditRateLimitWaitMax = redditRateLimitWaitMax
+	return nil
+}
+
+func applySourceHealthDefaults(sourceHealth *SourceHealthConfig) error {
+	if sourceHealth.AlertAfterConsecutiveFailuresRaw == nil {
+		value := DefaultSourceHealthAlertAfter
+		sourceHealth.AlertAfterConsecutiveFailuresRaw = &value
+	}
+	if *sourceHealth.AlertAfterConsecutiveFailuresRaw < 1 {
+		return fmt.Errorf("validate source_health.alert_after_consecutive_failures: must be at least 1")
+	}
+	sourceHealth.AlertAfterConsecutiveFailures = *sourceHealth.AlertAfterConsecutiveFailuresRaw
 	return nil
 }
 
@@ -1242,6 +1300,9 @@ func Load(configPath string) (*Config, error) {
 		return nil, err
 	}
 	if err := applyWatchDefaults(&cfg.Watch); err != nil {
+		return nil, err
+	}
+	if err := applySourceHealthDefaults(&cfg.SourceHealth); err != nil {
 		return nil, err
 	}
 	if err := applyXAccountsDefaults(&cfg.XAccounts); err != nil {

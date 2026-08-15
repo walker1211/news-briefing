@@ -18,6 +18,7 @@ import (
 	"github.com/walker1211/news-briefing/internal/model"
 	"github.com/walker1211/news-briefing/internal/output"
 	"github.com/walker1211/news-briefing/internal/scheduler"
+	"github.com/walker1211/news-briefing/internal/sourcehealth"
 	"github.com/walker1211/news-briefing/internal/summarizer"
 	"github.com/walker1211/news-briefing/internal/watch"
 )
@@ -724,8 +725,78 @@ func (app *app) runScheduledBriefingContextWithReporter(ctx context.Context, win
 	if err != nil {
 		return err
 	}
+	result = app.applyScheduledSourceHealthPolicy(window, result)
 	logutil.Printf("Stage article_limit completed in %s", time.Since(limitStarted).Round(time.Second))
 	return app.renderBriefingContextWithReporterAndSourceStats(ctx, "serve", date, window.Period, result.articles, result.filteredArticles, result.seenArticles, result.failed, false, sendEmail, reporter, &result.sourceStats, result.watchSiteErrorNotices...)
+}
+
+func (app *app) applyScheduledSourceHealthPolicy(window scheduler.Window, result briefingFetchResult) briefingFetchResult {
+	if app == nil || app.cfg == nil {
+		return result
+	}
+	threshold := app.cfg.SourceHealth.AlertAfterConsecutiveFailures
+	if threshold < 1 {
+		threshold = 1
+	}
+	issues := make([]sourcehealth.Issue, 0, len(result.failed)+len(result.watchSiteErrorNotices))
+	for _, failed := range result.failed {
+		name := strings.TrimSpace(failed.Name)
+		if name == "" {
+			continue
+		}
+		key := "fetch:" + name
+		issues = append(issues, sourcehealth.Issue{Key: key, Name: name})
+	}
+	for _, notice := range result.watchSiteErrorNotices {
+		name := watchFailureNoticeName(notice)
+		if name == "" {
+			continue
+		}
+		key := "watch:" + name
+		issues = append(issues, sourcehealth.Issue{Key: key, Name: name})
+	}
+	windowID := fmt.Sprintf("%s|%s|%s", window.Period, window.From.UTC().Format(time.RFC3339), window.To.UTC().Format(time.RFC3339))
+	statePath := filepath.Join(app.cfg.Output.Dir, "state", "source-health.json")
+	policy, err := sourcehealth.Update(statePath, windowID, app.currentTime(), threshold, issues)
+	if err != nil {
+		logutil.Warnf("source health state unavailable; keeping current notices visible: %v", err)
+		return result
+	}
+	visible := make(map[string]struct{}, len(policy.VisibleKeys))
+	for _, key := range policy.VisibleKeys {
+		visible[key] = struct{}{}
+	}
+	filteredFailures := result.failed[:0]
+	for _, failed := range result.failed {
+		if _, ok := visible["fetch:"+strings.TrimSpace(failed.Name)]; ok {
+			filteredFailures = append(filteredFailures, failed)
+		}
+	}
+	filteredWatch := result.watchSiteErrorNotices[:0]
+	for _, notice := range result.watchSiteErrorNotices {
+		if _, ok := visible["watch:"+watchFailureNoticeName(notice)]; ok {
+			filteredWatch = append(filteredWatch, notice)
+		}
+	}
+	for _, name := range policy.Recoveries {
+		filteredWatch = append(filteredWatch, "来源恢复："+name)
+	}
+	result.failed = filteredFailures
+	result.watchSiteErrorNotices = filteredWatch
+	return result
+}
+
+func watchFailureNoticeName(notice string) string {
+	trimmed := strings.TrimSpace(notice)
+	const sitePrefix = "Watch 站点异常："
+	if strings.HasPrefix(trimmed, sitePrefix) {
+		name, _, _ := strings.Cut(strings.TrimPrefix(trimmed, sitePrefix), " — ")
+		return strings.TrimSpace(name)
+	}
+	if strings.HasPrefix(trimmed, "Watch 抓取失败：") {
+		return "Watch"
+	}
+	return ""
 }
 
 func (app *app) runRegen(cmd regenCommand) error {
@@ -1840,11 +1911,33 @@ func appendWatchSiteErrorNotices(body string, notices []string) string {
 		b.WriteString(body)
 		b.WriteString("\n\n")
 	}
-	b.WriteString("## Watch 站点异常\n\n")
+	watchNotices := make([]string, 0, len(notices))
+	recoveries := make([]string, 0, len(notices))
 	for _, notice := range notices {
+		if strings.HasPrefix(notice, "来源恢复：") {
+			recoveries = append(recoveries, notice)
+		} else {
+			watchNotices = append(watchNotices, notice)
+		}
+	}
+	if len(watchNotices) > 0 {
+		b.WriteString("## Watch 站点异常\n\n")
+	}
+	for _, notice := range watchNotices {
 		b.WriteString("- ")
 		b.WriteString(notice)
 		b.WriteString("\n")
+	}
+	if len(recoveries) > 0 {
+		if len(watchNotices) > 0 {
+			b.WriteString("\n")
+		}
+		b.WriteString("## 来源恢复\n\n")
+		for _, notice := range recoveries {
+			b.WriteString("- ")
+			b.WriteString(strings.TrimPrefix(notice, "来源恢复："))
+			b.WriteString(" 已恢复正常\n")
+		}
 	}
 	return strings.TrimSpace(b.String())
 }
