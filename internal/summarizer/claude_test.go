@@ -446,6 +446,7 @@ func TestRunnerUsesCodexStdinAndDeveloperInstructions(t *testing.T) {
 func TestCodexRuntimeArgsMapSystemPromptsToDeveloperInstructions(t *testing.T) {
 	runner := NewRunner("codex", []string{"exec"}, true, "", "")
 	runner.SetModelOptions("summary-model", "medium", "translation-model", "high")
+	runner.SetSummaryEditorOptions(true, "editor-model", "high", 12, 17, 20)
 	tests := []struct {
 		name       string
 		got        []string
@@ -454,6 +455,7 @@ func TestCodexRuntimeArgsMapSystemPromptsToDeveloperInstructions(t *testing.T) {
 		want       string
 	}{
 		{name: "summarize", got: runner.summarizeRuntimeArgs(), wantModel: "summary-model", wantEffort: "medium", want: nonInteractiveBriefingSystemPrompt},
+		{name: "editor", got: runner.summaryEditorRuntimeArgs(), wantModel: "editor-model", wantEffort: "high", want: nonInteractiveBriefingSystemPrompt},
 		{name: "deep", got: runner.deepDiveRuntimeArgs(), wantModel: "summary-model", wantEffort: "medium", want: nonInteractiveDeepDiveSystemPrompt},
 		{name: "translate", got: runner.translateRuntimeArgs(), wantModel: "translation-model", wantEffort: "high", want: nonInteractiveBriefingSystemPrompt},
 	}
@@ -570,6 +572,76 @@ rm -f "$input"
 	}
 	if !strings.Contains(markdown, "两个分类共同呈现结构变化") {
 		t.Fatalf("markdown = %q, want synthesized situation", markdown)
+	}
+}
+
+func TestRunnerUsesFinalEditorToSelectExistingCategoryStories(t *testing.T) {
+	dir := t.TempDir()
+	oldPath := os.Getenv("PATH")
+	t.Cleanup(func() { _ = os.Setenv("PATH", oldPath) })
+
+	aiOutput := filepath.Join(dir, "ai.json")
+	financeOutput := filepath.Join(dir, "finance.json")
+	editorOutput := filepath.Join(dir, "editor.json")
+	files := map[string]string{
+		aiOutput:      `{"overview_groups":[{"category":"AI/科技","items":["🤖 AI 要点"]}],"stories":[{"category":"AI/科技","title":"AI 新闻","summary":"AI 摘要。","impact":"AI 影响。","source_article_ids":[1]}]}`,
+		financeOutput: `{"overview_groups":[{"category":"新闻财经","items":["💹 财经要点"]}],"stories":[{"category":"新闻财经","title":"财经新闻","summary":"财经摘要。","impact":"财经影响。","source_article_ids":[1]}]}`,
+		editorOutput:  `{"selected_story_ids":[2,1],"overview_groups":[{"category":"AI/科技","items":["🤖 AI 新闻"]},{"category":"新闻财经","items":["💹 财经新闻"]}],"situation":"两个分类共同呈现结构变化。","xhs_topics":["人工智能","财经观察","每日新闻"],"directions":[{"title":"AI roadmap","why":"产品持续演进。","next":"观察发布节奏。","deep_command":"./news-briefing deep \"AI roadmap\" --ignore-seen"},{"title":"Market outlook","why":"市场预期变化。","next":"观察政策与价格。","deep_command":"./news-briefing deep \"Market outlook\" --ignore-seen"}]}`,
+	}
+	for path, body := range files {
+		if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+			t.Fatalf("write fake output: %v", err)
+		}
+	}
+
+	commandPath := filepath.Join(dir, "codex")
+	script := `#!/bin/sh
+input="` + dir + `/input.$$"
+cat > "$input"
+if grep -q '候选 stories JSON' "$input"; then
+  grep -q '"story_id":1' "$input" || exit 7
+  grep -q '"story_id":2' "$input" || exit 7
+  cat "` + editorOutput + `"
+elif grep -q '当前分类：AI/科技' "$input"; then
+  touch "` + dir + `/ai.ready"
+  i=0; while [ ! -f "` + dir + `/finance.ready" ] && [ "$i" -lt 100 ]; do sleep 0.01; i=$((i+1)); done
+  cat "` + aiOutput + `"
+elif grep -q '当前分类：新闻财经' "$input"; then
+  touch "` + dir + `/finance.ready"
+  i=0; while [ ! -f "` + dir + `/ai.ready" ] && [ "$i" -lt 100 ]; do sleep 0.01; i=$((i+1)); done
+  cat "` + financeOutput + `"
+else
+  exit 8
+fi
+rm -f "$input"
+`
+	if err := os.WriteFile(commandPath, []byte(script), 0o755); err != nil {
+		t.Fatalf("write fake codex: %v", err)
+	}
+	if err := os.Setenv("PATH", dir+string(os.PathListSeparator)+oldPath); err != nil {
+		t.Fatalf("set PATH: %v", err)
+	}
+
+	articles := []model.Article{
+		{Title: "AI", Source: "AI Source", Category: "AI/科技", Published: time.Date(2026, 8, 15, 8, 0, 0, 0, time.UTC)},
+		{Title: "Finance", Source: "Finance Source", Category: "新闻财经", Published: time.Date(2026, 8, 15, 9, 0, 0, 0, time.UTC)},
+	}
+	runner := NewRunner("codex", []string{"exec"}, false, "", "")
+	runner.SetModelOptions("category-model", "medium", "translation-model", "high")
+	runner.SetSummaryOptions(true, 2)
+	runner.SetSummaryEditorOptions(true, "editor-model", "high", 1, 2, 2)
+	summary, _, err := runner.SummarizeBriefingContext(context.Background(), articles, []string{"AI/科技", "新闻财经"}, time.UTC)
+	if err != nil {
+		t.Fatalf("SummarizeBriefingContext() error = %v", err)
+	}
+	if got := []string{summary.Stories[0].Title, summary.Stories[1].Title}; !reflect.DeepEqual(got, []string{"财经新闻", "AI 新闻"}) {
+		t.Fatalf("selected story order = %#v", got)
+	}
+	if got := summary.Stories[0].SourceArticleIDs; !reflect.DeepEqual(got, []int{2}) {
+		t.Fatalf("selected finance source ids = %#v, want [2]", got)
+	}
+	if len(summary.OverviewGroups) != 2 || summary.OverviewGroups[0].Category != "AI/科技" {
+		t.Fatalf("overview groups = %#v", summary.OverviewGroups)
 	}
 }
 

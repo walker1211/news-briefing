@@ -547,12 +547,21 @@ ai:
   models:
     default: gpt-5.6-terra
     default_effort: medium
+    # The category workers above produce factual candidates; the final editor only selects and ranks them.
+    summary_editor: gpt-5.6-terra
+    summary_editor_effort: high
     translation: gpt-5.3-codex-spark
     translation_effort: high
   summary:
-    # Summarize categories concurrently, then run one short cross-category synthesis.
+    # Summarize categories concurrently, then run one cross-category final edit.
     parallel_by_category: true
     max_concurrency: 3
+    editor:
+      enabled: true
+      # These are global bounds, not per-category quotas. The editor may vary the category mix each run.
+      min_stories: 12
+      target_stories: 17
+      max_stories: 20
   append_system_prompt: true
   timeout:
     # Warn but keep waiting when one AI attempt is still running after this duration.
