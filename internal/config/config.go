@@ -74,6 +74,11 @@ const (
 	DefaultSchedulePrefetchWaitTimeout    = 2 * time.Minute
 	DefaultAIModel                        = "gpt-5.6-terra"
 	DefaultAIEffort                       = "medium"
+	DefaultAISummaryEditorModel           = "gpt-5.6-terra"
+	DefaultAISummaryEditorEffort          = "high"
+	DefaultAISummaryEditorMinStories      = 12
+	DefaultAISummaryEditorTargetStories   = 17
+	DefaultAISummaryEditorMaxStories      = 20
 	DefaultAITranslationModel             = "gpt-5.3-codex-spark"
 	DefaultAITranslationEffort            = "high"
 	DefaultAISummaryMaxConcurrency        = 1
@@ -294,15 +299,25 @@ type AICfg struct {
 }
 
 type AIModelsCfg struct {
-	Default           string `yaml:"default"`
-	DefaultEffort     string `yaml:"default_effort"`
-	Translation       string `yaml:"translation"`
-	TranslationEffort string `yaml:"translation_effort"`
+	Default             string `yaml:"default"`
+	DefaultEffort       string `yaml:"default_effort"`
+	SummaryEditor       string `yaml:"summary_editor"`
+	SummaryEditorEffort string `yaml:"summary_editor_effort"`
+	Translation         string `yaml:"translation"`
+	TranslationEffort   string `yaml:"translation_effort"`
 }
 
 type AISummaryCfg struct {
-	ParallelByCategory bool `yaml:"parallel_by_category"`
-	MaxConcurrency     int  `yaml:"max_concurrency"`
+	ParallelByCategory bool               `yaml:"parallel_by_category"`
+	MaxConcurrency     int                `yaml:"max_concurrency"`
+	Editor             AISummaryEditorCfg `yaml:"editor"`
+}
+
+type AISummaryEditorCfg struct {
+	Enabled       bool `yaml:"enabled"`
+	MinStories    int  `yaml:"min_stories"`
+	TargetStories int  `yaml:"target_stories"`
+	MaxStories    int  `yaml:"max_stories"`
 }
 
 type AIRetryCfg struct {
@@ -686,14 +701,32 @@ func (cfg *Config) Validate() error {
 	if strings.TrimSpace(cfg.AI.Models.Translation) == "" {
 		return fmt.Errorf("validate ai.models.translation: must not be empty")
 	}
+	if strings.TrimSpace(cfg.AI.Models.SummaryEditor) == "" {
+		return fmt.Errorf("validate ai.models.summary_editor: must not be empty")
+	}
 	if err := validateAIEffort("ai.models.default_effort", cfg.AI.Models.DefaultEffort); err != nil {
 		return err
 	}
 	if err := validateAIEffort("ai.models.translation_effort", cfg.AI.Models.TranslationEffort); err != nil {
 		return err
 	}
+	if err := validateAIEffort("ai.models.summary_editor_effort", cfg.AI.Models.SummaryEditorEffort); err != nil {
+		return err
+	}
 	if cfg.AI.Summary.MaxConcurrency < 1 {
 		return fmt.Errorf("validate ai.summary.max_concurrency: must be at least 1")
+	}
+	if cfg.AI.Summary.Editor.Enabled && !cfg.AI.Summary.ParallelByCategory {
+		return fmt.Errorf("validate ai.summary.editor.enabled: requires parallel_by_category")
+	}
+	if cfg.AI.Summary.Editor.MinStories < 1 {
+		return fmt.Errorf("validate ai.summary.editor.min_stories: must be at least 1")
+	}
+	if cfg.AI.Summary.Editor.TargetStories < cfg.AI.Summary.Editor.MinStories {
+		return fmt.Errorf("validate ai.summary.editor.target_stories: must be at least min_stories")
+	}
+	if cfg.AI.Summary.Editor.MaxStories < cfg.AI.Summary.Editor.TargetStories {
+		return fmt.Errorf("validate ai.summary.editor.max_stories: must be at least target_stories")
 	}
 	for i, delay := range cfg.AI.Retry.Delays {
 		if delay <= 0 {
@@ -1165,14 +1198,29 @@ func Load(configPath string) (*Config, error) {
 	if cfg.AI.Models.Translation == "" {
 		cfg.AI.Models.Translation = DefaultAITranslationModel
 	}
+	if cfg.AI.Models.SummaryEditor == "" {
+		cfg.AI.Models.SummaryEditor = DefaultAISummaryEditorModel
+	}
 	if cfg.AI.Models.DefaultEffort == "" {
 		cfg.AI.Models.DefaultEffort = DefaultAIEffort
 	}
 	if cfg.AI.Models.TranslationEffort == "" {
 		cfg.AI.Models.TranslationEffort = DefaultAITranslationEffort
 	}
+	if cfg.AI.Models.SummaryEditorEffort == "" {
+		cfg.AI.Models.SummaryEditorEffort = DefaultAISummaryEditorEffort
+	}
 	if cfg.AI.Summary.MaxConcurrency == 0 {
 		cfg.AI.Summary.MaxConcurrency = DefaultAISummaryMaxConcurrency
+	}
+	if cfg.AI.Summary.Editor.MinStories == 0 {
+		cfg.AI.Summary.Editor.MinStories = DefaultAISummaryEditorMinStories
+	}
+	if cfg.AI.Summary.Editor.TargetStories == 0 {
+		cfg.AI.Summary.Editor.TargetStories = DefaultAISummaryEditorTargetStories
+	}
+	if cfg.AI.Summary.Editor.MaxStories == 0 {
+		cfg.AI.Summary.Editor.MaxStories = DefaultAISummaryEditorMaxStories
 	}
 	if cfg.AI.Retry.Delays == nil {
 		cfg.AI.Retry.Delays = cloneDurations(DefaultAIRetryDelays)

@@ -106,6 +106,30 @@ const briefingSynthesisPrompt = `你是一个国际新闻主编。下面是已�
 
 situation 必须综合不同分类之间的共同趋势，不要逐分类机械复述。xhs_topics 输出 3 个、最多 4 个适合整篇简报的通用话题，不带 #、空格或特殊符号。directions 输出 2-4 个高质量方向；相近方向应合并。deep_command 的关键词优先使用 2-6 个词的英文实体或英文新闻短语。`
 
+const briefingEditorPrompt = `你是一个国际新闻主编。下面是由分类编辑生成的候选 stories，每条候选都有稳定的 story_id。
+
+请完成跨分类终审：去除重复或弱相关候选，按新闻重要性选择最终 stories，并生成与入选内容一致的今日速览、整体态势、小红书话题和跟踪方向。
+
+只输出合法 JSON，不要输出 Markdown、代码块、过程说明或额外字段。JSON 结构必须是：
+{
+  "selected_story_ids": [1, 2],
+  "overview_groups": [{"category": "分类名", "items": ["emoji 新闻要点"]}],
+  "situation": "3句话今日整体态势",
+  "xhs_topics": ["话题1", "话题2", "话题3"],
+  "directions": [{
+    "title": "方向标题",
+    "why": "1-2句话说明为什么值得追",
+    "next": "1句话说明后续观察变量或节点",
+    "deep_command": "./news-briefing deep \"关键词\" --ignore-seen"
+  }]
+}
+
+selected_story_ids 只能引用输入中存在的 story_id，每个 ID 只能出现一次，并按全局重要性从高到低排列。不要重写候选 story 的标题、摘要、影响、图片或来源，程序会按 ID 复用分类编辑的原文。
+不要使用固定分类配额：分类数量应由当天新闻的重要性决定。优先保留影响范围大、时效强、事实或数字充分、有明确后续变量的内容；删除同一事件的跨分类重复、弱相关拼接、纯宣传、低信息量和仅有情绪无事实支撑的候选。
+最终数量允许在 %d 到 %d 条之间动态变化，以约 %d 条为目标：高质量候选不足时取下限附近，重大新闻密集时可接近上限。
+overview_groups 必须覆盖每个仍有入选 story 的分类且不得包含其他分类；每个分类用 2-5 条简洁要点概括入选内容，不要提及已删除候选。
+situation 必须综合不同分类之间的共同趋势，不要逐分类机械复述。xhs_topics 输出 3 个、最多 4 个适合整篇简报的通用话题，不带 #、空格或特殊符号。directions 输出 2-4 个高质量方向；相近方向应合并。deep_command 的关键词优先使用 2-6 个词的英文实体或英文新闻短语。`
+
 const nonInteractiveBriefingSystemPrompt = `这是一次无人值守的单轮批处理任务，不是对话。
 你不能向用户提问，不能请求确认口径、风格或范围，不能给出 A/B 选项，不能输出“如果你愿意我可以……”之类的引导语。
 如有风格歧义，默认按提示词要求的结构化中文简报数据输出，语言自然，偏自然、可直接阅读的中文研究简报风格。
@@ -135,20 +159,26 @@ const deepDivePrompt = `你是一个资深新闻调研员和话题研究助手�
 - 可以继续追踪的延伸问题`
 
 type Runner struct {
-	commandName               string
-	commandArgs               []string
-	defaultModel              string
-	defaultEffort             string
-	translationModel          string
-	translationEffort         string
-	summaryParallelByCategory bool
-	summaryMaxConcurrency     int
-	appendSystemPrompt        bool
-	proxyEnv                  []string
-	retrySleep                sleepFunc
-	retryDelays               []time.Duration
-	oauthRetryGate            chan struct{}
-	failureLogPath            string
+	commandName                string
+	commandArgs                []string
+	defaultModel               string
+	defaultEffort              string
+	summaryEditorModel         string
+	summaryEditorEffort        string
+	translationModel           string
+	translationEffort          string
+	summaryParallelByCategory  bool
+	summaryMaxConcurrency      int
+	summaryEditorEnabled       bool
+	summaryEditorMinStories    int
+	summaryEditorTargetStories int
+	summaryEditorMaxStories    int
+	appendSystemPrompt         bool
+	proxyEnv                   []string
+	retrySleep                 sleepFunc
+	retryDelays                []time.Duration
+	oauthRetryGate             chan struct{}
+	failureLogPath             string
 }
 
 type callKind string
@@ -305,16 +335,18 @@ func NewRunnerWithRetryDelays(command string, args []string, appendSystemPrompt 
 	}
 
 	return &Runner{
-		commandName:        name,
-		commandArgs:        runnerArgs,
-		defaultModel:       configuredDefaultModel,
-		translationModel:   defaultTranslationModel,
-		appendSystemPrompt: appendSystemPrompt,
-		proxyEnv:           proxyEnv,
-		retrySleep:         retrySleep,
-		retryDelays:        cloneDurations(retryDelays),
-		oauthRetryGate:     make(chan struct{}, 1),
-		failureLogPath:     defaultFailureLogPath,
+		commandName:         name,
+		commandArgs:         runnerArgs,
+		defaultModel:        configuredDefaultModel,
+		summaryEditorModel:  defaultModel,
+		summaryEditorEffort: "high",
+		translationModel:    defaultTranslationModel,
+		appendSystemPrompt:  appendSystemPrompt,
+		proxyEnv:            proxyEnv,
+		retrySleep:          retrySleep,
+		retryDelays:         cloneDurations(retryDelays),
+		oauthRetryGate:      make(chan struct{}, 1),
+		failureLogPath:      defaultFailureLogPath,
 	}
 }
 
@@ -345,6 +377,20 @@ func (r *Runner) SetSummaryOptions(parallelByCategory bool, maxConcurrency int) 
 		maxConcurrency = 1
 	}
 	r.summaryMaxConcurrency = maxConcurrency
+}
+
+// SetSummaryEditorOptions configures the optional cross-category final editor.
+// It selects existing category stories by stable ID, so higher-effort editing
+// cannot silently rewrite facts produced by the category workers.
+func (r *Runner) SetSummaryEditorOptions(enabled bool, model, effort string, minStories, targetStories, maxStories int) {
+	r.summaryEditorEnabled = enabled
+	if model = strings.TrimSpace(model); model != "" {
+		r.summaryEditorModel = model
+	}
+	r.summaryEditorEffort = strings.TrimSpace(effort)
+	r.summaryEditorMinStories = minStories
+	r.summaryEditorTargetStories = targetStories
+	r.summaryEditorMaxStories = maxStories
 }
 
 func withoutModelArgs(args []string) ([]string, string) {
@@ -750,6 +796,19 @@ type briefingSynthesis struct {
 	Directions []model.BriefingDirection `json:"directions"`
 }
 
+type briefingEditorialDecision struct {
+	SelectedStoryIDs []int                         `json:"selected_story_ids"`
+	OverviewGroups   []model.BriefingOverviewGroup `json:"overview_groups"`
+	Situation        string                        `json:"situation"`
+	XHSTopics        []string                      `json:"xhs_topics"`
+	Directions       []model.BriefingDirection     `json:"directions"`
+}
+
+type briefingEditorialCandidate struct {
+	StoryID int `json:"story_id"`
+	model.BriefingStory
+}
+
 func (r *Runner) summarizeBriefingParallelContext(ctx context.Context, articles []model.Article, categoryOrder []string, loc *time.Location) (model.BriefingSummary, string, error) {
 	categories := populatedCategories(articles, categoryOrder)
 	results := make([]categorySummaryResult, len(categories))
@@ -802,14 +861,134 @@ func (r *Runner) summarizeBriefingParallelContext(ctx context.Context, articles 
 		combined.Stories = append(combined.Stories, result.summary.Stories...)
 	}
 
-	synthesis, err := r.synthesizeBriefingContext(ctx, combined)
-	if err != nil {
-		return model.BriefingSummary{}, "", err
+	if r.summaryEditorEnabled {
+		edited, err := r.editBriefingContext(ctx, combined, categories)
+		if err != nil {
+			return model.BriefingSummary{}, "", err
+		}
+		combined = edited
+	} else {
+		synthesis, err := r.synthesizeBriefingContext(ctx, combined)
+		if err != nil {
+			return model.BriefingSummary{}, "", err
+		}
+		combined.Situation = synthesis.Situation
+		combined.XHSTopics = synthesis.XHSTopics
+		combined.Directions = synthesis.Directions
 	}
-	combined.Situation = synthesis.Situation
-	combined.XHSTopics = synthesis.XHSTopics
-	combined.Directions = synthesis.Directions
 	return combined, output.StructuredBriefingMarkdown(combined, categoryOrder), nil
+}
+
+func (r *Runner) editBriefingContext(ctx context.Context, partial model.BriefingSummary, categoryOrder []string) (model.BriefingSummary, error) {
+	candidates := make([]briefingEditorialCandidate, len(partial.Stories))
+	for index, story := range partial.Stories {
+		candidates[index] = briefingEditorialCandidate{StoryID: index + 1, BriefingStory: story}
+	}
+	minStories, targetStories, maxStories := clampedEditorialStoryLimits(
+		len(candidates),
+		r.summaryEditorMinStories,
+		r.summaryEditorTargetStories,
+		r.summaryEditorMaxStories,
+	)
+	payload, err := json.Marshal(candidates)
+	if err != nil {
+		return model.BriefingSummary{}, fmt.Errorf("marshal editorial candidates: %w", err)
+	}
+	prompt := fmt.Sprintf(briefingEditorPrompt, minStories, maxStories, targetStories) + "\n\n---\n候选 stories JSON：\n" + string(payload)
+	raw, err := r.callClaudeContext(ctx, prompt, r.summaryEditorRuntimeArgs()...)
+	if err != nil {
+		return model.BriefingSummary{}, fmt.Errorf("edit briefing: %w", err)
+	}
+	var decision briefingEditorialDecision
+	if err := json.Unmarshal([]byte(stripJSONCodeFence(strings.TrimSpace(raw))), &decision); err != nil {
+		return model.BriefingSummary{}, fmt.Errorf("parse briefing editorial decision: %w", err)
+	}
+	selected, err := selectedEditorialStories(partial.Stories, decision.SelectedStoryIDs, minStories, maxStories)
+	if err != nil {
+		return model.BriefingSummary{}, err
+	}
+	overview, err := normalizedEditorialOverview(decision.OverviewGroups, selected, categoryOrder)
+	if err != nil {
+		return model.BriefingSummary{}, err
+	}
+	if err := validateBriefingSynthesis(decision.Situation, decision.XHSTopics, decision.Directions); err != nil {
+		return model.BriefingSummary{}, fmt.Errorf("validate briefing editorial decision: %w", err)
+	}
+	return model.BriefingSummary{
+		OverviewGroups: overview,
+		Stories:        selected,
+		Situation:      strings.TrimSpace(decision.Situation),
+		XHSTopics:      decision.XHSTopics,
+		Directions:     decision.Directions,
+	}, nil
+}
+
+func clampedEditorialStoryLimits(candidateCount, minStories, targetStories, maxStories int) (int, int, int) {
+	maxStories = min(maxStories, candidateCount)
+	minStories = min(minStories, maxStories)
+	targetStories = min(targetStories, maxStories)
+	if targetStories < minStories {
+		targetStories = minStories
+	}
+	return minStories, targetStories, maxStories
+}
+
+func selectedEditorialStories(candidates []model.BriefingStory, ids []int, minStories, maxStories int) ([]model.BriefingStory, error) {
+	if len(ids) < minStories || len(ids) > maxStories {
+		return nil, fmt.Errorf("validate briefing editorial decision: selected_story_ids must contain %d-%d items, got %d", minStories, maxStories, len(ids))
+	}
+	selected := make([]model.BriefingStory, 0, len(ids))
+	seen := make(map[int]struct{}, len(ids))
+	for _, id := range ids {
+		if id < 1 || id > len(candidates) {
+			return nil, fmt.Errorf("validate briefing editorial decision: invalid story id %d", id)
+		}
+		if _, ok := seen[id]; ok {
+			return nil, fmt.Errorf("validate briefing editorial decision: duplicate story id %d", id)
+		}
+		seen[id] = struct{}{}
+		selected = append(selected, candidates[id-1])
+	}
+	return selected, nil
+}
+
+func normalizedEditorialOverview(groups []model.BriefingOverviewGroup, stories []model.BriefingStory, categoryOrder []string) ([]model.BriefingOverviewGroup, error) {
+	selectedCategories := make(map[string]struct{})
+	for _, story := range stories {
+		selectedCategories[strings.TrimSpace(story.Category)] = struct{}{}
+	}
+	byCategory := make(map[string]model.BriefingOverviewGroup, len(groups))
+	for _, group := range groups {
+		category := strings.TrimSpace(group.Category)
+		if _, ok := selectedCategories[category]; !ok {
+			return nil, fmt.Errorf("validate briefing editorial decision: overview contains unselected category %q", category)
+		}
+		if len(group.Items) < 1 || len(group.Items) > 5 {
+			return nil, fmt.Errorf("validate briefing editorial decision: category %q overview must contain 1-5 items", category)
+		}
+		if _, exists := byCategory[category]; exists {
+			return nil, fmt.Errorf("validate briefing editorial decision: duplicate overview category %q", category)
+		}
+		group.Category = category
+		byCategory[category] = group
+	}
+	ordered := make([]model.BriefingOverviewGroup, 0, len(selectedCategories))
+	for _, category := range categoryOrder {
+		category = strings.TrimSpace(category)
+		if _, ok := selectedCategories[category]; !ok {
+			continue
+		}
+		group, ok := byCategory[category]
+		if !ok {
+			return nil, fmt.Errorf("validate briefing editorial decision: missing overview category %q", category)
+		}
+		ordered = append(ordered, group)
+		delete(byCategory, category)
+	}
+	if len(byCategory) != 0 {
+		return nil, fmt.Errorf("validate briefing editorial decision: overview category order is incomplete")
+	}
+	return ordered, nil
 }
 
 func populatedCategories(articles []model.Article, categoryOrder []string) []string {
@@ -893,16 +1072,23 @@ func (r *Runner) synthesizeBriefingContext(ctx context.Context, partial model.Br
 	if err := json.Unmarshal([]byte(stripJSONCodeFence(strings.TrimSpace(raw))), &synthesis); err != nil {
 		return briefingSynthesis{}, fmt.Errorf("parse briefing synthesis: %w", err)
 	}
-	if strings.TrimSpace(synthesis.Situation) == "" {
-		return briefingSynthesis{}, fmt.Errorf("validate briefing synthesis: empty situation")
-	}
-	if len(synthesis.XHSTopics) < 1 || len(synthesis.XHSTopics) > 4 {
-		return briefingSynthesis{}, fmt.Errorf("validate briefing synthesis: xhs_topics must contain 1-4 items")
-	}
-	if len(synthesis.Directions) < 2 || len(synthesis.Directions) > 4 {
-		return briefingSynthesis{}, fmt.Errorf("validate briefing synthesis: directions must contain 2-4 items")
+	if err := validateBriefingSynthesis(synthesis.Situation, synthesis.XHSTopics, synthesis.Directions); err != nil {
+		return briefingSynthesis{}, fmt.Errorf("validate briefing synthesis: %w", err)
 	}
 	return synthesis, nil
+}
+
+func validateBriefingSynthesis(situation string, topics []string, directions []model.BriefingDirection) error {
+	if strings.TrimSpace(situation) == "" {
+		return fmt.Errorf("empty situation")
+	}
+	if len(topics) < 1 || len(topics) > 4 {
+		return fmt.Errorf("xhs_topics must contain 1-4 items")
+	}
+	if len(directions) < 2 || len(directions) > 4 {
+		return fmt.Errorf("directions must contain 2-4 items")
+	}
+	return nil
 }
 
 // orderedPromptArticles preserves the exact category order shown to the model
@@ -1121,6 +1307,10 @@ func usableArticleImage(article model.Article) string {
 
 func (r *Runner) summarizeRuntimeArgs() []string {
 	return r.taskRuntimeArgs(r.defaultModel, r.defaultEffort, nonInteractiveBriefingSystemPrompt)
+}
+
+func (r *Runner) summaryEditorRuntimeArgs() []string {
+	return r.taskRuntimeArgs(r.summaryEditorModel, r.summaryEditorEffort, nonInteractiveBriefingSystemPrompt)
 }
 
 func shouldSanitizeCLIOutput() bool {

@@ -58,14 +58,23 @@ proxy: {}
 	if cfg.AI.Models.Translation != DefaultAITranslationModel {
 		t.Fatalf("AI.Models.Translation = %q, want %q", cfg.AI.Models.Translation, DefaultAITranslationModel)
 	}
+	if cfg.AI.Models.SummaryEditor != DefaultAISummaryEditorModel {
+		t.Fatalf("AI.Models.SummaryEditor = %q, want %q", cfg.AI.Models.SummaryEditor, DefaultAISummaryEditorModel)
+	}
 	if cfg.AI.Models.DefaultEffort != DefaultAIEffort {
 		t.Fatalf("AI.Models.DefaultEffort = %q, want %q", cfg.AI.Models.DefaultEffort, DefaultAIEffort)
 	}
 	if cfg.AI.Models.TranslationEffort != DefaultAITranslationEffort {
 		t.Fatalf("AI.Models.TranslationEffort = %q, want %q", cfg.AI.Models.TranslationEffort, DefaultAITranslationEffort)
 	}
+	if cfg.AI.Models.SummaryEditorEffort != DefaultAISummaryEditorEffort {
+		t.Fatalf("AI.Models.SummaryEditorEffort = %q, want %q", cfg.AI.Models.SummaryEditorEffort, DefaultAISummaryEditorEffort)
+	}
 	if cfg.AI.Summary.MaxConcurrency != DefaultAISummaryMaxConcurrency {
 		t.Fatalf("AI.Summary.MaxConcurrency = %d, want %d", cfg.AI.Summary.MaxConcurrency, DefaultAISummaryMaxConcurrency)
+	}
+	if got := cfg.AI.Summary.Editor; got.Enabled || got.MinStories != DefaultAISummaryEditorMinStories || got.TargetStories != DefaultAISummaryEditorTargetStories || got.MaxStories != DefaultAISummaryEditorMaxStories {
+		t.Fatalf("AI.Summary.Editor = %#v, want disabled defaults", got)
 	}
 	if !cfg.AI.ShouldAppendSystemPrompt() {
 		t.Fatalf("AI.ShouldAppendSystemPrompt() = false, want true")
@@ -431,7 +440,19 @@ proxy: {}
 ai:
   models:
     default: default-model
+    default_effort: medium
+    summary_editor: editor-model
+    summary_editor_effort: high
     translation: translation-model
+    translation_effort: high
+  summary:
+    parallel_by_category: true
+    max_concurrency: 3
+    editor:
+      enabled: true
+      min_stories: 10
+      target_stories: 15
+      max_stories: 18
 `
 	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
 		t.Fatalf("write config: %v", err)
@@ -446,6 +467,12 @@ ai:
 	}
 	if cfg.AI.Models.Translation != "translation-model" {
 		t.Fatalf("AI.Models.Translation = %q, want translation-model", cfg.AI.Models.Translation)
+	}
+	if cfg.AI.Models.SummaryEditor != "editor-model" || cfg.AI.Models.SummaryEditorEffort != "high" {
+		t.Fatalf("AI.Models summary editor = %q/%q, want editor-model/high", cfg.AI.Models.SummaryEditor, cfg.AI.Models.SummaryEditorEffort)
+	}
+	if got := cfg.AI.Summary.Editor; !got.Enabled || got.MinStories != 10 || got.TargetStories != 15 || got.MaxStories != 18 {
+		t.Fatalf("AI.Summary.Editor = %#v", got)
 	}
 }
 

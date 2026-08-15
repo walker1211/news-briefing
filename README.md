@@ -176,15 +176,22 @@ ai:
   models:
     default: gpt-5.6-terra
     default_effort: medium
+    summary_editor: gpt-5.6-terra
+    summary_editor_effort: high
     translation: gpt-5.3-codex-spark
     translation_effort: high
   summary:
     parallel_by_category: true
     max_concurrency: 3
+    editor:
+      enabled: true
+      min_stories: 12
+      target_stories: 17
+      max_stories: 20
   append_system_prompt: true
 ```
 
-The runner sends each prompt to `codex exec` over stdin and appends the `-` input marker automatically. Do not put `-p`, `--model`, or the trailing `-` into `args`: Codex uses `-p` for config profiles, while the runner selects `models.default` for summaries and deep dives and `models.translation` for translation, applying the corresponding effort to each task. With `summary.parallel_by_category` enabled, category summaries run concurrently up to `max_concurrency`, followed by one short cross-category synthesis for the situation and follow-up directions. When `append_system_prompt` is enabled, the runner maps the batch-only instructions to a per-run `developer_instructions` override.
+The runner sends each prompt to `codex exec` over stdin and appends the `-` input marker automatically. Do not put `-p`, `--model`, or the trailing `-` into `args`: Codex uses `-p` for config profiles. Category summaries and deep dives use `models.default`, cross-category final editing uses `models.summary_editor`, and translation uses `models.translation`, each with its configured effort. With `summary.parallel_by_category` enabled, category workers generate candidates concurrently up to `max_concurrency`. When `summary.editor` is enabled, the final editor selects, deduplicates, and ranks candidates by stable ID without rewriting their factual text. `min_stories`, `target_stories`, and `max_stories` define a global dynamic range rather than fixed category quotas. When `append_system_prompt` is enabled, the runner maps the batch-only instructions to a per-run `developer_instructions` override.
 
 `--ignore-user-config` and the three feature disables keep this unattended batch job isolated from personal MCP servers, apps, and plugins. They do not modify the user's `~/.codex/config.toml` or affect Codex App features such as Computer Use.
 
