@@ -1334,51 +1334,50 @@ func formatBriefingTimeRange(earliest, latest time.Time) string {
 }
 
 func briefingSourceReferences(articles []model.Article) []string {
-	type referenceCandidate struct {
+	type referenceGroup struct {
 		name string
-		url  string
+		urls []string
 	}
-	candidates := make([]referenceCandidate, 0, len(articles))
+	groups := make([]referenceGroup, 0, len(articles))
+	groupIndexes := make(map[string]int, len(articles))
 	seenLinks := make(map[string]struct{}, len(articles))
-	seenUnlinkedNames := make(map[string]struct{}, len(articles))
 	for _, article := range articles {
 		name := strings.TrimSpace(article.Source)
 		if name == "" {
 			name = "未知来源"
 		}
+		groupIndex, exists := groupIndexes[name]
+		if !exists {
+			groupIndex = len(groups)
+			groupIndexes[name] = groupIndex
+			groups = append(groups, referenceGroup{name: name})
+		}
 		rawURL := strings.TrimSpace(article.Link)
 		if !safeCitationURL(rawURL) {
-			if _, ok := seenUnlinkedNames[name]; !ok {
-				candidates = append(candidates, referenceCandidate{name: name})
-				seenUnlinkedNames[name] = struct{}{}
-			}
 			continue
 		}
 		if _, ok := seenLinks[rawURL]; ok {
 			continue
 		}
 		seenLinks[rawURL] = struct{}{}
-		candidates = append(candidates, referenceCandidate{name: name, url: rawURL})
+		groups[groupIndex].urls = append(groups[groupIndex].urls, rawURL)
 	}
 
-	counts := make(map[string]int, len(candidates))
-	for _, candidate := range candidates {
-		counts[candidate.name]++
-	}
-	indexes := make(map[string]int, len(counts))
-	references := make([]string, 0, len(candidates))
-	for _, candidate := range candidates {
-		indexes[candidate.name]++
-		label := candidate.name
-		if counts[candidate.name] > 1 {
-			label = fmt.Sprintf("%s·报道%d", candidate.name, indexes[candidate.name])
-		}
-		label = markdownLinkLabel(label)
-		if candidate.url == "" {
+	references := make([]string, 0, len(groups))
+	for _, group := range groups {
+		label := markdownLinkLabel(group.name)
+		switch len(group.urls) {
+		case 0:
 			references = append(references, label)
-			continue
+		case 1:
+			references = append(references, fmt.Sprintf("[%s](<%s>)", label, strings.ReplaceAll(group.urls[0], ">", "%3E")))
+		default:
+			links := make([]string, 0, len(group.urls))
+			for index, rawURL := range group.urls {
+				links = append(links, fmt.Sprintf("[%d](<%s>)", index+1, strings.ReplaceAll(rawURL, ">", "%3E")))
+			}
+			references = append(references, fmt.Sprintf("%s（%s）", label, strings.Join(links, "、")))
 		}
-		references = append(references, fmt.Sprintf("[%s](<%s>)", label, strings.ReplaceAll(candidate.url, ">", "%3E")))
 	}
 	return references
 }
