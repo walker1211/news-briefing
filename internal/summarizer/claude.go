@@ -812,8 +812,6 @@ type briefingEditorialCandidate struct {
 func (r *Runner) summarizeBriefingParallelContext(ctx context.Context, articles []model.Article, categoryOrder []string, loc *time.Location) (model.BriefingSummary, string, error) {
 	categories := populatedCategories(articles, categoryOrder)
 	results := make([]categorySummaryResult, len(categories))
-	ctx, cancel := context.WithCancel(ctx)
-	defer cancel()
 
 	maxConcurrency := r.summaryMaxConcurrency
 	if maxConcurrency > len(categories) {
@@ -833,26 +831,19 @@ func (r *Runner) summarizeBriefingParallelContext(ctx context.Context, articles 
 			}
 			summary, err := r.summarizeCategoryContext(ctx, articles, category, loc)
 			results[index] = categorySummaryResult{summary: summary, err: err}
-			if err != nil {
-				cancel()
-			}
 		})
 	}
 	wg.Wait()
 
-	failedCategory := ""
-	var summaryErr error
+	categoryErrors := make([]error, 0, len(categories))
 	for index, result := range results {
 		if result.err == nil {
 			continue
 		}
-		if summaryErr == nil || (errors.Is(summaryErr, context.Canceled) && !errors.Is(result.err, context.Canceled)) {
-			failedCategory = categories[index]
-			summaryErr = result.err
-		}
+		categoryErrors = append(categoryErrors, fmt.Errorf("summarize category %s: %w", categories[index], result.err))
 	}
-	if summaryErr != nil {
-		return model.BriefingSummary{}, "", fmt.Errorf("summarize category %s: %w", failedCategory, summaryErr)
+	if len(categoryErrors) > 0 {
+		return model.BriefingSummary{}, "", errors.Join(categoryErrors...)
 	}
 
 	combined := model.BriefingSummary{}

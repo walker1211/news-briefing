@@ -575,6 +575,56 @@ rm -f "$input"
 	}
 }
 
+func TestRunnerCategoryFailureDoesNotCancelSiblingSummary(t *testing.T) {
+	dir := t.TempDir()
+	oldPath := os.Getenv("PATH")
+	t.Cleanup(func() { _ = os.Setenv("PATH", oldPath) })
+
+	financeDonePath := filepath.Join(dir, "finance.done")
+	commandPath := filepath.Join(dir, "codex")
+	script := `#!/bin/sh
+input="` + dir + `/input.$$"
+cat > "$input"
+if grep -q '当前分类：AI/科技' "$input"; then
+  rm -f "$input"
+  exit 7
+elif grep -q '当前分类：新闻财经' "$input"; then
+  sleep 0.1
+  touch "` + financeDonePath + `"
+  printf '%s' '{"overview_groups":[{"category":"新闻财经","items":["💹 财经要点"]}],"stories":[{"category":"新闻财经","title":"财经新闻","summary":"财经摘要。","impact":"财经影响。","source_article_ids":[1]}]}'
+  rm -f "$input"
+  exit 0
+fi
+rm -f "$input"
+exit 8
+`
+	if err := os.WriteFile(commandPath, []byte(script), 0o755); err != nil {
+		t.Fatalf("write fake codex: %v", err)
+	}
+	if err := os.Setenv("PATH", dir+string(os.PathListSeparator)+oldPath); err != nil {
+		t.Fatalf("set PATH: %v", err)
+	}
+
+	articles := []model.Article{
+		{Title: "AI", Source: "AI Source", Category: "AI/科技", Published: time.Date(2026, 8, 16, 8, 0, 0, 0, time.UTC)},
+		{Title: "Finance", Source: "Finance Source", Category: "新闻财经", Published: time.Date(2026, 8, 16, 8, 0, 0, 0, time.UTC)},
+	}
+	runner := NewRunner("codex", []string{"exec"}, false, "", "")
+	runner.failureLogPath = ""
+	runner.SetSummaryOptions(true, 2)
+
+	_, _, err := runner.SummarizeBriefingContext(context.Background(), articles, []string{"AI/科技", "新闻财经"}, time.UTC)
+	if err == nil {
+		t.Fatal("SummarizeBriefingContext() error = nil, want category failure")
+	}
+	if !strings.Contains(err.Error(), "summarize category AI/科技") || strings.Contains(err.Error(), "signal: killed") {
+		t.Fatalf("SummarizeBriefingContext() error = %q, want original AI category error", err)
+	}
+	if _, statErr := os.Stat(financeDonePath); statErr != nil {
+		t.Fatalf("finance sibling did not finish after AI failure: %v", statErr)
+	}
+}
+
 func TestRunnerUsesFinalEditorToSelectExistingCategoryStories(t *testing.T) {
 	dir := t.TempDir()
 	oldPath := os.Getenv("PATH")
