@@ -121,6 +121,7 @@ Flags (for regen):
   --period HHMM               可选，默认取 --to 的 HHMM
   --ignore-seen               跳过已读状态文件（默认 <output.dir>/state/seen.json），仅做本批次内去重
   --send-email                发送邮件
+  --email-recipient-match S   仅发送给配置中唯一包含 S 的收件人（必须配合 --send-email）
   --raw                       同时显示原始文章列表
   --no-publish                跳过 publish_hook，即使配置已启用
   --x-visible-history-days N      可选，从 X visible 历史归档读取，最多扫描 N 天窗口

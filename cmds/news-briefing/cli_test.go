@@ -20,7 +20,7 @@ func TestParseArgsRun(t *testing.T) {
 }
 
 func TestParseArgsRegen(t *testing.T) {
-	cmd, err := parseArgs([]string{"regen", "--from", "2026-03-18 08:00", "--to", "2026-03-18 14:00", "--period", "1400", "--ignore-seen", "--send-email", "--raw", "--no-publish", "--x-visible-history-days", "2", "--x-visible-history-dir", "/tmp/x-visible/history", "--max-articles", "AI/科技=70,国际政治=30"})
+	cmd, err := parseArgs([]string{"regen", "--from", "2026-03-18 08:00", "--to", "2026-03-18 14:00", "--period", "1400", "--ignore-seen", "--send-email", "--email-recipient-match", "personal", "--raw", "--no-publish", "--x-visible-history-days", "2", "--x-visible-history-dir", "/tmp/x-visible/history", "--max-articles", "AI/科技=70,国际政治=30"})
 	if err != nil {
 		t.Fatalf("parseArgs() error = %v", err)
 	}
@@ -34,11 +34,21 @@ func TestParseArgsRegen(t *testing.T) {
 	if regen.period != "1400" || !regen.ignoreSeen || !regen.sendEmail || !regen.raw || !regen.noPublish {
 		t.Fatalf("regen command = %#v", regen)
 	}
+	if regen.emailRecipientMatch != "personal" {
+		t.Fatalf("regen email recipient match = %q", regen.emailRecipientMatch)
+	}
 	if regen.xVisibleHistoryDays != 2 || regen.xVisibleHistoryDir != "/tmp/x-visible/history" {
 		t.Fatalf("regen history options = %#v", regen)
 	}
 	if regen.maxArticlesByCategory["AI/科技"] != 70 || regen.maxArticlesByCategory["国际政治"] != 30 {
 		t.Fatalf("regen filter options = %#v", regen)
+	}
+}
+
+func TestParseArgsRegenRecipientMatchRequiresEmail(t *testing.T) {
+	_, err := parseArgs([]string{"regen", "--from", "2026-03-18 08:00", "--to", "2026-03-18 14:00", "--email-recipient-match", "personal"})
+	if err == nil || !strings.Contains(err.Error(), "requires --send-email") {
+		t.Fatalf("parseArgs() error = %v", err)
 	}
 }
 

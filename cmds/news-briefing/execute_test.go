@@ -2389,3 +2389,32 @@ func TestExecuteFetchWithoutZhBypassesOutputModeComposer(t *testing.T) {
 		t.Fatal("printArticles() was not called for plain fetch")
 	}
 }
+
+func TestApplyCommandEmailRecipientMatchSelectsOneAndRestores(t *testing.T) {
+	app := &app{cfg: &config.Config{Email: config.Email{
+		To:         "personal@example.com",
+		Recipients: []string{"friend@example.com"},
+	}}}
+	restore, err := app.applyCommandEmailRecipientMatch(regenCommand{emailRecipientMatch: "personal"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if app.cfg.Email.To != "personal@example.com" || len(app.cfg.Email.Recipients) != 0 {
+		t.Fatalf("selected email config = %#v", app.cfg.Email)
+	}
+	restore()
+	if app.cfg.Email.To != "personal@example.com" || !reflect.DeepEqual(app.cfg.Email.Recipients, []string{"friend@example.com"}) {
+		t.Fatalf("restored email config = %#v", app.cfg.Email)
+	}
+}
+
+func TestApplyCommandEmailRecipientMatchRequiresUniqueMatch(t *testing.T) {
+	app := &app{cfg: &config.Config{Email: config.Email{
+		To:         "personal@example.com",
+		Recipients: []string{"personal-friend@example.com"},
+	}}}
+	_, err := app.applyCommandEmailRecipientMatch(regenCommand{emailRecipientMatch: "personal"})
+	if err == nil || !strings.Contains(err.Error(), "matched 2") {
+		t.Fatalf("applyCommandEmailRecipientMatch() error = %v", err)
+	}
+}

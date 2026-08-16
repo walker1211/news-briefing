@@ -261,6 +261,11 @@ func execute(app *app, cmd command) error {
 }
 
 func executeContext(ctx context.Context, app *app, cmd command) error {
+	restoreEmail, err := app.applyCommandEmailRecipientMatch(cmd)
+	if err != nil {
+		return err
+	}
+	defer restoreEmail()
 	if err := app.preflightCommand(cmd); err != nil {
 		return err
 	}
@@ -308,7 +313,7 @@ func executeContext(ctx context.Context, app *app, cmd command) error {
 		if err := app.email.resendMarkdownEmail(c.file, app.cfg); err != nil {
 			return err
 		}
-		app.output.printText(fmt.Sprintf("Email resent to %s", app.cfg.Email.To))
+		app.output.printText("Email resent to configured recipient(s)")
 		return nil
 	case helpCommand:
 		printUsage()
@@ -316,6 +321,42 @@ func executeContext(ctx context.Context, app *app, cmd command) error {
 	default:
 		return fmt.Errorf("unsupported command: %T", cmd)
 	}
+}
+
+func (app *app) applyCommandEmailRecipientMatch(cmd command) (func(), error) {
+	regen, ok := cmd.(regenCommand)
+	match := strings.TrimSpace(regen.emailRecipientMatch)
+	if !ok || match == "" {
+		return func() {}, nil
+	}
+	if app == nil || app.cfg == nil {
+		return nil, fmt.Errorf("select email recipient: config is nil")
+	}
+	candidates := make([]string, 0, 1+len(app.cfg.Email.Recipients))
+	candidates = append(candidates, app.cfg.Email.To)
+	candidates = append(candidates, app.cfg.Email.Recipients...)
+	needle := strings.ToLower(match)
+	matches := make([]string, 0, 1)
+	seen := make(map[string]struct{}, len(candidates))
+	for _, candidate := range candidates {
+		candidate = strings.TrimSpace(candidate)
+		if candidate == "" || !strings.Contains(strings.ToLower(candidate), needle) {
+			continue
+		}
+		key := strings.ToLower(candidate)
+		if _, exists := seen[key]; exists {
+			continue
+		}
+		seen[key] = struct{}{}
+		matches = append(matches, candidate)
+	}
+	if len(matches) != 1 {
+		return nil, fmt.Errorf("select email recipient: match must identify exactly one configured recipient (matched %d)", len(matches))
+	}
+	original := app.cfg.Email
+	app.cfg.Email.To = matches[0]
+	app.cfg.Email.Recipients = nil
+	return func() { app.cfg.Email = original }, nil
 }
 
 func outputNeedsTranslatedContent(mode model.OutputMode) bool {
@@ -1535,7 +1576,7 @@ func (app *app) runPostMarkdownActions(ctx context.Context, briefing *model.Brie
 			}
 		} else {
 			reporter.markEmailSent()
-			logutil.Printf("Email sent to %s", app.cfg.Email.To)
+			logutil.Printf("Email sent to configured recipient(s)")
 		}
 	}
 
@@ -1687,7 +1728,7 @@ func (app *app) finalizeDeepDive(cmd deepCommand, briefingDate string, relevant 
 		if err := app.email.sendDeepEmail(cmd.topic, briefing, app.cfg, failed); err != nil {
 			logutil.Errorf("Error sending email: %v", err)
 		} else {
-			logutil.Printf("Email sent to %s", app.cfg.Email.To)
+			logutil.Printf("Email sent to configured recipient(s)")
 		}
 	}
 	fmt.Println()
