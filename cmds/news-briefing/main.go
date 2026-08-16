@@ -123,11 +123,17 @@ Flags (for regen):
   --send-email                发送邮件
   --email-recipient-match S   仅发送给配置中唯一包含 S 的收件人（必须配合 --send-email）
   --raw                       同时显示原始文章列表
-  --no-publish                跳过 publish_hook，即使配置已启用
+  --publish                   显式运行 publish_hook；regen 默认不发布
+  --no-publish                兼容旧命令，保持不发布；不能与 --publish 同时使用
+  --replace-output            覆盖正式输出目录；默认写入 output/manual/<run-id>
   --x-visible-history-days N      可选，从 X visible 历史归档读取，最多扫描 N 天窗口
   --x-visible-history-dir DIR     可选，覆盖 x_accounts.history_dir
   --max-articles "分类=N,..."     可选，按分类设置进入本次简报的文章上限，例如 "AI/科技=70,国际政治=30"
-  默认不发邮件，默认仍会写出 Markdown 文件
+  默认不发邮件、不发布，并把 Markdown 写入隔离的 manual 子目录
+
+Flags (for resend-md):
+  --file PATH                 已生成的 Markdown 文件
+  --email-recipient-match S   仅发送给配置中唯一包含 S 的收件人
 
 Flags (for fetch):
   --zh                   翻译成中文（调用已配置 AI CLI）
@@ -158,7 +164,7 @@ Examples:
   news-briefing run --raw
   news-briefing run --no-email
   news-briefing regen --from "2026-03-18 08:00" --to "2026-03-18 14:00"
-  news-briefing regen --from "2026-03-18 08:00" --to "2026-03-18 14:00" --no-publish
+  news-briefing regen --from "2026-03-18 08:00" --to "2026-03-18 14:00" --replace-output
   news-briefing regen --from "2026-03-18 08:00" --to "2026-03-18 14:00" --period 1400 --ignore-seen --send-email
   news-briefing regen --from "2026-05-19 08:00" --to "2026-05-21 08:00" --ignore-seen --x-visible-history-days 2
   news-briefing fetch
@@ -172,7 +178,7 @@ Examples:
   news-briefing deep "Claude" --ignore-seen
   news-briefing deep "Claude" --from "2026-03-28 00:00" --to "2026-03-29 23:59"
   news-briefing deep "Claude" --from "2026-03-28 00:00" --to "2026-03-29 23:59" --ignore-seen
-  news-briefing resend-md --file output/26.04.13-晚间-1800.md`
+  news-briefing resend-md --file output/26.04.13-晚间-1800.md --email-recipient-match personal`
 }
 
 func currentPeriod() string {

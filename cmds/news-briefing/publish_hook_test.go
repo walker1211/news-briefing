@@ -41,12 +41,14 @@ func TestExpandPublishHookArgsIncludesCardManifestPlaceholders(t *testing.T) {
 		"--source", "{source_app}",
 		"--date", "{date}",
 		"--period", "{period}",
+		"--dedupe-key", "{publish_dedupe_key}",
 	}, publishHookRequest{
 		MarkdownFile:     "/tmp/output/26.06.16-晚间-1800.md",
 		CardManifestFile: "/tmp/output/26.06.16-晚间-1800.card-manifest.json",
 		SourceApp:        "news-briefing",
 		Date:             "26.06.16",
 		Period:           "1800",
+		PublishDedupeKey: "news-briefing:run-123",
 	})
 	want := strings.Join([]string{
 		"--file", "/tmp/output/26.06.16-晚间-1800.md",
@@ -55,6 +57,7 @@ func TestExpandPublishHookArgsIncludesCardManifestPlaceholders(t *testing.T) {
 		"--source", "news-briefing",
 		"--date", "26.06.16",
 		"--period", "1800",
+		"--dedupe-key", "news-briefing:run-123",
 	}, "\x00")
 	if strings.Join(got, "\x00") != want {
 		t.Fatalf("expandPublishHookArgs() = %#v", got)

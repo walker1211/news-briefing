@@ -319,6 +319,7 @@ Regenerate a briefing for an explicit time window. Useful for backfilling, rerun
 ./news-briefing regen --from "2026-03-18 08:00" --to "2026-03-18 14:00"
 ./news-briefing regen --from "2026-03-18 08:00" --to "2026-03-18 14:00" --ignore-seen
 ./news-briefing regen --from "2026-03-18 08:00" --to "2026-03-18 14:00" --period 1400 --ignore-seen --send-email
+./news-briefing regen --from "2026-03-18 08:00" --to "2026-03-18 14:00" --publish --replace-output
 ```
 
 Rules:
@@ -328,7 +329,8 @@ Rules:
 - `--period` is optional; when omitted, it defaults to the `HHMM` of `--to`
 - `--ignore-seen` skips the persisted seen-state filter and only keeps in-batch deduplication
 - `--send-email` is off by default and only sends mail when explicitly passed
-- `regen` still writes a Markdown file by default
+- `regen` skips `publish_hook` by default; pass `--publish` explicitly to publish
+- `regen` writes Markdown and cards under `output.dir/manual/<run-time>-<period>` by default so a manual rerun cannot replace scheduled output; pass `--replace-output` explicitly to write to the regular output directory
 
 ### `fetch`
 
@@ -362,6 +364,7 @@ Resend email from an existing Markdown file without fetching news again and with
 
 ```bash
 ./news-briefing resend-md --file output/26.04.13-晚间-1800.md
+./news-briefing resend-md --file output/26.04.13-晚间-1800.md --email-recipient-match personal
 ```
 
 Rules:
@@ -369,7 +372,7 @@ Rules:
 - `--file` is required
 - the file must be a `.md` file
 - the file path must stay under `output.dir`
-- the recipient uses the current `email.to`
+- recipients use the current email configuration by default; `--email-recipient-match` can select exactly one configured address
 - the email subject is derived from the Markdown filename; for example, `26.04.13-晚间-1800.md` becomes `国际资讯简报 26.04.13 晚间 18:00`
 
 ### `serve`

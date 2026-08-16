@@ -596,6 +596,8 @@ output:
   # Optional. If AI summary generation fails or times out, retry once per fallback level.
   fallback:
     enabled: true
+    # Recoverable fallback starts are recorded locally by default; set true only when an immediate degraded-run email is desired.
+    alert_on_start: false
     levels:
       - name: reduced
         max_articles:
@@ -623,6 +625,8 @@ publish_hook:
     - "{date}"
     - --period
     - "{period}"
+    - --dedupe-key
+    - "{publish_dedupe_key}"
     - --xhs-card-manifest
     - "{xhs_card_manifest}"
     - --xhs-declare-original=false

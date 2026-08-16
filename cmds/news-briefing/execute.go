@@ -324,9 +324,8 @@ func executeContext(ctx context.Context, app *app, cmd command) error {
 }
 
 func (app *app) applyCommandEmailRecipientMatch(cmd command) (func(), error) {
-	regen, ok := cmd.(regenCommand)
-	match := strings.TrimSpace(regen.emailRecipientMatch)
-	if !ok || match == "" {
+	match := strings.TrimSpace(commandEmailRecipientMatch(cmd))
+	if match == "" {
 		return func() {}, nil
 	}
 	if app == nil || app.cfg == nil {
@@ -357,6 +356,17 @@ func (app *app) applyCommandEmailRecipientMatch(cmd command) (func(), error) {
 	app.cfg.Email.To = matches[0]
 	app.cfg.Email.Recipients = nil
 	return func() { app.cfg.Email = original }, nil
+}
+
+func commandEmailRecipientMatch(cmd command) string {
+	switch command := cmd.(type) {
+	case regenCommand:
+		return command.emailRecipientMatch
+	case resendMDCommand:
+		return command.emailRecipientMatch
+	default:
+		return ""
+	}
 }
 
 func outputNeedsTranslatedContent(mode model.OutputMode) bool {
@@ -900,7 +910,20 @@ func (app *app) runRegenContext(ctx context.Context, cmd regenCommand) error {
 		return err
 	}
 	logutil.Printf("Stage article_limit completed in %s", time.Since(limitStarted).Round(time.Second))
+	restoreOutputDir := app.useManualRegenOutputDir(cmd, period)
+	defer restoreOutputDir()
 	return app.renderBriefingContextWithSourceStats(ctx, "regen", to.Format("06.01.02"), period, result.Articles, result.FilteredArticles, nil, result.Failed, cmd.raw, cmd.sendEmail, &result.SourceStats)
+}
+
+func (app *app) useManualRegenOutputDir(cmd regenCommand, period string) func() {
+	if cmd.replaceOutput || app == nil || app.cfg == nil {
+		return func() {}
+	}
+	original := app.cfg.Output.Dir
+	runName := app.currentTime().In(app.displayLocation()).Format("20060102T150405.000") + "-" + period
+	app.cfg.Output.Dir = filepath.Join(original, "manual", runName)
+	logutil.Printf("Manual regen output isolated under %s", app.cfg.Output.Dir)
+	return func() { app.cfg.Output.Dir = original }
 }
 
 func (app *app) configuredArticleLimits() map[string]int {
@@ -1367,20 +1390,26 @@ func articleCategoryCountsString(articles []model.Article) string {
 		counts[category]++
 	}
 	parts := make([]string, 0, len(counts))
-	for category, count := range counts {
+	categories := make([]string, 0, len(counts))
+	for category := range counts {
+		categories = append(categories, category)
+	}
+	sort.Strings(categories)
+	for _, category := range categories {
+		count := counts[category]
 		parts = append(parts, fmt.Sprintf("%s=%d", category, count))
 	}
 	return strings.Join(parts, ",")
 }
 
 func (app *app) sendAIFallbackAlert(enabled bool, failed aiBriefingAttempt, next aiBriefingAttempt, runErr error) {
-	if !enabled {
+	if !enabled || app == nil || app.cfg == nil || !app.cfg.Output.Fallback.AlertOnStart {
 		return
 	}
 	failedCategories := summarizer.FailedBriefingCategories(runErr)
 	cachedCategories := cachedSuccessfulCategories(failed.articles, failedCategories)
 	body := fmt.Sprintf(
-		"AI summary attempt %q failed and fallback %q is starting.\n\nFailure scope: %s\nCached successful categories: %s\nPrimary input: %d articles (%s)\nFallback input: %d articles (%s)\nError: %v",
+		"AI summary attempt %q failed and fallback %q is starting.\n\nFailure scope: %s\nCached successful categories: %s\nPrimary input: %d articles (%s)\nFallback input: %d articles (%s)\nError class: %s",
 		failed.name,
 		next.name,
 		fallbackFailureScope(failedCategories),
@@ -1389,7 +1418,7 @@ func (app *app) sendAIFallbackAlert(enabled bool, failed aiBriefingAttempt, next
 		articleCategoryCountsString(failed.articles),
 		len(next.articles),
 		articleCategoryCountsString(next.articles),
-		runErr,
+		aiAlertErrorClass(runErr),
 	)
 	app.sendAIAlert("[news-briefing] AI summary fallback started", body)
 }
@@ -1436,7 +1465,24 @@ func (app *app) sendAIFinalFailureAlert(enabled bool, runErr error) {
 	if !enabled {
 		return
 	}
-	app.sendAIAlert("[news-briefing] AI summary failed", fmt.Sprintf("AI summary failed after all configured attempts.\n\nError: %v", runErr))
+	app.sendAIAlert("[news-briefing] AI summary failed", fmt.Sprintf("AI summary failed after all configured attempts.\n\nFailure scope: %s\nError class: %s", fallbackFailureScope(summarizer.FailedBriefingCategories(runErr)), aiAlertErrorClass(runErr)))
+}
+
+func aiAlertErrorClass(err error) string {
+	switch {
+	case err == nil:
+		return "unknown"
+	case errors.Is(err, context.DeadlineExceeded):
+		return "timeout"
+	case errors.Is(err, context.Canceled):
+		return "canceled"
+	case summarizer.IsInvalidPromptError(err):
+		return "invalid_prompt"
+	case len(summarizer.FailedBriefingCategories(err)) > 0:
+		return "category_validation_failed"
+	default:
+		return "ai_summary_failed"
+	}
 }
 
 func (app *app) sendAIAlert(subject string, body string) {
@@ -1583,6 +1629,11 @@ func (app *app) renderBriefingContextWithReporterAndSourceStats(ctx context.Cont
 
 func (app *app) runPostMarkdownActions(ctx context.Context, briefing *model.Briefing, markdownPath string, sendEmail bool, _ []fetcher.FailedSource, reporter *scheduledRunReporter) error {
 	hookDone := make(chan error, 1)
+	publishDedupeKey := ""
+	if reporter != nil {
+		publishDedupeKey = "news-briefing:" + scheduledRunID(reporter.window)
+		reporter.updateFields("post_actions", map[string]string{"publish_dedupe_key": publishDedupeKey})
+	}
 	if app.suppressPublishHook {
 		logutil.Println("Skipping publish hook")
 		hookDone <- nil
@@ -1602,6 +1653,7 @@ func (app *app) runPostMarkdownActions(ctx context.Context, briefing *model.Brie
 				SourceApp:        "news-briefing",
 				Date:             briefing.Date,
 				Period:           briefing.Period,
+				PublishDedupeKey: publishDedupeKey,
 			})
 		}()
 	} else {

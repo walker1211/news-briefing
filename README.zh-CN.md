@@ -288,6 +288,7 @@ output:
 ./news-briefing regen --from "2026-03-18 08:00" --to "2026-03-18 14:00"
 ./news-briefing regen --from "2026-03-18 08:00" --to "2026-03-18 14:00" --ignore-seen
 ./news-briefing regen --from "2026-03-18 08:00" --to "2026-03-18 14:00" --period 1400 --ignore-seen --send-email
+./news-briefing regen --from "2026-03-18 08:00" --to "2026-03-18 14:00" --publish --replace-output
 ```
 
 规则：
@@ -297,7 +298,8 @@ output:
 - `--period` 可选；不传时默认取 `--to` 的 `HHMM`
 - `--ignore-seen` 会跳过持久化已读状态，仅做当前批次内去重
 - `--send-email` 默认关闭，显式传入时才发邮件
-- `regen` 默认仍会写出 Markdown 文件
+- `regen` 默认不运行 `publish_hook`，显式传入 `--publish` 才发布
+- `regen` 默认把 Markdown 和卡片写入 `output.dir/manual/<运行时间>-<period>`，避免覆盖正式调度产物；只有显式传入 `--replace-output` 才写回正式输出目录
 
 ### `fetch`
 
@@ -331,6 +333,7 @@ output:
 
 ```bash
 ./news-briefing resend-md --file output/26.04.13-晚间-1800.md
+./news-briefing resend-md --file output/26.04.13-晚间-1800.md --email-recipient-match personal
 ```
 
 规则：
@@ -338,7 +341,7 @@ output:
 - `--file` 必填
 - 文件必须是 `.md`
 - 文件路径必须位于 `output.dir` 下
-- 收件人使用当前 `email.to`
+- 收件人默认使用当前邮件配置；`--email-recipient-match` 可从已配置收件人中唯一匹配一个地址
 - 邮件主题从 Markdown 文件名推导，例如 `26.04.13-晚间-1800.md` 会发成 `国际资讯简报 26.04.13 晚间 18:00`
 
 ### `serve`

@@ -1129,15 +1129,18 @@ func TestRunScheduledBriefingFallsBackThroughConfiguredArticleLevels(t *testing.
 	if gotTitles := articleTitles(rendered); !reflect.DeepEqual(gotTitles, []string{"first ai"}) {
 		t.Fatalf("rendered titles = %#v, want minimal fallback article", gotTitles)
 	}
-	if alerts != 2 {
-		t.Fatalf("alerts = %d, want 2 fallback alerts", alerts)
+	if alerts != 0 {
+		t.Fatalf("alerts = %d, want recoverable fallback starts to stay local by default", alerts)
 	}
 }
 
 func TestSendAIFallbackAlertReportsCategoryScopeInsteadOfFailedArticleCount(t *testing.T) {
 	var subject, body string
 	app := &app{
-		cfg: &config.Config{Email: config.Email{SMTPHost: "smtp.example.com"}},
+		cfg: &config.Config{
+			Email:  config.Email{SMTPHost: "smtp.example.com"},
+			Output: config.OutputCfg{Fallback: config.OutputFallbackCfg{AlertOnStart: true}},
+		},
 		email: emailDeps{sendAlertEmail: func(gotSubject string, gotBody string, _ *config.Config) error {
 			subject, body = gotSubject, gotBody
 			return nil
@@ -1163,6 +1166,7 @@ func TestSendAIFallbackAlertReportsCategoryScopeInsteadOfFailedArticleCount(t *t
 		"Cached successful categories: AI/科技, 新闻财经",
 		"Primary input: 3 articles",
 		"Fallback input: 3 articles",
+		"Error class: category_validation_failed",
 	} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("body = %q, missing %q", body, want)
@@ -1170,6 +1174,9 @@ func TestSendAIFallbackAlertReportsCategoryScopeInsteadOfFailedArticleCount(t *t
 	}
 	if strings.Contains(body, "Failed articles:") {
 		t.Fatalf("body retains misleading failed article count: %q", body)
+	}
+	if strings.Contains(body, "invalid category field") {
+		t.Fatalf("body leaked raw failure details: %q", body)
 	}
 }
 
@@ -2445,6 +2452,53 @@ func TestApplyCommandEmailRecipientMatchSelectsOneAndRestores(t *testing.T) {
 	if app.cfg.Email.To != "personal@example.com" || !reflect.DeepEqual(app.cfg.Email.Recipients, []string{"friend@example.com"}) {
 		t.Fatalf("restored email config = %#v", app.cfg.Email)
 	}
+}
+
+func TestApplyCommandEmailRecipientMatchSupportsResendMarkdown(t *testing.T) {
+	app := &app{cfg: &config.Config{Email: config.Email{
+		To:         "team@example.com",
+		Recipients: []string{"personal@example.com"},
+	}}}
+	restore, err := app.applyCommandEmailRecipientMatch(resendMDCommand{emailRecipientMatch: "personal"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if app.cfg.Email.To != "personal@example.com" || len(app.cfg.Email.Recipients) != 0 {
+		t.Fatalf("selected email config = %#v", app.cfg.Email)
+	}
+	restore()
+	if app.cfg.Email.To != "team@example.com" || !reflect.DeepEqual(app.cfg.Email.Recipients, []string{"personal@example.com"}) {
+		t.Fatalf("restored email config = %#v", app.cfg.Email)
+	}
+}
+
+func TestUseManualRegenOutputDirIsolatesAndRestores(t *testing.T) {
+	original := t.TempDir()
+	app := &app{
+		cfg: &config.Config{Output: config.OutputCfg{Dir: original}, ScheduleLocation: time.UTC},
+		now: func() time.Time {
+			return time.Date(2026, 8, 16, 12, 34, 56, 789_000_000, time.UTC)
+		},
+	}
+	restore := app.useManualRegenOutputDir(regenCommand{}, "0800")
+	want := filepath.Join(original, "manual", "20260816T123456.789-0800")
+	if app.cfg.Output.Dir != want {
+		t.Fatalf("manual output dir = %q, want %q", app.cfg.Output.Dir, want)
+	}
+	restore()
+	if app.cfg.Output.Dir != original {
+		t.Fatalf("restored output dir = %q, want %q", app.cfg.Output.Dir, original)
+	}
+}
+
+func TestUseManualRegenOutputDirCanReplaceFormalOutputExplicitly(t *testing.T) {
+	original := t.TempDir()
+	app := &app{cfg: &config.Config{Output: config.OutputCfg{Dir: original}}}
+	restore := app.useManualRegenOutputDir(regenCommand{replaceOutput: true}, "0800")
+	if app.cfg.Output.Dir != original {
+		t.Fatalf("output dir = %q, want %q", app.cfg.Output.Dir, original)
+	}
+	restore()
 }
 
 func TestApplyCommandEmailRecipientMatchRequiresUniqueMatch(t *testing.T) {

@@ -52,6 +52,35 @@ func TestParseArgsRegenRecipientMatchRequiresEmail(t *testing.T) {
 	}
 }
 
+func TestParseArgsRegenDefaultsToNoPublishAndIsolatedOutput(t *testing.T) {
+	cmd, err := parseArgs([]string{"regen", "--from", "2026-03-18 08:00", "--to", "2026-03-18 14:00"})
+	if err != nil {
+		t.Fatalf("parseArgs() error = %v", err)
+	}
+	regen := cmd.(regenCommand)
+	if !regen.noPublish || regen.replaceOutput {
+		t.Fatalf("regen defaults = %#v, want no publish and isolated output", regen)
+	}
+}
+
+func TestParseArgsRegenExplicitPublishAndReplaceOutput(t *testing.T) {
+	cmd, err := parseArgs([]string{"regen", "--from", "2026-03-18 08:00", "--to", "2026-03-18 14:00", "--publish", "--replace-output"})
+	if err != nil {
+		t.Fatalf("parseArgs() error = %v", err)
+	}
+	regen := cmd.(regenCommand)
+	if regen.noPublish || !regen.replaceOutput {
+		t.Fatalf("regen explicit flags = %#v", regen)
+	}
+}
+
+func TestParseArgsRegenRejectsConflictingPublishFlags(t *testing.T) {
+	_, err := parseArgs([]string{"regen", "--from", "2026-03-18 08:00", "--to", "2026-03-18 14:00", "--publish", "--no-publish"})
+	if err == nil || !strings.Contains(err.Error(), "cannot be used together") {
+		t.Fatalf("parseArgs() error = %v", err)
+	}
+}
+
 func TestParseArgsFetch(t *testing.T) {
 	cmd, err := parseArgs([]string{"fetch", "--zh"})
 	if err != nil {
@@ -314,7 +343,7 @@ func TestParseArgsHelpRejects(t *testing.T) {
 }
 
 func TestParseArgsResendMD(t *testing.T) {
-	cmd, err := parseArgs([]string{"resend-md", "--file", "output/26.04.13-晚间-1800.md"})
+	cmd, err := parseArgs([]string{"resend-md", "--file", "output/26.04.13-晚间-1800.md", "--email-recipient-match", "personal"})
 	if err != nil {
 		t.Fatalf("parseArgs() error = %v", err)
 	}
@@ -324,6 +353,9 @@ func TestParseArgsResendMD(t *testing.T) {
 	}
 	if resend.file != "output/26.04.13-晚间-1800.md" {
 		t.Fatalf("resend file = %q, want %q", resend.file, "output/26.04.13-晚间-1800.md")
+	}
+	if resend.emailRecipientMatch != "personal" {
+		t.Fatalf("resend email recipient match = %q", resend.emailRecipientMatch)
 	}
 }
 
