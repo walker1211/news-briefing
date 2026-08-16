@@ -1258,14 +1258,21 @@ func deterministicBriefingSourceLine(articles []model.Article, loc *time.Locatio
 	if len(references) == 0 {
 		references = append(references, "未知来源")
 	}
-	line := "来源: " + strings.Join(references, "、") + " | 核验: " + evidenceLevelLabel(briefingEvidenceLevel(articles))
+	line := "来源: " + strings.Join(references, "、")
 	if earliest.IsZero() {
 		return line
 	}
 	if earliest.Equal(latest) {
 		return line + " | " + earliest.Format("2006-01-02 15:04")
 	}
-	return line + " | " + earliest.Format("2006-01-02 15:04") + " 至 " + latest.Format("2006-01-02 15:04")
+	return line + " | " + formatBriefingTimeRange(earliest, latest)
+}
+
+func formatBriefingTimeRange(earliest, latest time.Time) string {
+	if earliest.Format("2006-01-02") == latest.Format("2006-01-02") {
+		return earliest.Format("2006-01-02 15:04") + "~" + latest.Format("15:04")
+	}
+	return earliest.Format("2006-01-02 15:04") + " 至 " + latest.Format("2006-01-02 15:04")
 }
 
 func briefingSourceReferences(articles []model.Article) []string {
@@ -1347,17 +1354,6 @@ func briefingEvidenceLevel(articles []model.Article) string {
 		return model.EvidenceSupported
 	}
 	return model.EvidenceSingleSource
-}
-
-func evidenceLevelLabel(level string) string {
-	switch level {
-	case model.EvidenceCorroborated:
-		return "交叉核验"
-	case model.EvidenceSupported:
-		return "有一手依据"
-	default:
-		return "单一来源"
-	}
 }
 
 func parseBriefingSummaryJSON(raw string) (model.BriefingSummary, error) {

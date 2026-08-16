@@ -220,14 +220,14 @@ func TestBuildHTMLBodyRendersNamedSourceCitationsAsLinks(t *testing.T) {
 	body := strings.Join([]string{
 		"## AI/科技",
 		"### 一条新闻",
-		"> 来源: [Official](<https://example.com/official>)、[Media](<https://example.com/report>) | 核验: 交叉核验 | 2026-08-16 08:00",
+		"> 来源: [Official](<https://example.com/official>)、[Media](<https://example.com/report>) | 2026-08-16 08:00",
 	}, "\n")
 
 	got := buildHTMLBody(body)
 	for _, want := range []string{
 		`<a href="https://example.com/official">Official</a>`,
 		`<a href="https://example.com/report">Media</a>`,
-		`核验: 交叉核验`,
+		`2026-08-16 08:00`,
 	} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("buildHTMLBody() = %q, want substring %q", got, want)

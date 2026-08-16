@@ -251,7 +251,7 @@ func TestValidateAndNormalizeBriefingSummaryReferencesBuildsSourceLine(t *testin
 	if !reflect.DeepEqual(story.SourceArticleIDs, []int{1, 2, 3}) {
 		t.Fatalf("source ids = %v, want deduplicated ids", story.SourceArticleIDs)
 	}
-	if story.SourceLine != "来源: Source B、Source A | 核验: 交叉核验 | 2026-08-11 08:00 至 2026-08-11 09:30" {
+	if story.SourceLine != "来源: Source B、Source A | 2026-08-11 08:00~09:30" {
 		t.Fatalf("source line = %q", story.SourceLine)
 	}
 }
@@ -276,10 +276,25 @@ func TestValidateAndNormalizeBriefingSummaryReferencesBuildsClickableCitationsAn
 	if story.ContentType != model.ContentTypeTool {
 		t.Fatalf("content type = %q", story.ContentType)
 	}
-	for _, want := range []string{"核验: 交叉核验", "[Official](<https://example.com/official>)", "[Media](<https://example.com/report>)"} {
+	for _, want := range []string{"[Official](<https://example.com/official>)", "[Media](<https://example.com/report>)"} {
 		if !strings.Contains(story.SourceLine, want) {
 			t.Fatalf("source line %q missing %q", story.SourceLine, want)
 		}
+	}
+	if strings.Contains(story.SourceLine, "核验:") {
+		t.Fatalf("source line %q should not expose evidence label", story.SourceLine)
+	}
+}
+
+func TestDeterministicBriefingSourceLineKeepsFullDatesAcrossDays(t *testing.T) {
+	articles := []model.Article{
+		{Source: "Source A", Published: time.Date(2026, 8, 16, 1, 58, 0, 0, time.UTC)},
+		{Source: "Source B", Published: time.Date(2026, 8, 17, 2, 58, 0, 0, time.UTC)},
+	}
+
+	got := deterministicBriefingSourceLine(articles, time.UTC)
+	if want := "来源: Source A、Source B | 2026-08-16 01:58 至 2026-08-17 02:58"; got != want {
+		t.Fatalf("source line = %q, want %q", got, want)
 	}
 }
 
@@ -370,7 +385,7 @@ func TestRunnerSummarizeRemapsPromptSourceIDsToOriginalArticleOrder(t *testing.T
 	if want := []int{2}; !reflect.DeepEqual(got.Stories[0].SourceArticleIDs, want) {
 		t.Fatalf("source ids = %v, want original article ids %v", got.Stories[0].SourceArticleIDs, want)
 	}
-	if got.Stories[0].SourceLine != "来源: AI Source | 核验: 单一来源" {
+	if got.Stories[0].SourceLine != "来源: AI Source" {
 		t.Fatalf("source line = %q", got.Stories[0].SourceLine)
 	}
 }
