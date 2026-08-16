@@ -345,13 +345,14 @@ func TestDeterministicBriefingSourceLineKeepsFullDatesAcrossDays(t *testing.T) {
 func TestBriefingSourceReferencesLabelsMultipleArticlesFromSamePublisher(t *testing.T) {
 	articles := []model.Article{
 		{Source: "中新网财经", Link: "https://example.com/one"},
+		{Source: "X/@reporter", Link: "https://example.com/x"},
 		{Source: "中新网财经", Link: "https://example.com/two"},
 	}
 
 	got := briefingSourceReferences(articles)
 	want := []string{
-		"[中新网财经·报道1](<https://example.com/one>)",
-		"[中新网财经·报道2](<https://example.com/two>)",
+		"中新网财经（[1](<https://example.com/one>)、[2](<https://example.com/two>)）",
+		"[X/@reporter](<https://example.com/x>)",
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("references = %#v, want %#v", got, want)
