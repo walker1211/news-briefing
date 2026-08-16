@@ -1134,6 +1134,45 @@ func TestRunScheduledBriefingFallsBackThroughConfiguredArticleLevels(t *testing.
 	}
 }
 
+func TestSendAIFallbackAlertReportsCategoryScopeInsteadOfFailedArticleCount(t *testing.T) {
+	var subject, body string
+	app := &app{
+		cfg: &config.Config{Email: config.Email{SMTPHost: "smtp.example.com"}},
+		email: emailDeps{sendAlertEmail: func(gotSubject string, gotBody string, _ *config.Config) error {
+			subject, body = gotSubject, gotBody
+			return nil
+		}},
+	}
+	articles := []model.Article{
+		{Category: "AI/科技"},
+		{Category: "新闻财经"},
+		{Category: "国际政治"},
+	}
+	runErr := &summarizer.BriefingCategoryError{
+		Categories: []string{"国际政治"},
+		Err:        errors.New("invalid category field"),
+	}
+
+	app.sendAIFallbackAlert(true, aiBriefingAttempt{name: "primary", articles: articles}, aiBriefingAttempt{name: "reduced", articles: articles}, runErr)
+
+	if subject != "[news-briefing] AI summary fallback started" {
+		t.Fatalf("subject = %q", subject)
+	}
+	for _, want := range []string{
+		"Failure scope: categories: 国际政治",
+		"Cached successful categories: AI/科技, 新闻财经",
+		"Primary input: 3 articles",
+		"Fallback input: 3 articles",
+	} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("body = %q, missing %q", body, want)
+		}
+	}
+	if strings.Contains(body, "Failed articles:") {
+		t.Fatalf("body retains misleading failed article count: %q", body)
+	}
+}
+
 func TestSummarizeBriefingSkipsArticleFallbackForInvalidPrompt(t *testing.T) {
 	cfg := executeTestConfigWithEmail(t, model.OutputModeTranslatedOnly)
 	cfg.Output.Fallback = config.OutputFallbackCfg{

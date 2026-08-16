@@ -61,6 +61,7 @@ stories 按下面新闻条目里出现的分类顺序输出；每个分类内部
 summary 用2-4句话说明关键事实、背景、数字、参与方和最新进展，不要只做一句话标题复述；如果多条相关新闻合并为同一 story，要交代各条新闻之间的关系。
 impact 用2-3句话说明为什么重要、影响哪些人或机构、后续观察变量，避免空泛地写“值得关注后续进展”。
 content_type 必须按主体内容选择：news=新闻事件，tool=可直接使用的工具/产品，case=具体应用案例，insight=趋势、方法或观点分析。不要为了配额改变类型。
+category 必须逐字复制输入新闻条目的分类名；news、tool、case、insight 只能写入 content_type，绝不能写入 category。
 source_article_ids 必须使用输入新闻条目的 1-based 编号；同一事件有官方/一手来源和独立媒体来源时应合并并列出所有来源编号。优先使用 primary 与 original 来源交叉核验；radar/repost 只用于发现线索或补充讨论，不能取代可获得的一手或原创来源。
 每个 story 只能引用与自身 category 完全相同的新闻条目。不要输出 source_line；来源名称和时间会由程序根据 source_article_ids 确定性生成。
 image_url 只能使用输入新闻条目中的 Image 字段原值；没有可用图片时使用空字符串。不要编造、改写或重新托管图片 URL。不要使用 tracking pixel、RSS 统计图、透明占位图或与 story 主体事件无直接关系的配图。多条新闻合并为同一 story 时，如果无法明确判断哪张图直接对应主标题事件，就把 image_url 设为空字符串。AI/科技 分类下的重要 story 如果 source_article_ids 对应新闻有 Image 字段，应优先使用其中最相关且确定对应的一张。
@@ -93,7 +94,7 @@ const categoryBriefingPrompt = `你是一个国际新闻编辑。请只整理输
 }
 
 同一事件的多条新闻应合并；stories 按重要程度排序。summary 要包含关键事实、背景、数字、参与方和最新进展，impact 要具体说明影响对象与后续变量。
-content_type 必须是 news、tool、case、insight 之一，不使用固定类型配额。source_article_ids 必须使用输入条目的 1-based 编号，且只能引用当前分类；同一事件有 primary 与 original 来源时应合并引用，radar/repost 不能取代可获得的一手或原创来源。image_url 只能原样使用对应来源条目的 Image 字段；没有明确相关的可用图片时输出空字符串。overview_groups 必须且只能包含当前分类。`
+category 必须逐字复制“当前分类”；news、tool、case、insight 只能写入 content_type，绝不能写入 category。content_type 必须是 news、tool、case、insight 之一，不使用固定类型配额。source_article_ids 必须使用输入条目的 1-based 编号，且只能引用当前分类；同一事件有 primary 与 original 来源时应合并引用，radar/repost 不能取代可获得的一手或原创来源。image_url 只能原样使用对应来源条目的 Image 字段；没有明确相关的可用图片时输出空字符串。overview_groups 必须且只能包含当前分类。`
 
 const briefingSynthesisPrompt = `你是一个国际新闻主编。下面是已经按分类完成的结构化新闻摘要。
 
@@ -796,6 +797,37 @@ type categorySummaryResult struct {
 	err     error
 }
 
+// BriefingCategoryError preserves which independent category workers failed
+// while retaining the original joined error for diagnostics and retries.
+type BriefingCategoryError struct {
+	Categories []string
+	Err        error
+}
+
+func (e *BriefingCategoryError) Error() string {
+	if e == nil || e.Err == nil {
+		return "briefing category summary failed"
+	}
+	return e.Err.Error()
+}
+
+func (e *BriefingCategoryError) Unwrap() error {
+	if e == nil {
+		return nil
+	}
+	return e.Err
+}
+
+// FailedBriefingCategories returns a copy so callers can safely format alerts
+// without depending on error message parsing.
+func FailedBriefingCategories(err error) []string {
+	var categoryErr *BriefingCategoryError
+	if !errors.As(err, &categoryErr) || categoryErr == nil {
+		return nil
+	}
+	return append([]string(nil), categoryErr.Categories...)
+}
+
 type briefingCategorySummaryCacheKey struct{}
 
 type briefingCategorySummaryCache struct {
@@ -908,14 +940,16 @@ func (r *Runner) summarizeBriefingParallelContext(ctx context.Context, articles 
 	wg.Wait()
 
 	categoryErrors := make([]error, 0, len(categories))
+	failedCategories := make([]string, 0, len(categories))
 	for index, result := range results {
 		if result.err == nil {
 			continue
 		}
+		failedCategories = append(failedCategories, categories[index])
 		categoryErrors = append(categoryErrors, fmt.Errorf("summarize category %s: %w", categories[index], result.err))
 	}
 	if len(categoryErrors) > 0 {
-		return model.BriefingSummary{}, "", errors.Join(categoryErrors...)
+		return model.BriefingSummary{}, "", &BriefingCategoryError{Categories: failedCategories, Err: errors.Join(categoryErrors...)}
 	}
 
 	combined := model.BriefingSummary{}
@@ -1099,6 +1133,7 @@ func (r *Runner) summarizeCategoryContext(ctx context.Context, articles []model.
 	if err != nil {
 		return model.BriefingSummary{}, fmt.Errorf("parse structured category briefing: %w", err)
 	}
+	normalizeCategoryBriefingFields(&structured, category)
 	structured, err = validateAndNormalizeBriefingSummaryReferences(structured, categoryArticles, loc)
 	if err != nil {
 		return model.BriefingSummary{}, fmt.Errorf("validate category briefing references: %w", err)
@@ -1110,6 +1145,29 @@ func (r *Runner) summarizeCategoryContext(ctx context.Context, articles []model.
 	}
 	cache.put(prompt, structured)
 	return remapBriefingSummarySourceArticleIDs(structured, originalIndexes), nil
+}
+
+func normalizeCategoryBriefingFields(summary *model.BriefingSummary, category string) {
+	if summary == nil {
+		return
+	}
+	category = strings.TrimSpace(category)
+	for index := range summary.Stories {
+		story := &summary.Stories[index]
+		misplacedType := strings.TrimSpace(story.Category)
+		if story.Category != category && model.ValidContentType(misplacedType) {
+			if !model.ValidContentType(strings.TrimSpace(story.ContentType)) {
+				story.ContentType = misplacedType
+			}
+			story.Category = category
+		}
+	}
+	for index := range summary.OverviewGroups {
+		group := &summary.OverviewGroups[index]
+		if group.Category != category && model.ValidContentType(strings.TrimSpace(group.Category)) {
+			group.Category = category
+		}
+	}
 }
 
 func normalizedCategoryOverview(groups []model.BriefingOverviewGroup, category string) ([]model.BriefingOverviewGroup, error) {
@@ -1276,9 +1334,13 @@ func formatBriefingTimeRange(earliest, latest time.Time) string {
 }
 
 func briefingSourceReferences(articles []model.Article) []string {
-	references := make([]string, 0, len(articles))
+	type referenceCandidate struct {
+		name string
+		url  string
+	}
+	candidates := make([]referenceCandidate, 0, len(articles))
 	seenLinks := make(map[string]struct{}, len(articles))
-	seenNames := make(map[string]int, len(articles))
+	seenUnlinkedNames := make(map[string]struct{}, len(articles))
 	for _, article := range articles {
 		name := strings.TrimSpace(article.Source)
 		if name == "" {
@@ -1286,22 +1348,37 @@ func briefingSourceReferences(articles []model.Article) []string {
 		}
 		rawURL := strings.TrimSpace(article.Link)
 		if !safeCitationURL(rawURL) {
-			if seenNames[name] == 0 {
-				references = append(references, markdownLinkLabel(name))
+			if _, ok := seenUnlinkedNames[name]; !ok {
+				candidates = append(candidates, referenceCandidate{name: name})
+				seenUnlinkedNames[name] = struct{}{}
 			}
-			seenNames[name]++
 			continue
 		}
 		if _, ok := seenLinks[rawURL]; ok {
 			continue
 		}
 		seenLinks[rawURL] = struct{}{}
-		seenNames[name]++
-		label := name
-		if seenNames[name] > 1 {
-			label = fmt.Sprintf("%s %d", name, seenNames[name])
+		candidates = append(candidates, referenceCandidate{name: name, url: rawURL})
+	}
+
+	counts := make(map[string]int, len(candidates))
+	for _, candidate := range candidates {
+		counts[candidate.name]++
+	}
+	indexes := make(map[string]int, len(counts))
+	references := make([]string, 0, len(candidates))
+	for _, candidate := range candidates {
+		indexes[candidate.name]++
+		label := candidate.name
+		if counts[candidate.name] > 1 {
+			label = fmt.Sprintf("%s·报道%d", candidate.name, indexes[candidate.name])
 		}
-		references = append(references, fmt.Sprintf("[%s](<%s>)", markdownLinkLabel(label), strings.ReplaceAll(rawURL, ">", "%3E")))
+		label = markdownLinkLabel(label)
+		if candidate.url == "" {
+			references = append(references, label)
+			continue
+		}
+		references = append(references, fmt.Sprintf("[%s](<%s>)", label, strings.ReplaceAll(candidate.url, ">", "%3E")))
 	}
 	return references
 }
