@@ -221,7 +221,7 @@ func buildCardManifest(briefing *model.Briefing, localizedImages map[string]stri
 		manifest.Items = []cardManifestItem{}
 		return manifest
 	}
-	for _, story := range briefing.StructuredSummary.Stories {
+	for _, story := range cardManifestStories(briefing.StructuredSummary) {
 		item := cardManifestItem{
 			ID:       stableManifestItemID(story, briefing.Articles),
 			Category: strings.TrimSpace(story.Category),
@@ -242,6 +242,27 @@ func buildCardManifest(briefing *model.Briefing, localizedImages map[string]stri
 		manifest.Items = append(manifest.Items, item)
 	}
 	return manifest
+}
+
+func cardManifestStories(summary *model.BriefingSummary) []model.BriefingStory {
+	categoryOrder := make([]string, 0, len(summary.OverviewGroups))
+	for _, group := range summary.OverviewGroups {
+		categoryOrder = append(categoryOrder, group.Category)
+	}
+
+	ordered := make([]model.BriefingStory, 0, len(summary.Stories))
+	for _, category := range orderedStoryCategories(summary.Stories, categoryOrder) {
+		for _, story := range summary.Stories {
+			storyCategory := strings.TrimSpace(story.Category)
+			if storyCategory == "" {
+				storyCategory = "未分类"
+			}
+			if storyCategory == category {
+				ordered = append(ordered, story)
+			}
+		}
+	}
+	return ordered
 }
 
 func cardManifestSourceLabel(ids []int, articles []model.Article) string {

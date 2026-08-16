@@ -49,6 +49,38 @@ func TestWriteMarkdownPreservesBodyOrderAndSingleTitle(t *testing.T) {
 	}
 }
 
+func TestBuildCardManifestGroupsStoriesByOverviewCategoryOrder(t *testing.T) {
+	briefing := &model.Briefing{StructuredSummary: &model.BriefingSummary{
+		OverviewGroups: []model.BriefingOverviewGroup{
+			{Category: "AI/科技", Items: []string{"AI 要点"}},
+			{Category: "新闻财经", Items: []string{"财经要点"}},
+		},
+		Stories: []model.BriefingStory{
+			{Category: "新闻财经", Title: "财经一"},
+			{Category: "AI/科技", Title: "AI 一"},
+			{Category: "国际政治", Title: "国际一"},
+			{Category: "AI/科技", Title: "AI 二"},
+			{Category: "新闻财经", Title: "财经二"},
+		},
+	}}
+
+	manifest := buildCardManifest(briefing, nil)
+	got := make([]string, 0, len(manifest.Items))
+	for _, item := range manifest.Items {
+		got = append(got, item.Category+":"+item.Title)
+	}
+	want := []string{
+		"AI/科技:AI 一",
+		"AI/科技:AI 二",
+		"新闻财经:财经一",
+		"新闻财经:财经二",
+		"国际政治:国际一",
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("manifest item order = %#v, want %#v", got, want)
+	}
+}
+
 func TestWriteMarkdownKeepsDefaultHeaderAndOmitsTopHeroImage(t *testing.T) {
 	outputDir := t.TempDir()
 	path, err := WriteMarkdown(&model.Briefing{
