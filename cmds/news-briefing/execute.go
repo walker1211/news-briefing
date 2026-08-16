@@ -1203,6 +1203,7 @@ func (app *app) summarizeBriefingWithFallback(ctx context.Context, articles []mo
 		aiCtx, cancelTotal = context.WithTimeout(ctx, timeout.TotalBudget)
 	}
 	defer cancelTotal()
+	aiCtx = summarizer.WithBriefingCategorySummaryCache(aiCtx)
 
 	var lastErr error
 	for index, attempt := range attempts {

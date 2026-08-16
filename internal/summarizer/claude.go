@@ -3,6 +3,7 @@ package summarizer
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -790,6 +791,72 @@ type categorySummaryResult struct {
 	err     error
 }
 
+type briefingCategorySummaryCacheKey struct{}
+
+type briefingCategorySummaryCache struct {
+	mu      sync.RWMutex
+	entries map[[sha256.Size]byte]model.BriefingSummary
+}
+
+// WithBriefingCategorySummaryCache scopes successful category summaries to one
+// primary/fallback chain. Callers should create a fresh scope for every
+// briefing run so summaries are never reused across scheduled windows.
+func WithBriefingCategorySummaryCache(ctx context.Context) context.Context {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	return context.WithValue(ctx, briefingCategorySummaryCacheKey{}, &briefingCategorySummaryCache{
+		entries: make(map[[sha256.Size]byte]model.BriefingSummary),
+	})
+}
+
+func briefingCategoryCacheFromContext(ctx context.Context) *briefingCategorySummaryCache {
+	if ctx == nil {
+		return nil
+	}
+	cache, _ := ctx.Value(briefingCategorySummaryCacheKey{}).(*briefingCategorySummaryCache)
+	return cache
+}
+
+func (c *briefingCategorySummaryCache) get(prompt string) (model.BriefingSummary, bool) {
+	if c == nil {
+		return model.BriefingSummary{}, false
+	}
+	key := sha256.Sum256([]byte(prompt))
+	c.mu.RLock()
+	summary, ok := c.entries[key]
+	c.mu.RUnlock()
+	if !ok {
+		return model.BriefingSummary{}, false
+	}
+	return cloneBriefingSummary(summary), true
+}
+
+func (c *briefingCategorySummaryCache) put(prompt string, summary model.BriefingSummary) {
+	if c == nil {
+		return
+	}
+	key := sha256.Sum256([]byte(prompt))
+	c.mu.Lock()
+	c.entries[key] = cloneBriefingSummary(summary)
+	c.mu.Unlock()
+}
+
+func cloneBriefingSummary(summary model.BriefingSummary) model.BriefingSummary {
+	cloned := summary
+	cloned.OverviewGroups = append([]model.BriefingOverviewGroup(nil), summary.OverviewGroups...)
+	for index := range cloned.OverviewGroups {
+		cloned.OverviewGroups[index].Items = append([]string(nil), summary.OverviewGroups[index].Items...)
+	}
+	cloned.Stories = append([]model.BriefingStory(nil), summary.Stories...)
+	for index := range cloned.Stories {
+		cloned.Stories[index].SourceArticleIDs = append([]int(nil), summary.Stories[index].SourceArticleIDs...)
+	}
+	cloned.Directions = append([]model.BriefingDirection(nil), summary.Directions...)
+	cloned.XHSTopics = append([]string(nil), summary.XHSTopics...)
+	return cloned
+}
+
 type briefingSynthesis struct {
 	Situation  string                    `json:"situation"`
 	XHSTopics  []string                  `json:"xhs_topics"`
@@ -1014,6 +1081,11 @@ func (r *Runner) summarizeCategoryContext(ctx context.Context, articles []model.
 
 	input := output.GroupedArticleListView(categoryArticles, []string{category}, loc)
 	prompt := categoryBriefingPrompt + "\n\n---\n当前分类：" + category + "\n\n以下是新闻条目：\n\n" + input
+	cache := briefingCategoryCacheFromContext(ctx)
+	if structured, ok := cache.get(prompt); ok {
+		logutil.Printf("AI category summary reused: category=%s", category)
+		return remapBriefingSummarySourceArticleIDs(structured, originalIndexes), nil
+	}
 	raw, err := r.callClaudeContext(ctx, prompt, r.summarizeRuntimeArgs()...)
 	if err != nil {
 		return model.BriefingSummary{}, err
@@ -1027,12 +1099,12 @@ func (r *Runner) summarizeCategoryContext(ctx context.Context, articles []model.
 		return model.BriefingSummary{}, fmt.Errorf("validate category briefing references: %w", err)
 	}
 	structured = validateBriefingSummaryImages(structured, categoryArticles)
-	structured = remapBriefingSummarySourceArticleIDs(structured, originalIndexes)
 	structured.OverviewGroups, err = normalizedCategoryOverview(structured.OverviewGroups, category)
 	if err != nil {
 		return model.BriefingSummary{}, err
 	}
-	return structured, nil
+	cache.put(prompt, structured)
+	return remapBriefingSummarySourceArticleIDs(structured, originalIndexes), nil
 }
 
 func normalizedCategoryOverview(groups []model.BriefingOverviewGroup, category string) ([]model.BriefingOverviewGroup, error) {
