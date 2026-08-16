@@ -24,6 +24,7 @@ type Config struct {
 	Fetch                          FetchConfig        `yaml:"fetch"`
 	Watch                          WatchConfig        `yaml:"watch"`
 	SourceHealth                   SourceHealthConfig `yaml:"source_health"`
+	SourceShadow                   SourceShadowConfig `yaml:"source_shadow"`
 	XAccounts                      XAccountsConfig    `yaml:"x_accounts"`
 	Email                          Email              `yaml:"email"`
 	Schedule                       Schedule           `yaml:"schedule"`
@@ -76,6 +77,8 @@ const (
 	DefaultXRefreshHeartbeatStaleAfter    = 3 * time.Minute
 	DefaultXMaxPostsPerTarget             = 10
 	DefaultSchedulePrefetchWaitTimeout    = 2 * time.Minute
+	DefaultSourceShadowRetention          = 72 * time.Hour
+	DefaultSourceShadowTimeout            = 2 * time.Minute
 	DefaultAIModel                        = "gpt-5.6-terra"
 	DefaultAIEffort                       = "medium"
 	DefaultAISummaryEditorModel           = "gpt-5.6-terra"
@@ -113,11 +116,21 @@ type Source struct {
 	URL                string   `yaml:"url"`
 	Type               string   `yaml:"type"`
 	Category           string   `yaml:"category"`
+	SourceRole         string   `yaml:"source_role"`
 	Keywords           []string `yaml:"keywords"`
 	MaxItems           int      `yaml:"max_items"`
 	PageKind           string   `yaml:"page_kind"`
 	TimeHint           string   `yaml:"time_hint"`
 	RSSHubAccessKeyEnv string   `yaml:"rsshub_access_key_env"`
+}
+
+type SourceShadowConfig struct {
+	Enabled      bool          `yaml:"enabled"`
+	RetentionRaw string        `yaml:"retention"`
+	Retention    time.Duration `yaml:"-"`
+	TimeoutRaw   string        `yaml:"timeout"`
+	Timeout      time.Duration `yaml:"-"`
+	Sources      []Source      `yaml:"sources"`
 }
 
 type FiltersConfig struct {
@@ -624,6 +637,35 @@ func applySourceHealthDefaults(sourceHealth *SourceHealthConfig) error {
 	return nil
 }
 
+func applySourceShadowDefaults(shadow *SourceShadowConfig) error {
+	retentionRaw := strings.TrimSpace(shadow.RetentionRaw)
+	if retentionRaw == "" {
+		shadow.Retention = DefaultSourceShadowRetention
+	} else {
+		retention, err := time.ParseDuration(retentionRaw)
+		if err != nil {
+			return fmt.Errorf("parse source_shadow.retention: %w", err)
+		}
+		shadow.Retention = retention
+	}
+	timeoutRaw := strings.TrimSpace(shadow.TimeoutRaw)
+	if timeoutRaw == "" {
+		shadow.Timeout = DefaultSourceShadowTimeout
+	} else {
+		timeout, err := time.ParseDuration(timeoutRaw)
+		if err != nil {
+			return fmt.Errorf("parse source_shadow.timeout: %w", err)
+		}
+		shadow.Timeout = timeout
+	}
+	for i := range shadow.Sources {
+		if strings.TrimSpace(shadow.Sources[i].SourceRole) == "" {
+			shadow.Sources[i].SourceRole = defaultSourceRole(shadow.Sources[i].Type)
+		}
+	}
+	return nil
+}
+
 func applyXAccountsDefaults(cfg *XAccountsConfig) error {
 	if strings.TrimSpace(cfg.LookbackRaw) == "" {
 		cfg.LookbackRaw = "24h"
@@ -805,6 +847,20 @@ func (cfg *Config) Validate() error {
 	}
 	for i, source := range cfg.Sources {
 		if err := validateSource(i, source); err != nil {
+			return err
+		}
+	}
+	if cfg.SourceShadow.Retention <= 0 {
+		return fmt.Errorf("validate source_shadow.retention: must be greater than 0")
+	}
+	if cfg.SourceShadow.Timeout <= 0 {
+		return fmt.Errorf("validate source_shadow.timeout: must be greater than 0")
+	}
+	if cfg.SourceShadow.Enabled && len(cfg.SourceShadow.Sources) == 0 {
+		return fmt.Errorf("validate source_shadow.sources: must not be empty when enabled")
+	}
+	for i, source := range cfg.SourceShadow.Sources {
+		if err := validateSourceAt(fmt.Sprintf("source_shadow.sources[%d]", i), source); err != nil {
 			return err
 		}
 	}
@@ -1003,12 +1059,18 @@ func validateAITimeout(timeout AITimeoutCfg) error {
 }
 
 func validateSource(index int, source Source) error {
-	prefix := fmt.Sprintf("sources[%d]", index)
+	return validateSourceAt(fmt.Sprintf("sources[%d]", index), source)
+}
+
+func validateSourceAt(prefix string, source Source) error {
 	if strings.TrimSpace(source.Name) == "" {
 		return fmt.Errorf("validate %s.name: must not be empty", prefix)
 	}
 	if strings.TrimSpace(source.Category) == "" {
 		return fmt.Errorf("validate %s.category: must not be empty", prefix)
+	}
+	if strings.TrimSpace(source.SourceRole) != "" && !model.ValidSourceRole(source.SourceRole) {
+		return fmt.Errorf("validate %s.source_role: unsupported source role %q", prefix, source.SourceRole)
 	}
 	kind := strings.TrimSpace(source.Type)
 	if kind == "" {
@@ -1053,6 +1115,17 @@ func validateSource(index int, source Source) error {
 		return fmt.Errorf("validate %s.url: authenticated RSSHub sources must not contain credentials, a query, or a fragment", prefix)
 	}
 	return nil
+}
+
+func defaultSourceRole(sourceType string) string {
+	switch strings.TrimSpace(sourceType) {
+	case SourceTypeDocsPage, SourceTypeRepoPage:
+		return model.SourceRolePrimary
+	case SourceTypeHackerNews, SourceTypeReddit:
+		return model.SourceRoleRadar
+	default:
+		return model.SourceRoleOriginal
+	}
 }
 
 func validateWatchSite(index int, site WatchSite) error {
@@ -1241,6 +1314,11 @@ func Load(configPath string) (*Config, error) {
 	if cfg.Output.Mode == "" {
 		cfg.Output.Mode = model.OutputModeTranslatedOnly
 	}
+	for i := range cfg.Sources {
+		if strings.TrimSpace(cfg.Sources[i].SourceRole) == "" {
+			cfg.Sources[i].SourceRole = defaultSourceRole(cfg.Sources[i].Type)
+		}
+	}
 	if cfg.AI.Command == "" {
 		cfg.AI.Command = "codex"
 	}
@@ -1303,6 +1381,9 @@ func Load(configPath string) (*Config, error) {
 		return nil, err
 	}
 	if err := applySourceHealthDefaults(&cfg.SourceHealth); err != nil {
+		return nil, err
+	}
+	if err := applySourceShadowDefaults(&cfg.SourceShadow); err != nil {
 		return nil, err
 	}
 	if err := applyXAccountsDefaults(&cfg.XAccounts); err != nil {

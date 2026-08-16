@@ -29,8 +29,14 @@ func writeArticleListItem(sb *strings.Builder, number int, article model.Article
 	} else {
 		sb.WriteString(fmt.Sprintf("%d. %s\n", number, article.Title))
 	}
-	sb.WriteString(fmt.Sprintf("   %s\n   Source: %s | %s\n   Link: %s\n",
-		article.Summary, article.Source, formatArticlePublishedAt(article.Published, loc), article.Link))
+	sourceRole := strings.TrimSpace(article.SourceRole)
+	if sourceRole == "" {
+		sb.WriteString(fmt.Sprintf("   %s\n   Source: %s | %s\n   Link: %s\n",
+			article.Summary, article.Source, formatArticlePublishedAt(article.Published, loc), article.Link))
+	} else {
+		sb.WriteString(fmt.Sprintf("   %s\n   Source: %s | Role: %s | %s\n   Link: %s\n",
+			article.Summary, article.Source, sourceRole, formatArticlePublishedAt(article.Published, loc), article.Link))
+	}
 	if strings.TrimSpace(article.ImageURL) != "" {
 		sb.WriteString("   Image: " + strings.TrimSpace(article.ImageURL) + "\n")
 	}

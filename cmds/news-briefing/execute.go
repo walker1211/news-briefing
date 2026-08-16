@@ -708,6 +708,7 @@ func (app *app) runScheduledBriefingContext(ctx context.Context, window schedule
 
 func (app *app) runScheduledBriefingContextWithReporter(ctx context.Context, window scheduler.Window, sendEmail bool, reporter *scheduledRunReporter) error {
 	logutil.Println("Fetching news...")
+	app.startScheduledSourceShadow(window)
 	loc := app.displayLocation()
 	date := window.To.In(loc).Format("06.01.02")
 	fetchStarted := time.Now()
@@ -1722,12 +1723,13 @@ func annotateWatchDeepArticle(item model.WatchSeenArticle) model.Article {
 		summary = "[Watch][" + item.WatchCategory + "] " + summary
 	}
 	return model.Article{
-		Title:     item.Title,
-		Link:      item.URL,
-		Summary:   summary,
-		Source:    item.Source + " Watch",
-		Category:  item.BriefingCategory,
-		Published: item.DetectedAt,
+		Title:      item.Title,
+		Link:       item.URL,
+		Summary:    summary,
+		Source:     item.Source + " Watch",
+		SourceRole: model.SourceRolePrimary,
+		Category:   item.BriefingCategory,
+		Published:  item.DetectedAt,
 	}
 }
 

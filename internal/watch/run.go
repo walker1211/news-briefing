@@ -525,11 +525,12 @@ func watchEventToArticle(site config.WatchSite, event model.WatchEvent) model.Ar
 		summary = fmt.Sprintf("%s 出现 %s 事件", event.ArticleTitle, event.EventType)
 	}
 	return model.Article{
-		Title:     title,
-		Link:      event.ArticleURL,
-		Summary:   summary,
-		Source:    site.Name + " Watch",
-		Category:  site.BriefingCategory,
-		Published: event.DetectedAt,
+		Title:      title,
+		Link:       event.ArticleURL,
+		Summary:    summary,
+		Source:     site.Name + " Watch",
+		SourceRole: model.SourceRolePrimary,
+		Category:   site.BriefingCategory,
+		Published:  event.DetectedAt,
 	}
 }

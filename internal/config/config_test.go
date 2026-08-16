@@ -83,6 +83,56 @@ proxy: {}
 	if !reflect.DeepEqual(cfg.AI.Retry.Delays, wantRetryDelays) {
 		t.Fatalf("AI.Retry.Delays = %v, want %v", cfg.AI.Retry.Delays, wantRetryDelays)
 	}
+	if cfg.SourceShadow.Retention != DefaultSourceShadowRetention || cfg.SourceShadow.Timeout != DefaultSourceShadowTimeout {
+		t.Fatalf("SourceShadow defaults = %#v", cfg.SourceShadow)
+	}
+}
+
+func TestLoadAppliesSourceRolesAndShadowConfig(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	content := `sources:
+  - name: Official Docs
+    url: https://example.com/docs
+    type: docs_page
+    category: AI/科技
+  - name: Community
+    url: https://example.com/community
+    type: reddit
+    category: AI/科技
+source_shadow:
+  enabled: true
+  retention: 48h
+  timeout: 45s
+  sources:
+    - name: Shadow Media
+      url: https://example.com/feed.xml
+      type: rss
+      category: AI/科技
+      source_role: original
+email:
+  smtp_host: smtp.example.com
+  smtp_port: 465
+  from: from@example.com
+  to: to@example.com
+schedule: []
+output: {}
+proxy: {}
+`
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Sources[0].SourceRole != model.SourceRolePrimary || cfg.Sources[1].SourceRole != model.SourceRoleRadar {
+		t.Fatalf("source roles = %q, %q", cfg.Sources[0].SourceRole, cfg.Sources[1].SourceRole)
+	}
+	if !cfg.SourceShadow.Enabled || cfg.SourceShadow.Retention != 48*time.Hour || cfg.SourceShadow.Timeout != 45*time.Second {
+		t.Fatalf("source shadow = %#v", cfg.SourceShadow)
+	}
 }
 
 func TestLoadParsesOutputMaxArticles(t *testing.T) {

@@ -145,6 +145,7 @@ func TestFetchWindowOrdinaryDetailedExcludesXVisibleInputs(t *testing.T) {
 	if err != nil {
 		t.Fatalf("fetchWindowOrdinaryDetailedContext() error = %v", err)
 	}
+	ordinary.SourceRole = model.SourceRoleOriginal
 	if !reflect.DeepEqual(result.Articles, []model.Article{ordinary}) {
 		t.Fatalf("Articles = %#v, want only ordinary source", result.Articles)
 	}

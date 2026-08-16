@@ -32,6 +32,8 @@ type BriefingOverviewGroup struct {
 
 type BriefingStory struct {
 	Category         string `json:"category"`
+	ContentType      string `json:"content_type,omitempty"`
+	EvidenceLevel    string `json:"evidence_level,omitempty"`
 	Title            string `json:"title"`
 	ImageURL         string `json:"image_url,omitempty"`
 	Summary          string `json:"summary"`

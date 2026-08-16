@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -35,6 +36,7 @@ JSON 顶层结构必须是：
   "stories": [
     {
       "category": "分类名",
+	  "content_type": "news|tool|case|insight",
       "title": "中文标题",
       "image_url": "输入 Image 字段原值或空字符串",
       "summary": "2-4句话摘要",
@@ -58,7 +60,8 @@ overview_groups 是今日速览：按分类分组，每个分类只列该分类�
 stories 按下面新闻条目里出现的分类顺序输出；每个分类内部按重要程度排序，相关联的新闻合并为同一 story。
 summary 用2-4句话说明关键事实、背景、数字、参与方和最新进展，不要只做一句话标题复述；如果多条相关新闻合并为同一 story，要交代各条新闻之间的关系。
 impact 用2-3句话说明为什么重要、影响哪些人或机构、后续观察变量，避免空泛地写“值得关注后续进展”。
-source_article_ids 必须使用输入新闻条目的 1-based 编号；合并多条新闻时列出所有来源编号。
+content_type 必须按主体内容选择：news=新闻事件，tool=可直接使用的工具/产品，case=具体应用案例，insight=趋势、方法或观点分析。不要为了配额改变类型。
+source_article_ids 必须使用输入新闻条目的 1-based 编号；同一事件有官方/一手来源和独立媒体来源时应合并并列出所有来源编号。优先使用 primary 与 original 来源交叉核验；radar/repost 只用于发现线索或补充讨论，不能取代可获得的一手或原创来源。
 每个 story 只能引用与自身 category 完全相同的新闻条目。不要输出 source_line；来源名称和时间会由程序根据 source_article_ids 确定性生成。
 image_url 只能使用输入新闻条目中的 Image 字段原值；没有可用图片时使用空字符串。不要编造、改写或重新托管图片 URL。不要使用 tracking pixel、RSS 统计图、透明占位图或与 story 主体事件无直接关系的配图。多条新闻合并为同一 story 时，如果无法明确判断哪张图直接对应主标题事件，就把 image_url 设为空字符串。AI/科技 分类下的重要 story 如果 source_article_ids 对应新闻有 Image 字段，应优先使用其中最相关且确定对应的一张。
 xhs_topics 输出 3 个适合整篇简报的小红书话题，最多 4 个；每项不要带 #、空格或特殊符号，优先使用平台上容易识别的通用话题，不要直接复制冗长标题。
@@ -80,6 +83,7 @@ const categoryBriefingPrompt = `你是一个国际新闻编辑。请只整理输
   "overview_groups": [{"category": "输入分类名", "items": ["emoji 新闻要点"]}],
   "stories": [{
     "category": "输入分类名",
+	"content_type": "news|tool|case|insight",
     "title": "中文标题",
     "image_url": "输入 Image 字段原值或空字符串",
     "summary": "2-4句话摘要",
@@ -89,7 +93,7 @@ const categoryBriefingPrompt = `你是一个国际新闻编辑。请只整理输
 }
 
 同一事件的多条新闻应合并；stories 按重要程度排序。summary 要包含关键事实、背景、数字、参与方和最新进展，impact 要具体说明影响对象与后续变量。
-source_article_ids 必须使用输入条目的 1-based 编号，且只能引用当前分类。image_url 只能原样使用对应来源条目的 Image 字段；没有明确相关的可用图片时输出空字符串。overview_groups 必须且只能包含当前分类。`
+content_type 必须是 news、tool、case、insight 之一，不使用固定类型配额。source_article_ids 必须使用输入条目的 1-based 编号，且只能引用当前分类；同一事件有 primary 与 original 来源时应合并引用，radar/repost 不能取代可获得的一手或原创来源。image_url 只能原样使用对应来源条目的 Image 字段；没有明确相关的可用图片时输出空字符串。overview_groups 必须且只能包含当前分类。`
 
 const briefingSynthesisPrompt = `你是一个国际新闻主编。下面是已经按分类完成的结构化新闻摘要。
 
@@ -127,6 +131,7 @@ const briefingEditorPrompt = `你是一个国际新闻主编。下面是由分�
 
 selected_story_ids 只能引用输入中存在的 story_id，每个 ID 只能出现一次，并按全局重要性从高到低排列。不要重写候选 story 的标题、摘要、影响、图片或来源，程序会按 ID 复用分类编辑的原文。
 不要使用固定分类配额：分类数量应由当天新闻的重要性决定。优先保留影响范围大、时效强、事实或数字充分、有明确后续变量的内容；删除同一事件的跨分类重复、弱相关拼接、纯宣传、低信息量和仅有情绪无事实支撑的候选。
+内容类型也不使用固定配额：在质量相近时兼顾 news、tool、case、insight 的阅读价值；当天某类确实没有高质量内容时允许为零，重大事件密集时允许 news 自然增多。证据等级优先 corroborated，其次 supported；single_source 的重要官方发布可以保留，但不要让仅有 radar/repost 线索的内容挤掉证据更扎实的候选。
 最终数量允许在 %d 到 %d 条之间动态变化，以约 %d 条为目标：高质量候选不足时取下限附近，重大新闻密集时可接近上限。
 overview_groups 必须覆盖每个仍有入选 story 的分类且不得包含其他分类；每个分类用 2-5 条简洁要点概括入选内容，不要提及已删除候选。
 situation 必须综合不同分类之间的共同趋势，不要逐分类机械复述。xhs_topics 输出 3 个、最多 4 个适合整篇简报的通用话题，不带 #、空格或特殊符号。directions 输出 2-4 个高质量方向；相近方向应合并。deep_command 的关键词优先使用 2-6 个词的英文实体或英文新闻短语。`
@@ -1224,24 +1229,21 @@ func validateAndNormalizeBriefingSummaryReferences(summary model.BriefingSummary
 			sources = append(sources, article)
 		}
 		story.SourceArticleIDs = normalizedIDs
+		story.ContentType = strings.TrimSpace(story.ContentType)
+		if !model.ValidContentType(story.ContentType) {
+			story.ContentType = model.ContentTypeNews
+		}
+		story.EvidenceLevel = briefingEvidenceLevel(sources)
 		story.SourceLine = deterministicBriefingSourceLine(sources, loc)
 	}
 	return summary, nil
 }
 
 func deterministicBriefingSourceLine(articles []model.Article, loc *time.Location) string {
-	sourceNames := make([]string, 0, len(articles))
-	seenSources := make(map[string]struct{}, len(articles))
+	references := briefingSourceReferences(articles)
 	var earliest time.Time
 	var latest time.Time
 	for _, article := range articles {
-		source := strings.TrimSpace(article.Source)
-		if source != "" {
-			if _, ok := seenSources[source]; !ok {
-				seenSources[source] = struct{}{}
-				sourceNames = append(sourceNames, source)
-			}
-		}
 		if article.Published.IsZero() {
 			continue
 		}
@@ -1253,10 +1255,10 @@ func deterministicBriefingSourceLine(articles []model.Article, loc *time.Locatio
 			latest = published
 		}
 	}
-	if len(sourceNames) == 0 {
-		sourceNames = append(sourceNames, "未知来源")
+	if len(references) == 0 {
+		references = append(references, "未知来源")
 	}
-	line := "来源: " + strings.Join(sourceNames, "、")
+	line := "来源: " + strings.Join(references, "、") + " | 核验: " + evidenceLevelLabel(briefingEvidenceLevel(articles))
 	if earliest.IsZero() {
 		return line
 	}
@@ -1264,6 +1266,98 @@ func deterministicBriefingSourceLine(articles []model.Article, loc *time.Locatio
 		return line + " | " + earliest.Format("2006-01-02 15:04")
 	}
 	return line + " | " + earliest.Format("2006-01-02 15:04") + " 至 " + latest.Format("2006-01-02 15:04")
+}
+
+func briefingSourceReferences(articles []model.Article) []string {
+	references := make([]string, 0, len(articles))
+	seenLinks := make(map[string]struct{}, len(articles))
+	seenNames := make(map[string]int, len(articles))
+	for _, article := range articles {
+		name := strings.TrimSpace(article.Source)
+		if name == "" {
+			name = "未知来源"
+		}
+		rawURL := strings.TrimSpace(article.Link)
+		if !safeCitationURL(rawURL) {
+			if seenNames[name] == 0 {
+				references = append(references, markdownLinkLabel(name))
+			}
+			seenNames[name]++
+			continue
+		}
+		if _, ok := seenLinks[rawURL]; ok {
+			continue
+		}
+		seenLinks[rawURL] = struct{}{}
+		seenNames[name]++
+		label := name
+		if seenNames[name] > 1 {
+			label = fmt.Sprintf("%s %d", name, seenNames[name])
+		}
+		references = append(references, fmt.Sprintf("[%s](<%s>)", markdownLinkLabel(label), strings.ReplaceAll(rawURL, ">", "%3E")))
+	}
+	return references
+}
+
+func safeCitationURL(raw string) bool {
+	parsed, err := url.Parse(raw)
+	if err != nil || parsed.User != nil || parsed.Host == "" {
+		return false
+	}
+	return parsed.Scheme == "http" || parsed.Scheme == "https"
+}
+
+func markdownLinkLabel(value string) string {
+	value = strings.ReplaceAll(value, "\\", "")
+	value = strings.ReplaceAll(value, "[", "")
+	value = strings.ReplaceAll(value, "]", "")
+	return strings.TrimSpace(value)
+}
+
+func briefingEvidenceLevel(articles []model.Article) string {
+	rolesBySource := make(map[string]string, len(articles))
+	for _, article := range articles {
+		name := strings.TrimSpace(article.Source)
+		if name == "" {
+			name = strings.TrimSpace(article.Link)
+		}
+		if name == "" {
+			continue
+		}
+		role := strings.TrimSpace(article.SourceRole)
+		if !model.ValidSourceRole(role) {
+			role = model.SourceRoleOriginal
+		}
+		rolesBySource[name] = role
+	}
+	primaryCount := 0
+	originalCount := 0
+	for _, role := range rolesBySource {
+		switch role {
+		case model.SourceRolePrimary:
+			primaryCount++
+		case model.SourceRoleOriginal:
+			originalCount++
+		}
+	}
+	if (primaryCount > 0 && originalCount > 0) || originalCount >= 2 {
+		return model.EvidenceCorroborated
+	}
+	if len(rolesBySource) >= 2 || primaryCount > 0 {
+		return model.EvidenceSupported
+	}
+	return model.EvidenceSingleSource
+}
+
+func evidenceLevelLabel(level string) string {
+	switch level {
+	case model.EvidenceCorroborated:
+		return "交叉核验"
+	case model.EvidenceSupported:
+		return "有一手依据"
+	default:
+		return "单一来源"
+	}
 }
 
 func parseBriefingSummaryJSON(raw string) (model.BriefingSummary, error) {
