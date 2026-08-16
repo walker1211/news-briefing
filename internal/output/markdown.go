@@ -174,6 +174,7 @@ type cardManifestDoc struct {
 type cardManifestItem struct {
 	ID          string             `json:"id"`
 	Category    string             `json:"category"`
+	ContentType string             `json:"content_type,omitempty"`
 	Title       string             `json:"title"`
 	Summary     string             `json:"summary"`
 	Impact      string             `json:"impact"`
@@ -223,11 +224,12 @@ func buildCardManifest(briefing *model.Briefing, localizedImages map[string]stri
 	}
 	for _, story := range briefing.StructuredSummary.Stories {
 		item := cardManifestItem{
-			ID:       stableManifestItemID(story, briefing.Articles),
-			Category: strings.TrimSpace(story.Category),
-			Title:    strings.TrimSpace(story.Title),
-			Summary:  strings.TrimSpace(story.Summary),
-			Impact:   strings.TrimSpace(story.Impact),
+			ID:          stableManifestItemID(story, briefing.Articles),
+			Category:    strings.TrimSpace(story.Category),
+			ContentType: strings.TrimSpace(story.ContentType),
+			Title:       strings.TrimSpace(story.Title),
+			Summary:     strings.TrimSpace(story.Summary),
+			Impact:      strings.TrimSpace(story.Impact),
 		}
 		if source := firstSourceArticle(story.SourceArticleIDs, briefing.Articles); source != nil {
 			item.Source = cardManifestSourceLabel(story.SourceArticleIDs, briefing.Articles)

@@ -28,6 +28,7 @@ import (
 
 var briefingMarkdownPattern = regexp.MustCompile(`^(\d{2}\.\d{2}\.\d{2})-(凌晨|早间|午间|晚间)-(\d{4})\.md$`)
 var htmlURLPattern = regexp.MustCompile(`https?://[A-Za-z0-9._~:/?#\[\]@!$&'()*+,;=%-]+`)
+var htmlAngleMarkdownLinkPattern = regexp.MustCompile(`\[([^\]]+)\]\(<(https?://[^>]+)>\)`)
 
 const maxEmailInlineImageDimension = 1600
 const maxEmailInlineImageBytes = 1 * 1024 * 1024
@@ -912,7 +913,7 @@ func (r *newsletterHTMLRenderer) renderSourceMeta(line string) bool {
 
 func (r *newsletterHTMLRenderer) writeSourceMeta(source string) {
 	r.out.WriteString(`<p class="meta">`)
-	r.out.WriteString(html.EscapeString(strings.ReplaceAll(cleanMarkdownLine(source), " | ", " · ")))
+	r.out.WriteString(renderInlineMarkdownHTML(strings.ReplaceAll(cleanMarkdownLine(source), " | ", " · "), "链接"))
 	r.out.WriteString("</p>")
 }
 
@@ -1070,6 +1071,30 @@ func renderInlineMarkdownHTML(body string, label string) string {
 }
 
 func linkifyHTML(body string, label string) string {
+	var out strings.Builder
+	matches := htmlAngleMarkdownLinkPattern.FindAllStringSubmatchIndex(body, -1)
+	last := 0
+	for _, match := range matches {
+		out.WriteString(linkifyBareURLsHTML(body[last:match[0]], label))
+		linkLabel := body[match[2]:match[3]]
+		rawURL := body[match[4]:match[5]]
+		parsed, err := url.Parse(rawURL)
+		if err != nil || parsed.User != nil || parsed.Host == "" || (parsed.Scheme != "http" && parsed.Scheme != "https") {
+			out.WriteString(html.EscapeString(body[match[0]:match[1]]))
+		} else {
+			out.WriteString(`<a href="`)
+			out.WriteString(html.EscapeString(rawURL))
+			out.WriteString(`">`)
+			out.WriteString(html.EscapeString(linkLabel))
+			out.WriteString(`</a>`)
+		}
+		last = match[1]
+	}
+	out.WriteString(linkifyBareURLsHTML(body[last:], label))
+	return out.String()
+}
+
+func linkifyBareURLsHTML(body string, label string) string {
 	var out strings.Builder
 	matches := htmlURLPattern.FindAllStringIndex(body, -1)
 	last := 0

@@ -676,6 +676,14 @@ func filterWindowFetchResults(ctx context.Context, cfg *config.Config, from, to,
 			windowFrom = xFrom
 		}
 		for _, candidate := range result.Candidates {
+			candidate.Article.SourceRole = strings.TrimSpace(result.Source.SourceRole)
+			if candidate.Article.SourceRole == "" {
+				if result.Source.Name == xVisibleSourceName {
+					candidate.Article.SourceRole = model.SourceRoleRadar
+				} else {
+					candidate.Article.SourceRole = model.SourceRoleOriginal
+				}
+			}
 			if !articleWithinWindow(candidate.Article, windowFrom, to) {
 				continue
 			}

@@ -216,6 +216,28 @@ func TestBuildHTMLBodyRendersBriefingMarkdownHeadings(t *testing.T) {
 	}
 }
 
+func TestBuildHTMLBodyRendersNamedSourceCitationsAsLinks(t *testing.T) {
+	body := strings.Join([]string{
+		"## AI/科技",
+		"### 一条新闻",
+		"> 来源: [Official](<https://example.com/official>)、[Media](<https://example.com/report>) | 核验: 交叉核验 | 2026-08-16 08:00",
+	}, "\n")
+
+	got := buildHTMLBody(body)
+	for _, want := range []string{
+		`<a href="https://example.com/official">Official</a>`,
+		`<a href="https://example.com/report">Media</a>`,
+		`核验: 交叉核验`,
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("buildHTMLBody() = %q, want substring %q", got, want)
+		}
+	}
+	if strings.Contains(got, "[Official]") {
+		t.Fatalf("buildHTMLBody() leaked citation markdown: %q", got)
+	}
+}
+
 func TestBuildHTMLBodyRendersGroupedOverviewCategoryHeadings(t *testing.T) {
 	body := strings.Join([]string{
 		"# 国际资讯简报 26.05.26 晚间 18:00",

@@ -112,6 +112,7 @@ sources:
     url: https://example.com/ai.rss
     type: rss
     category: AI/科技
+    source_role: original
   - name: Example Open Source Feed
     url: https://example.com/open-source.rss
     type: rss
@@ -134,9 +135,30 @@ sources:
 说明：
 
 - `category` 可以自定义，不限于内置枚举
+- `source_role` 可选 `primary`（官方/一手）、`original`（原创媒体）、`radar`（线索发现）和 `repost`（转载）；未配置时会按来源类型兼容推断
 - 分组展示顺序按 `sources` 中首次出现顺序决定
 - 如果运行时出现了配置里没有的分类，会追加到已配置分类之后
 - 远程 RSSHub 必须使用 HTTPS；设置 `rsshub_access_key_env` 后，主密钥只放在 `.env`，请求仅携带按路由生成的访问码
+
+简报优先把同一事件的一手来源与原创媒体合并核验，并由程序用真实文章 URL 生成邮件中的可点击引用。XHS 卡片只保留紧凑来源名，不渲染长 URL。
+
+新来源可以先用 shadow 模式观察，不进入摘要、邮件、XHS、已读状态或来源健康告警：
+
+```yaml
+source_shadow:
+  enabled: true
+  retention: 72h
+  timeout: 2m
+  sources:
+    - name: Example Shadow Feed
+      url: https://example.com/shadow.rss
+      type: rss
+      category: AI/科技
+      source_role: original
+      max_items: 30
+```
+
+每个正式调度窗口的观察结果写入 `<output.dir>/state/source-shadow`，超过 `retention` 自动清理。建议连续观察 3 天后再人工决定是否把来源移入正式 `sources`。
 
 程序默认只读取 `configs/config.yaml`。
 

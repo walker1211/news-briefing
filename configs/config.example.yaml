@@ -3,6 +3,7 @@ sources:
     url: https://techcrunch.com/category/artificial-intelligence/feed/
     type: rss
     category: AI/科技
+    source_role: original
   # - name: The Verge
   #   url: https://www.theverge.com/rss/index.xml
   #   type: rss
@@ -15,28 +16,34 @@ sources:
     url: https://hacker-news.firebaseio.com/v0
     type: hackernews
     category: AI/科技
+    source_role: radar
   - name: OpenAI News
     url: https://openai.com/news/rss.xml
     type: rss
     category: AI/科技
+    source_role: primary
     max_items: 50
   - name: Google Blog AI
     url: https://blog.google/innovation-and-ai/technology/ai/rss/
     type: rss
     category: AI/科技
+    source_role: primary
   - name: Hugging Face Blog
     url: https://huggingface.co/blog/feed.xml
     type: rss
     category: AI/科技
+    source_role: primary
     max_items: 50
   - name: GitHub Blog
     url: https://github.blog/feed/
     type: rss
     category: AI/科技
+    source_role: primary
   - name: GitHub Changelog
     url: https://github.blog/changelog/feed/
     type: rss
     category: AI/科技
+    source_role: primary
   - name: Microsoft Dev Blog
     url: https://devblogs.microsoft.com/feed/
     type: rss
@@ -76,10 +83,12 @@ sources:
     url: https://www.reddit.com/r/singularity/.rss
     type: rss
     category: AI/科技
+    source_role: radar
   - name: Reddit WorldNews
     url: https://www.reddit.com/r/worldnews/.rss
     type: rss
     category: 国际政治
+    source_role: radar
   - name: WSJ World
     url: https://feeds.a.dj.com/rss/RSSWorldNews.xml
     type: rss
@@ -88,14 +97,31 @@ sources:
     url: https://news.un.org/feed/subscribe/en/news/all/rss.xml
     type: rss
     category: 国际政治
+    source_role: primary
   - name: EU Press Corner
     url: https://ec.europa.eu/commission/presscorner/api/rss?language=en
     type: rss
     category: 国际政治
+    source_role: primary
   - name: The Diplomat
     url: https://thediplomat.com/feed/
     type: rss
     category: 国际政治
+
+# Shadow sources are fetched only during scheduled windows and written to
+# <output.dir>/state/source-shadow. They never enter AI summaries, email,
+# XHS manifests, source-health state, or the seen store.
+source_shadow:
+  enabled: false
+  retention: 72h
+  timeout: 2m
+  sources:
+    - name: The Verge (shadow)
+      url: https://www.theverge.com/rss/index.xml
+      type: rss
+      category: AI/科技
+      source_role: original
+      max_items: 30
 
 x_accounts:
   enabled: false

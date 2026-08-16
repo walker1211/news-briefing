@@ -145,6 +145,7 @@ sources:
     url: https://example.com/ai.rss
     type: rss
     category: AI/科技
+    source_role: original
   - name: Example Open Source Feed
     url: https://example.com/open-source.rss
     type: rss
@@ -167,9 +168,30 @@ sources:
 Notes:
 
 - `category` can be any string
+- `source_role` accepts `primary`, `original`, `radar`, or `repost`; omitted values are inferred compatibly from the source type
 - grouped output follows the first-appearance order of `sources`
 - if a runtime category is not present in config, it is appended after configured categories
 - remote RSSHub sources must use HTTPS; with `rsshub_access_key_env`, the master key stays in `.env` and requests carry only a route-derived access code
+
+Stories prefer first-party plus original-media corroboration. Email/Markdown citations are deterministic clickable links derived from the input articles, while XHS card manifests keep compact source names and omit long citation lists.
+
+New feeds can be observed without entering summaries, email, XHS, seen state, or source-health alerts:
+
+```yaml
+source_shadow:
+  enabled: true
+  retention: 72h
+  timeout: 2m
+  sources:
+    - name: Example Shadow Feed
+      url: https://example.com/shadow.rss
+      type: rss
+      category: AI/科技
+      source_role: original
+      max_items: 30
+```
+
+Each scheduled window writes a report under `<output.dir>/state/source-shadow`; reports older than `retention` are pruned. Review three days of reports before promoting a feed into `sources`.
 
 The program reads only `configs/config.yaml` by default.
 
