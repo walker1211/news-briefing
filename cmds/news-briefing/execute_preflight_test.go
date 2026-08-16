@@ -80,7 +80,7 @@ func TestExecuteResendMDPrintsSuccessMessage(t *testing.T) {
 		t.Fatalf("execute() error = %v", err)
 	}
 	joined := strings.Join(printed, "\n")
-	if !strings.Contains(joined, "Email resent to to@example.com") {
+	if !strings.Contains(joined, "Email resent to configured recipient(s)") {
 		t.Fatalf("printed = %q", joined)
 	}
 }

@@ -22,6 +22,7 @@ type regenCommand struct {
 	sendEmail             bool
 	raw                   bool
 	noPublish             bool
+	emailRecipientMatch   string
 	xVisibleHistoryDays   int
 	xVisibleHistoryDir    string
 	maxArticlesByCategory map[string]int
@@ -139,7 +140,11 @@ func parseRegenCommand(args []string) (command, error) {
 		}
 		maxArticlesByCategory = parsed
 	}
-	return regenCommand{fromRaw: fromRaw, toRaw: toRaw, period: period, ignoreSeen: hasFlagIn(args, "--ignore-seen"), sendEmail: hasFlagIn(args, "--send-email"), raw: hasFlagIn(args, "--raw"), noPublish: hasFlagIn(args, "--no-publish"), xVisibleHistoryDays: historyDays, xVisibleHistoryDir: historyDir, maxArticlesByCategory: maxArticlesByCategory}, nil
+	emailRecipientMatch, _ := readStringFlag(args, "--email-recipient-match")
+	if emailRecipientMatch != "" && !hasFlagIn(args, "--send-email") {
+		return nil, fmt.Errorf("--email-recipient-match requires --send-email")
+	}
+	return regenCommand{fromRaw: fromRaw, toRaw: toRaw, period: period, ignoreSeen: hasFlagIn(args, "--ignore-seen"), sendEmail: hasFlagIn(args, "--send-email"), raw: hasFlagIn(args, "--raw"), noPublish: hasFlagIn(args, "--no-publish"), emailRecipientMatch: emailRecipientMatch, xVisibleHistoryDays: historyDays, xVisibleHistoryDir: historyDir, maxArticlesByCategory: maxArticlesByCategory}, nil
 }
 
 func parseFetchCommand(args []string) (command, error) {
@@ -366,7 +371,7 @@ func commandValidationRules(cmd string) (map[string]struct{}, map[string]struct{
 	case "resend-md":
 		return nil, map[string]struct{}{"--file": {}}, false
 	case "regen":
-		return map[string]struct{}{"--ignore-seen": {}, "--send-email": {}, "--raw": {}, "--no-publish": {}}, map[string]struct{}{"--from": {}, "--to": {}, "--period": {}, "--x-visible-history-days": {}, "--x-visible-history-dir": {}, "--max-articles": {}}, false
+		return map[string]struct{}{"--ignore-seen": {}, "--send-email": {}, "--raw": {}, "--no-publish": {}}, map[string]struct{}{"--from": {}, "--to": {}, "--period": {}, "--email-recipient-match": {}, "--x-visible-history-days": {}, "--x-visible-history-dir": {}, "--max-articles": {}}, false
 	default:
 		return nil, nil, false
 	}
