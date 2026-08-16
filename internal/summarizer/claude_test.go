@@ -51,6 +51,19 @@ func TestBriefingPromptRequiresOverviewEmojisAndDetailedStoryFields(t *testing.T
 	}
 }
 
+func TestBriefingPromptsKeepCategoryAndContentTypeDistinct(t *testing.T) {
+	for name, prompt := range map[string]string{
+		"full":     briefingPrompt,
+		"category": categoryBriefingPrompt,
+	} {
+		for _, want := range []string{"只能写入 content_type", "绝不能写入 category"} {
+			if !strings.Contains(prompt, want) {
+				t.Fatalf("%s prompt missing %q", name, want)
+			}
+		}
+	}
+}
+
 func TestBriefingPromptRequestsReusableXHSTopics(t *testing.T) {
 	for _, want := range []string{
 		`"xhs_topics": ["话题1", "话题2", "话题3"]`,
@@ -286,6 +299,37 @@ func TestValidateAndNormalizeBriefingSummaryReferencesBuildsClickableCitationsAn
 	}
 }
 
+func TestNormalizeCategoryBriefingFieldsRepairsMisplacedContentType(t *testing.T) {
+	summary := model.BriefingSummary{
+		OverviewGroups: []model.BriefingOverviewGroup{{Category: model.ContentTypeNews, Items: []string{"item"}}},
+		Stories: []model.BriefingStory{{
+			Category:         model.ContentTypeNews,
+			ContentType:      "",
+			SourceArticleIDs: []int{1},
+		}},
+	}
+
+	normalizeCategoryBriefingFields(&summary, "国际政治")
+	if got := summary.Stories[0].Category; got != "国际政治" {
+		t.Fatalf("story category = %q", got)
+	}
+	if got := summary.Stories[0].ContentType; got != model.ContentTypeNews {
+		t.Fatalf("story content type = %q", got)
+	}
+	if got := summary.OverviewGroups[0].Category; got != "国际政治" {
+		t.Fatalf("overview category = %q", got)
+	}
+}
+
+func TestNormalizeCategoryBriefingFieldsDoesNotHideArbitraryWrongCategory(t *testing.T) {
+	summary := model.BriefingSummary{Stories: []model.BriefingStory{{Category: "AI/科技", ContentType: model.ContentTypeNews}}}
+
+	normalizeCategoryBriefingFields(&summary, "国际政治")
+	if got := summary.Stories[0].Category; got != "AI/科技" {
+		t.Fatalf("story category = %q, want original invalid category", got)
+	}
+}
+
 func TestDeterministicBriefingSourceLineKeepsFullDatesAcrossDays(t *testing.T) {
 	articles := []model.Article{
 		{Source: "Source A", Published: time.Date(2026, 8, 16, 1, 58, 0, 0, time.UTC)},
@@ -295,6 +339,35 @@ func TestDeterministicBriefingSourceLineKeepsFullDatesAcrossDays(t *testing.T) {
 	got := deterministicBriefingSourceLine(articles, time.UTC)
 	if want := "来源: Source A、Source B | 2026-08-16 01:58 至 2026-08-17 02:58"; got != want {
 		t.Fatalf("source line = %q, want %q", got, want)
+	}
+}
+
+func TestBriefingSourceReferencesLabelsMultipleArticlesFromSamePublisher(t *testing.T) {
+	articles := []model.Article{
+		{Source: "中新网财经", Link: "https://example.com/one"},
+		{Source: "中新网财经", Link: "https://example.com/two"},
+	}
+
+	got := briefingSourceReferences(articles)
+	want := []string{
+		"[中新网财经·报道1](<https://example.com/one>)",
+		"[中新网财经·报道2](<https://example.com/two>)",
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("references = %#v, want %#v", got, want)
+	}
+}
+
+func TestFailedBriefingCategoriesReturnsCopy(t *testing.T) {
+	runErr := &BriefingCategoryError{Categories: []string{"国际政治"}, Err: errors.New("category failed")}
+
+	got := FailedBriefingCategories(fmt.Errorf("wrapped: %w", runErr))
+	if !reflect.DeepEqual(got, []string{"国际政治"}) {
+		t.Fatalf("categories = %#v", got)
+	}
+	got[0] = "changed"
+	if runErr.Categories[0] != "国际政治" {
+		t.Fatalf("returned categories alias internal state: %#v", runErr.Categories)
 	}
 }
 

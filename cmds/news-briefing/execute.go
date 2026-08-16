@@ -1377,8 +1377,59 @@ func (app *app) sendAIFallbackAlert(enabled bool, failed aiBriefingAttempt, next
 	if !enabled {
 		return
 	}
-	body := fmt.Sprintf("AI summary attempt %q failed and fallback %q is starting.\n\nFailed articles: %d\nFallback articles: %d\nError: %v", failed.name, next.name, len(failed.articles), len(next.articles), runErr)
+	failedCategories := summarizer.FailedBriefingCategories(runErr)
+	cachedCategories := cachedSuccessfulCategories(failed.articles, failedCategories)
+	body := fmt.Sprintf(
+		"AI summary attempt %q failed and fallback %q is starting.\n\nFailure scope: %s\nCached successful categories: %s\nPrimary input: %d articles (%s)\nFallback input: %d articles (%s)\nError: %v",
+		failed.name,
+		next.name,
+		fallbackFailureScope(failedCategories),
+		fallbackCachedCategories(cachedCategories),
+		len(failed.articles),
+		articleCategoryCountsString(failed.articles),
+		len(next.articles),
+		articleCategoryCountsString(next.articles),
+		runErr,
+	)
 	app.sendAIAlert("[news-briefing] AI summary fallback started", body)
+}
+
+func fallbackFailureScope(categories []string) string {
+	if len(categories) == 0 {
+		return "full attempt or editorial synthesis"
+	}
+	return "categories: " + strings.Join(categories, ", ")
+}
+
+func cachedSuccessfulCategories(articles []model.Article, failedCategories []string) []string {
+	failed := make(map[string]struct{}, len(failedCategories))
+	for _, category := range failedCategories {
+		failed[strings.TrimSpace(category)] = struct{}{}
+	}
+	seen := make(map[string]struct{})
+	categories := make([]string, 0)
+	for _, article := range articles {
+		category := strings.TrimSpace(article.Category)
+		if category == "" {
+			category = "未分类"
+		}
+		if _, isFailed := failed[category]; isFailed {
+			continue
+		}
+		if _, ok := seen[category]; ok {
+			continue
+		}
+		seen[category] = struct{}{}
+		categories = append(categories, category)
+	}
+	return categories
+}
+
+func fallbackCachedCategories(categories []string) string {
+	if len(categories) == 0 {
+		return "none identified"
+	}
+	return strings.Join(categories, ", ")
 }
 
 func (app *app) sendAIFinalFailureAlert(enabled bool, runErr error) {
