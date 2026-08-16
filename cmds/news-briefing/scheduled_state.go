@@ -51,6 +51,8 @@ type scheduledWindowState struct {
 	DueAt       time.Time         `json:"dueAt"`
 	Status      string            `json:"status"`
 	Trigger     string            `json:"trigger,omitempty"`
+	StartedAt   time.Time         `json:"startedAt,omitzero"`
+	FinishedAt  time.Time         `json:"finishedAt,omitzero"`
 	UpdatedAt   time.Time         `json:"updatedAt"`
 	HeartbeatAt time.Time         `json:"heartbeatAt,omitzero"`
 	Attempts    int               `json:"attempts"`
@@ -164,7 +166,10 @@ func scheduledRunWindowKey(window scheduler.Window) string {
 }
 
 func scheduledRunID(window scheduler.Window) string {
-	return scheduledRunWindowKey(window)
+	normalize := func(value time.Time) string {
+		return strings.ReplaceAll(value.UTC().Format("20060102T150405.000Z"), ".", "")
+	}
+	return normalize(window.From) + "_" + normalize(window.To)
 }
 
 func scheduledWindowFromState(record scheduledWindowState) (scheduler.Window, error) {
@@ -395,6 +400,8 @@ func (app *app) acquireScheduledRunWindow(window scheduler.Window, trigger strin
 		emailAlreadySent = !record.EmailSentAt.IsZero()
 		record.Status = scheduledStatusRunning
 		record.Trigger = trigger
+		record.StartedAt = now
+		record.FinishedAt = time.Time{}
 		record.UpdatedAt = now
 		record.HeartbeatAt = now
 		record.Attempts++
@@ -460,6 +467,7 @@ func (app *app) finishScheduledRun(window scheduler.Window, leaseID, status stri
 			return false, nil
 		}
 		record.Status = status
+		record.FinishedAt = now
 		record.UpdatedAt = now
 		record.HeartbeatAt = now
 		record.LeaseID = ""

@@ -22,6 +22,7 @@ type regenCommand struct {
 	sendEmail             bool
 	raw                   bool
 	noPublish             bool
+	replaceOutput         bool
 	emailRecipientMatch   string
 	xVisibleHistoryDays   int
 	xVisibleHistoryDir    string
@@ -45,7 +46,10 @@ type deepCommand struct {
 	ignoreSeen bool
 	sendEmail  bool
 }
-type resendMDCommand struct{ file string }
+type resendMDCommand struct {
+	file                string
+	emailRecipientMatch string
+}
 type helpCommand struct{}
 
 func (runCommand) isCommand()      {}
@@ -144,7 +148,11 @@ func parseRegenCommand(args []string) (command, error) {
 	if emailRecipientMatch != "" && !hasFlagIn(args, "--send-email") {
 		return nil, fmt.Errorf("--email-recipient-match requires --send-email")
 	}
-	return regenCommand{fromRaw: fromRaw, toRaw: toRaw, period: period, ignoreSeen: hasFlagIn(args, "--ignore-seen"), sendEmail: hasFlagIn(args, "--send-email"), raw: hasFlagIn(args, "--raw"), noPublish: hasFlagIn(args, "--no-publish"), emailRecipientMatch: emailRecipientMatch, xVisibleHistoryDays: historyDays, xVisibleHistoryDir: historyDir, maxArticlesByCategory: maxArticlesByCategory}, nil
+	publish := hasFlagIn(args, "--publish")
+	if publish && hasFlagIn(args, "--no-publish") {
+		return nil, fmt.Errorf("--publish and --no-publish cannot be used together")
+	}
+	return regenCommand{fromRaw: fromRaw, toRaw: toRaw, period: period, ignoreSeen: hasFlagIn(args, "--ignore-seen"), sendEmail: hasFlagIn(args, "--send-email"), raw: hasFlagIn(args, "--raw"), noPublish: !publish, replaceOutput: hasFlagIn(args, "--replace-output"), emailRecipientMatch: emailRecipientMatch, xVisibleHistoryDays: historyDays, xVisibleHistoryDir: historyDir, maxArticlesByCategory: maxArticlesByCategory}, nil
 }
 
 func parseFetchCommand(args []string) (command, error) {
@@ -169,7 +177,8 @@ func parseResendMDCommand(args []string) (command, error) {
 	if !ok || file == "" {
 		return nil, fmt.Errorf("--file is required")
 	}
-	return resendMDCommand{file: file}, nil
+	emailRecipientMatch, _ := readStringFlag(args, "--email-recipient-match")
+	return resendMDCommand{file: file, emailRecipientMatch: emailRecipientMatch}, nil
 }
 
 func parseXCommand(args []string) (command, error) {
@@ -369,9 +378,9 @@ func commandValidationRules(cmd string) (map[string]struct{}, map[string]struct{
 	case "deep":
 		return map[string]struct{}{"--ignore-seen": {}, "--send-email": {}}, map[string]struct{}{"--from": {}, "--to": {}}, true
 	case "resend-md":
-		return nil, map[string]struct{}{"--file": {}}, false
+		return nil, map[string]struct{}{"--file": {}, "--email-recipient-match": {}}, false
 	case "regen":
-		return map[string]struct{}{"--ignore-seen": {}, "--send-email": {}, "--raw": {}, "--no-publish": {}}, map[string]struct{}{"--from": {}, "--to": {}, "--period": {}, "--email-recipient-match": {}, "--x-visible-history-days": {}, "--x-visible-history-dir": {}, "--max-articles": {}}, false
+		return map[string]struct{}{"--ignore-seen": {}, "--send-email": {}, "--raw": {}, "--publish": {}, "--no-publish": {}, "--replace-output": {}}, map[string]struct{}{"--from": {}, "--to": {}, "--period": {}, "--email-recipient-match": {}, "--x-visible-history-days": {}, "--x-visible-history-dir": {}, "--max-articles": {}}, false
 	default:
 		return nil, nil, false
 	}

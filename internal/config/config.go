@@ -283,8 +283,9 @@ type OutputCfg struct {
 }
 
 type OutputFallbackCfg struct {
-	Enabled bool                `yaml:"enabled"`
-	Levels  []ArticleLimitLevel `yaml:"levels"`
+	Enabled      bool                `yaml:"enabled"`
+	AlertOnStart bool                `yaml:"alert_on_start"`
+	Levels       []ArticleLimitLevel `yaml:"levels"`
 }
 
 type ArticleLimitLevel struct {

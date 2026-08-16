@@ -96,7 +96,7 @@ func TestUsageMentionsRegenDefaults(t *testing.T) {
 	if !strings.Contains(usage, "默认不发邮件") {
 		t.Fatalf("usageText() missing regen default email note")
 	}
-	if !strings.Contains(usage, "默认仍会写出 Markdown 文件") {
+	if !strings.Contains(usage, "默认不发邮件、不发布") || !strings.Contains(usage, "manual 子目录") {
 		t.Fatalf("usageText() missing regen markdown note")
 	}
 	if !strings.Contains(usage, "schedule_timezone") {

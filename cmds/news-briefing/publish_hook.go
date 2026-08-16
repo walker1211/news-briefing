@@ -17,6 +17,7 @@ type publishHookRequest struct {
 	SourceApp        string
 	Date             string
 	Period           string
+	PublishDedupeKey string
 }
 
 func runPublishHook(ctx context.Context, cfg config.PublishHookConfig, req publishHookRequest) error {
@@ -70,6 +71,7 @@ func expandPublishHookArgs(args []string, req publishHookRequest) []string {
 		arg = strings.ReplaceAll(arg, "{source_app}", req.SourceApp)
 		arg = strings.ReplaceAll(arg, "{date}", req.Date)
 		arg = strings.ReplaceAll(arg, "{period}", req.Period)
+		arg = strings.ReplaceAll(arg, "{publish_dedupe_key}", req.PublishDedupeKey)
 		out = append(out, arg)
 	}
 	return out

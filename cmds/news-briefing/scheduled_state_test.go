@@ -40,6 +40,13 @@ func TestRegisterScheduledWindowWritesSinglePersistentStateFile(t *testing.T) {
 	}
 }
 
+func TestScheduledRunIDMatchesAutomationWindowNormalization(t *testing.T) {
+	window := scheduledStateTestWindow()
+	if got, want := scheduledRunID(window), "20260727T000000000Z_20260727T100000000Z"; got != want {
+		t.Fatalf("scheduledRunID() = %q, want %q", got, want)
+	}
+}
+
 func TestScheduledBriefingOnceIsIdempotentAfterDone(t *testing.T) {
 	app := newScheduledOnceTestApp(t, nil)
 	window := scheduledStateTestWindow()
@@ -55,6 +62,31 @@ func TestScheduledBriefingOnceIsIdempotentAfterDone(t *testing.T) {
 	record := mustScheduledWindowState(t, app, window)
 	if record.Status != scheduledStatusDone || record.Attempts != 1 {
 		t.Fatalf("record = %#v, want done with one attempt", record)
+	}
+	if record.StartedAt.IsZero() || record.FinishedAt.IsZero() || record.FinishedAt.Before(record.StartedAt) {
+		t.Fatalf("record timestamps = started %s finished %s, want completed interval", record.StartedAt, record.FinishedAt)
+	}
+}
+
+func TestScheduledBriefingPassesStableRunIDToPublishHook(t *testing.T) {
+	app := newScheduledOnceTestApp(t, nil)
+	app.cfg.PublishHook = config.PublishHookConfig{Enabled: true, Command: "content-publisher"}
+	var request publishHookRequest
+	app.publishHook = func(_ context.Context, _ config.PublishHookConfig, received publishHookRequest) error {
+		request = received
+		return nil
+	}
+	window := scheduledStateTestWindow()
+	if err := app.runScheduledBriefingOnceContext(context.Background(), window, "cron", false); err != nil {
+		t.Fatalf("runScheduledBriefingOnceContext() error = %v", err)
+	}
+	want := "news-briefing:" + scheduledRunID(window)
+	if request.PublishDedupeKey != want {
+		t.Fatalf("publish dedupe key = %q, want %q", request.PublishDedupeKey, want)
+	}
+	record := mustScheduledWindowState(t, app, window)
+	if record.Fields["publish_dedupe_key"] != want {
+		t.Fatalf("scheduler publish dedupe key = %q, want %q", record.Fields["publish_dedupe_key"], want)
 	}
 }
 
