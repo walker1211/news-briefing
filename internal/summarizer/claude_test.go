@@ -625,6 +625,82 @@ exit 8
 	}
 }
 
+func TestRunnerReusesSuccessfulCategoriesAcrossFallbackAttempts(t *testing.T) {
+	dir := t.TempDir()
+	oldPath := os.Getenv("PATH")
+	t.Cleanup(func() { _ = os.Setenv("PATH", oldPath) })
+
+	aiFailedPath := filepath.Join(dir, "ai.failed")
+	aiCallsPath := filepath.Join(dir, "ai.calls")
+	financeCallsPath := filepath.Join(dir, "finance.calls")
+	commandPath := filepath.Join(dir, "codex")
+	script := `#!/bin/sh
+input="` + dir + `/input.$$"
+cat > "$input"
+if grep -q '分类摘要 JSON' "$input"; then
+  printf '%s' '{"situation":"两个分类共同呈现结构变化。","xhs_topics":["人工智能","财经观察","每日新闻"],"directions":[{"title":"AI roadmap","why":"产品持续演进。","next":"观察发布节奏。","deep_command":"./news-briefing deep \"AI roadmap\" --ignore-seen"},{"title":"Market outlook","why":"市场预期变化。","next":"观察政策与价格。","deep_command":"./news-briefing deep \"Market outlook\" --ignore-seen"}]}'
+elif grep -q '当前分类：AI/科技' "$input"; then
+  printf 'call\n' >> "` + aiCallsPath + `"
+  if [ ! -f "` + aiFailedPath + `" ]; then
+    touch "` + aiFailedPath + `"
+    rm -f "$input"
+    exit 7
+  fi
+  printf '%s' '{"overview_groups":[{"category":"AI/科技","items":["🤖 AI 要点"]}],"stories":[{"category":"AI/科技","title":"AI 新闻","summary":"AI 摘要。","impact":"AI 影响。","source_article_ids":[1]}]}'
+elif grep -q '当前分类：新闻财经' "$input"; then
+  printf 'call\n' >> "` + financeCallsPath + `"
+  printf '%s' '{"overview_groups":[{"category":"新闻财经","items":["💹 财经要点"]}],"stories":[{"category":"新闻财经","title":"财经新闻","summary":"财经摘要。","impact":"财经影响。","source_article_ids":[1]}]}'
+else
+  rm -f "$input"
+  exit 8
+fi
+rm -f "$input"
+`
+	if err := os.WriteFile(commandPath, []byte(script), 0o755); err != nil {
+		t.Fatalf("write fake codex: %v", err)
+	}
+	if err := os.Setenv("PATH", dir+string(os.PathListSeparator)+oldPath); err != nil {
+		t.Fatalf("set PATH: %v", err)
+	}
+
+	primaryArticles := []model.Article{
+		{Title: "AI primary", Source: "AI Source", Category: "AI/科技", Published: time.Date(2026, 8, 16, 8, 0, 0, 0, time.UTC)},
+		{Title: "AI extra", Source: "AI Source", Category: "AI/科技", Published: time.Date(2026, 8, 16, 8, 1, 0, 0, time.UTC)},
+		{Title: "Finance", Source: "Finance Source", Category: "新闻财经", Published: time.Date(2026, 8, 16, 8, 2, 0, 0, time.UTC)},
+	}
+	fallbackArticles := []model.Article{primaryArticles[0], primaryArticles[2]}
+	runner := NewRunner("codex", []string{"exec"}, false, "", "")
+	runner.failureLogPath = ""
+	runner.SetSummaryOptions(true, 2)
+	ctx := WithBriefingCategorySummaryCache(context.Background())
+
+	if _, _, err := runner.SummarizeBriefingContext(ctx, primaryArticles, []string{"AI/科技", "新闻财经"}, time.UTC); err == nil {
+		t.Fatal("primary SummarizeBriefingContext() error = nil, want AI category failure")
+	}
+	summary, _, err := runner.SummarizeBriefingContext(ctx, fallbackArticles, []string{"AI/科技", "新闻财经"}, time.UTC)
+	if err != nil {
+		t.Fatalf("fallback SummarizeBriefingContext() error = %v", err)
+	}
+
+	aiCalls, err := os.ReadFile(aiCallsPath)
+	if err != nil {
+		t.Fatalf("read AI calls: %v", err)
+	}
+	financeCalls, err := os.ReadFile(financeCallsPath)
+	if err != nil {
+		t.Fatalf("read finance calls: %v", err)
+	}
+	if got := strings.Count(string(aiCalls), "call\n"); got != 2 {
+		t.Fatalf("AI category calls = %d, want 2", got)
+	}
+	if got := strings.Count(string(financeCalls), "call\n"); got != 1 {
+		t.Fatalf("finance category calls = %d, want 1 reused result", got)
+	}
+	if got := summary.Stories[1].SourceArticleIDs; !reflect.DeepEqual(got, []int{2}) {
+		t.Fatalf("reused finance source ids = %#v, want remapped [2]", got)
+	}
+}
+
 func TestRunnerUsesFinalEditorToSelectExistingCategoryStories(t *testing.T) {
 	dir := t.TempDir()
 	oldPath := os.Getenv("PATH")
