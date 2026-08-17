@@ -134,7 +134,7 @@ selected_story_ids 只能引用输入中存在的 story_id，每个 ID 只能出
 不要使用固定分类配额：分类数量应由当天新闻的重要性决定。优先保留影响范围大、时效强、事实或数字充分、有明确后续变量的内容；删除同一事件的跨分类重复、弱相关拼接、纯宣传、低信息量和仅有情绪无事实支撑的候选。
 内容类型也不使用固定配额：在质量相近时兼顾 news、tool、case、insight 的阅读价值；当天某类确实没有高质量内容时允许为零，重大事件密集时允许 news 自然增多。证据等级优先 corroborated，其次 supported；single_source 的重要官方发布可以保留，但不要让仅有 radar/repost 线索的内容挤掉证据更扎实的候选。
 最终数量允许在 %d 到 %d 条之间动态变化，以约 %d 条为目标：高质量候选不足时取下限附近，重大新闻密集时可接近上限。
-overview_groups 必须覆盖每个仍有入选 story 的分类且不得包含其他分类；每个分类用 2-5 条简洁要点概括入选内容，不要提及已删除候选。
+overview_groups 必须覆盖每个仍有入选 story 的分类且不得包含其他分类；每个入选分类的 items 严禁为空，必须输出 2-5 条简洁要点概括入选内容，不要提及已删除候选。
 situation 必须综合不同分类之间的共同趋势，不要逐分类机械复述。xhs_topics 输出 3 个、最多 4 个适合整篇简报的通用话题，不带 #、空格或特殊符号。directions 输出 2-4 个高质量方向；相近方向应合并。deep_command 的关键词优先使用 2-6 个词的英文实体或英文新闻短语。`
 
 const nonInteractiveBriefingSystemPrompt = `这是一次无人值守的单轮批处理任务，不是对话。
@@ -1004,9 +1004,12 @@ func (r *Runner) editBriefingContext(ctx context.Context, partial model.Briefing
 	if err != nil {
 		return model.BriefingSummary{}, err
 	}
-	overview, err := normalizedEditorialOverview(decision.OverviewGroups, selected, categoryOrder)
+	overview, repairedOverviewCategories, err := normalizedEditorialOverview(decision.OverviewGroups, selected, categoryOrder)
 	if err != nil {
 		return model.BriefingSummary{}, err
+	}
+	if len(repairedOverviewCategories) > 0 {
+		logutil.Warnf("AI editorial overview repaired from selected stories: categories=%s", strings.Join(repairedOverviewCategories, ","))
 	}
 	if err := validateBriefingSynthesis(decision.Situation, decision.XHSTopics, decision.Directions); err != nil {
 		return model.BriefingSummary{}, fmt.Errorf("validate briefing editorial decision: %w", err)
@@ -1049,43 +1052,103 @@ func selectedEditorialStories(candidates []model.BriefingStory, ids []int, minSt
 	return selected, nil
 }
 
-func normalizedEditorialOverview(groups []model.BriefingOverviewGroup, stories []model.BriefingStory, categoryOrder []string) ([]model.BriefingOverviewGroup, error) {
-	selectedCategories := make(map[string]struct{})
+func normalizedEditorialOverview(groups []model.BriefingOverviewGroup, stories []model.BriefingStory, categoryOrder []string) ([]model.BriefingOverviewGroup, []string, error) {
+	selectedStories := make(map[string][]model.BriefingStory)
 	for _, story := range stories {
-		selectedCategories[strings.TrimSpace(story.Category)] = struct{}{}
+		category := strings.TrimSpace(story.Category)
+		selectedStories[category] = append(selectedStories[category], story)
 	}
 	byCategory := make(map[string]model.BriefingOverviewGroup, len(groups))
+	repairedCategories := make([]string, 0, len(selectedStories))
 	for _, group := range groups {
 		category := strings.TrimSpace(group.Category)
-		if _, ok := selectedCategories[category]; !ok {
-			return nil, fmt.Errorf("validate briefing editorial decision: overview contains unselected category %q", category)
+		storiesForCategory, ok := selectedStories[category]
+		if !ok {
+			return nil, nil, fmt.Errorf("validate briefing editorial decision: overview contains unselected category %q", category)
 		}
-		if len(group.Items) < 1 || len(group.Items) > 5 {
-			return nil, fmt.Errorf("validate briefing editorial decision: category %q overview must contain 1-5 items", category)
+		items := normalizedOverviewItems(group.Items)
+		if len(items) > 5 {
+			return nil, nil, fmt.Errorf("validate briefing editorial decision: category %q overview must contain 1-5 items", category)
+		}
+		if len(items) == 0 {
+			items = editorialOverviewItems(category, storiesForCategory)
+			if len(items) == 0 {
+				return nil, nil, fmt.Errorf("validate briefing editorial decision: category %q overview cannot be repaired without selected story titles", category)
+			}
+			repairedCategories = append(repairedCategories, category)
 		}
 		if _, exists := byCategory[category]; exists {
-			return nil, fmt.Errorf("validate briefing editorial decision: duplicate overview category %q", category)
+			return nil, nil, fmt.Errorf("validate briefing editorial decision: duplicate overview category %q", category)
 		}
 		group.Category = category
+		group.Items = items
 		byCategory[category] = group
 	}
-	ordered := make([]model.BriefingOverviewGroup, 0, len(selectedCategories))
+	ordered := make([]model.BriefingOverviewGroup, 0, len(selectedStories))
 	for _, category := range categoryOrder {
 		category = strings.TrimSpace(category)
-		if _, ok := selectedCategories[category]; !ok {
+		storiesForCategory, ok := selectedStories[category]
+		if !ok {
 			continue
 		}
 		group, ok := byCategory[category]
 		if !ok {
-			return nil, fmt.Errorf("validate briefing editorial decision: missing overview category %q", category)
+			items := editorialOverviewItems(category, storiesForCategory)
+			if len(items) == 0 {
+				return nil, nil, fmt.Errorf("validate briefing editorial decision: missing overview category %q cannot be repaired without selected story titles", category)
+			}
+			group = model.BriefingOverviewGroup{
+				Category: category,
+				Items:    items,
+			}
+			repairedCategories = append(repairedCategories, category)
 		}
 		ordered = append(ordered, group)
 		delete(byCategory, category)
 	}
 	if len(byCategory) != 0 {
-		return nil, fmt.Errorf("validate briefing editorial decision: overview category order is incomplete")
+		return nil, nil, fmt.Errorf("validate briefing editorial decision: overview category order is incomplete")
 	}
-	return ordered, nil
+	return ordered, repairedCategories, nil
+}
+
+func normalizedOverviewItems(items []string) []string {
+	normalized := make([]string, 0, len(items))
+	for _, item := range items {
+		item = strings.TrimSpace(item)
+		if item != "" {
+			normalized = append(normalized, item)
+		}
+	}
+	return normalized
+}
+
+func editorialOverviewItems(category string, stories []model.BriefingStory) []string {
+	emoji := map[string]string{
+		"AI/科技": "🤖",
+		"新闻财经":  "📈",
+		"国际政治":  "🌍",
+	}[category]
+	if emoji == "" {
+		emoji = "📰"
+	}
+	items := make([]string, 0, min(len(stories), 5))
+	seen := make(map[string]struct{}, len(stories))
+	for _, story := range stories {
+		title := strings.TrimSpace(story.Title)
+		if title == "" {
+			continue
+		}
+		if _, ok := seen[title]; ok {
+			continue
+		}
+		seen[title] = struct{}{}
+		items = append(items, emoji+" "+title)
+		if len(items) == 5 {
+			break
+		}
+	}
+	return items
 }
 
 func populatedCategories(articles []model.Article, categoryOrder []string) []string {

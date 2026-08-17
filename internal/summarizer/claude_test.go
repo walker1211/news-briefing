@@ -887,6 +887,33 @@ rm -f "$input"
 	}
 }
 
+func TestNormalizedEditorialOverviewRepairsEmptyAndMissingGroupsFromSelectedStories(t *testing.T) {
+	stories := []model.BriefingStory{
+		{Category: "AI/科技", Title: "AI 新闻"},
+		{Category: "新闻财经", Title: "财经新闻"},
+		{Category: "国际政治", Title: "国际新闻"},
+	}
+	groups := []model.BriefingOverviewGroup{
+		{Category: "AI/科技", Items: []string{"🤖 AI 要点"}},
+		{Category: "新闻财经", Items: []string{"", "  "}},
+	}
+
+	got, repaired, err := normalizedEditorialOverview(groups, stories, []string{"AI/科技", "新闻财经", "国际政治"})
+	if err != nil {
+		t.Fatalf("normalizedEditorialOverview() error = %v", err)
+	}
+	if want := []string{"新闻财经", "国际政治"}; !reflect.DeepEqual(repaired, want) {
+		t.Fatalf("repaired categories = %#v, want %#v", repaired, want)
+	}
+	if want := []model.BriefingOverviewGroup{
+		{Category: "AI/科技", Items: []string{"🤖 AI 要点"}},
+		{Category: "新闻财经", Items: []string{"📈 财经新闻"}},
+		{Category: "国际政治", Items: []string{"🌍 国际新闻"}},
+	}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("overview groups = %#v, want %#v", got, want)
+	}
+}
+
 func TestCallClaudeIncludesStdoutAndStderrOnExitError(t *testing.T) {
 	dir := t.TempDir()
 	oldPath := os.Getenv("PATH")
