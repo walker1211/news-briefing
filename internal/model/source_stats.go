@@ -30,6 +30,7 @@ type SourceStatsTotals struct {
 	AcceptedBeforeDedup int   `json:"accepted_before_dedup"`
 	AcceptedAfterDedup  int   `json:"accepted_after_dedup"`
 	EnteredAI           int   `json:"entered_ai"`
+	SelectedFinal       int   `json:"selected_final"`
 	FetchDurationMS     int64 `json:"fetch_duration_ms"`
 	ResponseBytes       int64 `json:"response_bytes"`
 }
@@ -48,6 +49,7 @@ type SourceStatsEntry struct {
 	AcceptedBeforeDedup int    `json:"accepted_before_dedup"`
 	AcceptedAfterDedup  int    `json:"accepted_after_dedup"`
 	EnteredAI           int    `json:"entered_ai"`
+	SelectedFinal       int    `json:"selected_final"`
 	FetchDurationMS     int64  `json:"fetch_duration_ms,omitempty"`
 	ResponseBytes       int64  `json:"response_bytes,omitempty"`
 	CacheStatus         string `json:"cache_status,omitempty"`
@@ -92,6 +94,40 @@ func (report *SourceStatsReport) SetEnteredAI(articles []Article) {
 	report.RecalculateTotals()
 }
 
+func (report *SourceStatsReport) SetSelectedFinal(articles []Article) {
+	if report == nil {
+		return
+	}
+	for i := range report.Sources {
+		report.Sources[i].SelectedFinal = 0
+	}
+	indexBySource := make(map[string]int, len(report.Sources))
+	for i, source := range report.Sources {
+		indexBySource[source.Source] = i
+	}
+	for _, article := range articles {
+		source := article.Source
+		if source == "" {
+			source = "unknown"
+		}
+		index, ok := indexBySource[source]
+		if !ok {
+			report.Sources = append(report.Sources, SourceStatsEntry{
+				Source:   source,
+				Type:     "watch",
+				Category: article.Category,
+			})
+			index = len(report.Sources) - 1
+			indexBySource[source] = index
+		}
+		report.Sources[index].SelectedFinal++
+		if report.Sources[index].Category == "" {
+			report.Sources[index].Category = article.Category
+		}
+	}
+	report.RecalculateTotals()
+}
+
 func (report *SourceStatsReport) RecalculateTotals() {
 	if report == nil {
 		return
@@ -108,6 +144,7 @@ func (report *SourceStatsReport) RecalculateTotals() {
 		totals.AcceptedBeforeDedup += source.AcceptedBeforeDedup
 		totals.AcceptedAfterDedup += source.AcceptedAfterDedup
 		totals.EnteredAI += source.EnteredAI
+		totals.SelectedFinal += source.SelectedFinal
 		totals.FetchDurationMS += source.FetchDurationMS
 		totals.ResponseBytes += source.ResponseBytes
 	}
