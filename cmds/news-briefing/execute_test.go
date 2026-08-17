@@ -1166,6 +1166,7 @@ func TestSendAIFallbackAlertReportsCategoryScopeInsteadOfFailedArticleCount(t *t
 		"Cached successful categories: AI/科技, 新闻财经",
 		"Primary input: 3 articles",
 		"Fallback input: 3 articles",
+		"Failure stage: category_summary",
 		"Error class: category_validation_failed",
 	} {
 		if !strings.Contains(body, want) {
@@ -1177,6 +1178,37 @@ func TestSendAIFallbackAlertReportsCategoryScopeInsteadOfFailedArticleCount(t *t
 	}
 	if strings.Contains(body, "invalid category field") {
 		t.Fatalf("body leaked raw failure details: %q", body)
+	}
+}
+
+func TestClassifyAIFailureUsesTypedMetadataWithoutRawError(t *testing.T) {
+	raw := errors.New("postgres://private-host/db token=secret")
+	err := fmt.Errorf("wrapped: %w", &summarizer.BriefingDiagnosticError{Stage: "final_editor", Code: "overview_invalid", Err: raw})
+	diagnostic := classifyAIFailure(err)
+	if diagnostic.Stage != "final_editor" || diagnostic.Code != "overview_invalid" {
+		t.Fatalf("diagnostic = %#v", diagnostic)
+	}
+	encoded := diagnostic.Stage + diagnostic.Code + strings.Join(diagnostic.Categories, ",")
+	for _, forbidden := range []string{"private-host", "token", "secret", "postgres"} {
+		if strings.Contains(encoded, forbidden) {
+			t.Fatalf("diagnostic leaked %q: %#v", forbidden, diagnostic)
+		}
+	}
+}
+
+func TestClassifyAIFailureRefinesAllowlistedAICLIErrors(t *testing.T) {
+	for _, test := range []struct {
+		raw  string
+		want string
+	}{
+		{raw: "invalidated oauth token for user", want: "oauth_revoked"},
+		{raw: "upstream_error status: 503", want: "upstream_error"},
+		{raw: "stream error: EOF", want: "transport_error"},
+	} {
+		err := &summarizer.BriefingDiagnosticError{Stage: "category_summary", Code: "ai_cli_failed", Err: errors.New(test.raw)}
+		if got := classifyAIFailure(err); got.Stage != "category_summary" || got.Code != test.want {
+			t.Fatalf("classifyAIFailure(%q) = %#v", test.raw, got)
+		}
 	}
 }
 

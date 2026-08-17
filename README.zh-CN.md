@@ -384,6 +384,8 @@ schedule_prefetch_wait_timeout: 2m
 
 服务实际观察到 08:00 / 18:00 触发时，会把该窗口登记到唯一的长期状态文件 `output/state/briefing-scheduler.json`。只有处于 `pending`、`waiting_x` 或 `running` 的已登记窗口才有 watcher；默认每 1 分钟检查一次，进入 `done` / `failed` 后立即停止。若同窗口的 X 状态仍为 `running` 且 heartbeat 新鲜，窗口切到 `waiting_x`；X 进入终态或 heartbeat 超过 3 分钟未更新时，watcher 接管执行。简报自身也每分钟更新 heartbeat，超过 3 分钟可由重启后的 watcher 接管。cron、X 回调和 watcher 通过短期文件锁原子竞争同一窗口的 lease，所以同一窗口只会有一个有效执行者；旧 lease 不能覆盖接管后的状态。邮件成功时间也保存在同一记录中，接管时不会重复发送已经确认成功的邮件。短期 `.lock` 和原子写临时文件只在更新状态时存在，不是长期 marker。
 
+AI attempt 失败时，调度状态会持久化白名单字段，例如 `ai_primary_error_stage=final_editor`、`ai_primary_error_code=overview_invalid`、受影响分类和耗时；fallback 成功后同时记录 `ai_recovered=true` 与恢复层级。状态和告警都不保存 Prompt、文章正文、完整 stderr、堆栈、token 或连接信息。
+
 Watch 默认走“索引快检 + 正文深检”：索引新增或变化会立即读取正文；未变化文章按 `watch.deep_verify_interval` 到期后，以 `watch.deep_verify_batch_size` 为上限按最旧检查时间轮转。这样仍能发现 URL、标题和摘要均未变化时的正文静默更新，同时避免每个简报窗口下载全部历史正文。
 
 RSS 源会在 `<output.dir>/state/rss-cache` 保存压缩响应和 ETag/Last-Modified 元数据。服务端返回 `304 Not Modified` 时复用已缓存 Feed；每份 `.source-stats.json` 同时记录各来源的抓取耗时、响应字节数、缓存状态、进入 AI 的数量和最终入选数量，便于识别大 Feed、低有效率来源及 AI 编辑阶段的损耗。

@@ -1272,6 +1272,12 @@ type aiBriefingResult struct {
 	summary           string
 }
 
+type aiFailureDiagnostic struct {
+	Stage      string
+	Code       string
+	Categories []string
+}
+
 func (app *app) summarizeBriefingWithFallback(ctx context.Context, articles []model.Article, categoryOrder []string, loc *time.Location, alertEnabled bool, reporter *scheduledRunReporter) (aiBriefingResult, error) {
 	attempts, err := app.aiBriefingAttempts(articles)
 	if err != nil {
@@ -1353,6 +1359,8 @@ func (app *app) runAISummaryAttempt(ctx context.Context, attempt aiBriefingAttem
 	structuredSummary, summary, err := app.summarizeBriefing(attemptCtx, attempt.articles, categoryOrder, loc)
 	duration := time.Since(started).Round(time.Second)
 	if err != nil {
+		diagnostic := classifyAIFailure(err)
+		reporter.updateAIFailure(attempt, diagnostic, duration)
 		if errors.Is(attemptCtx.Err(), context.DeadlineExceeded) && timeout.AttemptTimeout > 0 {
 			logutil.Warnf("AI summary attempt %q timed out after %s", attempt.name, duration)
 			return nil, "", fmt.Errorf("ai summary attempt %q timed out after %s: %w", attempt.name, timeout.AttemptTimeout, attemptCtx.Err())
@@ -1360,6 +1368,7 @@ func (app *app) runAISummaryAttempt(ctx context.Context, attempt aiBriefingAttem
 		logutil.Warnf("AI summary attempt %q failed after %s: %v", attempt.name, duration, err)
 		return nil, "", err
 	}
+	reporter.updateAISuccess(attempt, duration)
 	logutil.Printf("AI summary attempt %q completed in %s", attempt.name, duration)
 	return structuredSummary, summary, nil
 }
@@ -1425,8 +1434,9 @@ func (app *app) sendAIFallbackAlert(enabled bool, failed aiBriefingAttempt, next
 	}
 	failedCategories := summarizer.FailedBriefingCategories(runErr)
 	cachedCategories := cachedSuccessfulCategories(failed.articles, failedCategories)
+	diagnostic := classifyAIFailure(runErr)
 	body := fmt.Sprintf(
-		"AI summary attempt %q failed and fallback %q is starting.\n\nFailure scope: %s\nCached successful categories: %s\nPrimary input: %d articles (%s)\nFallback input: %d articles (%s)\nError class: %s",
+		"AI summary attempt %q failed and fallback %q is starting.\n\nFailure scope: %s\nCached successful categories: %s\nPrimary input: %d articles (%s)\nFallback input: %d articles (%s)\nFailure stage: %s\nError class: %s",
 		failed.name,
 		next.name,
 		fallbackFailureScope(failedCategories),
@@ -1435,7 +1445,8 @@ func (app *app) sendAIFallbackAlert(enabled bool, failed aiBriefingAttempt, next
 		articleCategoryCountsString(failed.articles),
 		len(next.articles),
 		articleCategoryCountsString(next.articles),
-		aiAlertErrorClass(runErr),
+		diagnostic.Stage,
+		diagnostic.Code,
 	)
 	app.sendAIAlert("[news-briefing] AI summary fallback started", body)
 }
@@ -1482,24 +1493,78 @@ func (app *app) sendAIFinalFailureAlert(enabled bool, runErr error) {
 	if !enabled {
 		return
 	}
-	app.sendAIAlert("[news-briefing] AI summary failed", fmt.Sprintf("AI summary failed after all configured attempts.\n\nFailure scope: %s\nError class: %s", fallbackFailureScope(summarizer.FailedBriefingCategories(runErr)), aiAlertErrorClass(runErr)))
+	diagnostic := classifyAIFailure(runErr)
+	app.sendAIAlert("[news-briefing] AI summary failed", fmt.Sprintf("AI summary failed after all configured attempts.\n\nFailure scope: %s\nFailure stage: %s\nError class: %s", fallbackFailureScope(diagnostic.Categories), diagnostic.Stage, diagnostic.Code))
 }
 
 func aiAlertErrorClass(err error) string {
+	return classifyAIFailure(err).Code
+}
+
+func classifyAIFailure(err error) aiFailureDiagnostic {
+	diagnostic := aiFailureDiagnostic{Stage: "unknown", Code: "ai_summary_failed", Categories: summarizer.FailedBriefingCategories(err)}
 	switch {
 	case err == nil:
-		return "unknown"
+		diagnostic.Code = "unknown"
 	case errors.Is(err, context.DeadlineExceeded):
-		return "timeout"
+		diagnostic.Stage = "ai_cli"
+		diagnostic.Code = "timeout"
 	case errors.Is(err, context.Canceled):
-		return "canceled"
+		diagnostic.Stage = "ai_cli"
+		diagnostic.Code = "canceled"
 	case summarizer.IsInvalidPromptError(err):
-		return "invalid_prompt"
-	case len(summarizer.FailedBriefingCategories(err)) > 0:
-		return "category_validation_failed"
+		diagnostic.Stage = "prompt"
+		diagnostic.Code = "invalid_prompt"
 	default:
-		return "ai_summary_failed"
+		if stage, code, ok := summarizer.BriefingFailureDiagnostic(err); ok {
+			diagnostic.Stage = stage
+			diagnostic.Code = refineAICLIFailureCode(code, err)
+		} else if len(diagnostic.Categories) > 0 {
+			diagnostic.Stage = "category_summary"
+			diagnostic.Code = "category_validation_failed"
+		}
 	}
+	return diagnostic
+}
+
+func refineAICLIFailureCode(code string, err error) string {
+	if code != "ai_cli_failed" || err == nil {
+		return code
+	}
+	lower := strings.ToLower(err.Error())
+	for _, marker := range []string{"token_revoked", "invalidated oauth token", "refresh token has already been used"} {
+		if strings.Contains(lower, marker) {
+			return "oauth_revoked"
+		}
+	}
+	for _, marker := range []string{"server_error", "internal_error", "upstream_error", "status: 500", "status: 502", "status: 503", "status: 504"} {
+		if strings.Contains(lower, marker) {
+			return "upstream_error"
+		}
+	}
+	for _, marker := range []string{"connection reset", "i/o timeout", "eof", "stream error"} {
+		if strings.Contains(lower, marker) {
+			return "transport_error"
+		}
+	}
+	return code
+}
+
+func aiAttemptFieldName(value string) string {
+	value = strings.ToLower(strings.TrimSpace(value))
+	var builder strings.Builder
+	for _, char := range value {
+		if (char >= 'a' && char <= 'z') || (char >= '0' && char <= '9') {
+			builder.WriteRune(char)
+		} else if builder.Len() > 0 && !strings.HasSuffix(builder.String(), "_") {
+			builder.WriteByte('_')
+		}
+	}
+	name := strings.Trim(builder.String(), "_")
+	if name == "" {
+		return "attempt"
+	}
+	return name
 }
 
 func (app *app) sendAIAlert(subject string, body string) {

@@ -783,18 +783,18 @@ func (r *Runner) summarizeBriefingSingleContext(ctx context.Context, articles []
 
 	raw, err := r.callClaudeContext(ctx, prompt, r.summarizeRuntimeArgs()...)
 	if err != nil {
-		return model.BriefingSummary{}, "", err
+		return model.BriefingSummary{}, "", briefingDiagnosticError("single_summary", "ai_cli_failed", err)
 	}
 	structured, err := parseBriefingSummaryJSON(raw)
 	if err != nil {
-		return model.BriefingSummary{}, "", fmt.Errorf("parse structured briefing: %w", err)
+		return model.BriefingSummary{}, "", briefingDiagnosticError("single_summary", "invalid_json", fmt.Errorf("parse structured briefing: %w", err))
 	}
 	structured, err = validateAndNormalizeBriefingSummaryReferences(structured, promptArticles, loc)
 	if err != nil {
-		return model.BriefingSummary{}, "", fmt.Errorf("validate structured briefing references: %w", err)
+		return model.BriefingSummary{}, "", briefingDiagnosticError("single_summary", "reference_invalid", fmt.Errorf("validate structured briefing references: %w", err))
 	}
 	if err := validateCarryoverCoverage(structured, promptArticles); err != nil {
-		return model.BriefingSummary{}, "", fmt.Errorf("validate structured briefing carryover: %w", err)
+		return model.BriefingSummary{}, "", briefingDiagnosticError("single_summary", "carryover_missing", fmt.Errorf("validate structured briefing carryover: %w", err))
 	}
 	structured = validateBriefingSummaryImages(structured, promptArticles)
 	structured = remapBriefingSummarySourceArticleIDs(structured, promptToOriginal)
@@ -804,6 +804,42 @@ func (r *Runner) summarizeBriefingSingleContext(ctx context.Context, articles []
 type categorySummaryResult struct {
 	summary model.BriefingSummary
 	err     error
+}
+
+// BriefingDiagnosticError carries a stable, non-sensitive failure stage and
+// code while preserving the original error only for restricted local logs.
+type BriefingDiagnosticError struct {
+	Stage string
+	Code  string
+	Err   error
+}
+
+func (e *BriefingDiagnosticError) Error() string {
+	if e == nil || e.Err == nil {
+		return "briefing diagnostic error"
+	}
+	return e.Err.Error()
+}
+
+func (e *BriefingDiagnosticError) Unwrap() error {
+	if e == nil {
+		return nil
+	}
+	return e.Err
+}
+
+func briefingDiagnosticError(stage, code string, err error) error {
+	return &BriefingDiagnosticError{Stage: stage, Code: code, Err: err}
+}
+
+// BriefingFailureDiagnostic returns only stable allowlisted metadata and never
+// exposes the wrapped raw error.
+func BriefingFailureDiagnostic(err error) (stage, code string, ok bool) {
+	var diagnostic *BriefingDiagnosticError
+	if !errors.As(err, &diagnostic) || diagnostic == nil {
+		return "", "", false
+	}
+	return diagnostic.Stage, diagnostic.Code, true
 }
 
 // BriefingCategoryError preserves which independent category workers failed
@@ -1003,25 +1039,25 @@ func (r *Runner) editBriefingContext(ctx context.Context, partial model.Briefing
 	prompt := fmt.Sprintf(briefingEditorPrompt, minStories, maxStories, targetStories) + "\n\n---\n候选 stories JSON：\n" + string(payload)
 	raw, err := r.callClaudeContext(ctx, prompt, r.summaryEditorRuntimeArgs()...)
 	if err != nil {
-		return model.BriefingSummary{}, fmt.Errorf("edit briefing: %w", err)
+		return model.BriefingSummary{}, briefingDiagnosticError("final_editor", "ai_cli_failed", fmt.Errorf("edit briefing: %w", err))
 	}
 	var decision briefingEditorialDecision
 	if err := json.Unmarshal([]byte(stripJSONCodeFence(strings.TrimSpace(raw))), &decision); err != nil {
-		return model.BriefingSummary{}, fmt.Errorf("parse briefing editorial decision: %w", err)
+		return model.BriefingSummary{}, briefingDiagnosticError("final_editor", "invalid_json", fmt.Errorf("parse briefing editorial decision: %w", err))
 	}
 	selected, err := selectedEditorialStories(partial.Stories, decision.SelectedStoryIDs, minStories, maxStories)
 	if err != nil {
-		return model.BriefingSummary{}, err
+		return model.BriefingSummary{}, briefingDiagnosticError("final_editor", "selection_invalid", err)
 	}
 	overview, repairedOverviewCategories, err := normalizedEditorialOverview(decision.OverviewGroups, selected, categoryOrder)
 	if err != nil {
-		return model.BriefingSummary{}, err
+		return model.BriefingSummary{}, briefingDiagnosticError("final_editor", "overview_invalid", err)
 	}
 	if len(repairedOverviewCategories) > 0 {
 		logutil.Warnf("AI editorial overview repaired from selected stories: categories=%s", strings.Join(repairedOverviewCategories, ","))
 	}
 	if err := validateBriefingSynthesis(decision.Situation, decision.XHSTopics, decision.Directions); err != nil {
-		return model.BriefingSummary{}, fmt.Errorf("validate briefing editorial decision: %w", err)
+		return model.BriefingSummary{}, briefingDiagnosticError("final_editor", "synthesis_invalid", fmt.Errorf("validate briefing editorial decision: %w", err))
 	}
 	return model.BriefingSummary{
 		OverviewGroups: overview,
@@ -1207,24 +1243,24 @@ func (r *Runner) summarizeCategoryContext(ctx context.Context, articles []model.
 	}
 	raw, err := r.callClaudeContext(ctx, prompt, r.summarizeRuntimeArgs()...)
 	if err != nil {
-		return model.BriefingSummary{}, err
+		return model.BriefingSummary{}, briefingDiagnosticError("category_summary", "ai_cli_failed", err)
 	}
 	structured, err := parseBriefingSummaryJSON(raw)
 	if err != nil {
-		return model.BriefingSummary{}, fmt.Errorf("parse structured category briefing: %w", err)
+		return model.BriefingSummary{}, briefingDiagnosticError("category_summary", "invalid_json", fmt.Errorf("parse structured category briefing: %w", err))
 	}
 	normalizeCategoryBriefingFields(&structured, category)
 	structured, err = validateAndNormalizeBriefingSummaryReferences(structured, categoryArticles, loc)
 	if err != nil {
-		return model.BriefingSummary{}, fmt.Errorf("validate category briefing references: %w", err)
+		return model.BriefingSummary{}, briefingDiagnosticError("category_summary", "reference_invalid", fmt.Errorf("validate category briefing references: %w", err))
 	}
 	if err := validateCarryoverCoverage(structured, categoryArticles); err != nil {
-		return model.BriefingSummary{}, fmt.Errorf("validate category briefing carryover: %w", err)
+		return model.BriefingSummary{}, briefingDiagnosticError("category_summary", "carryover_missing", fmt.Errorf("validate category briefing carryover: %w", err))
 	}
 	structured = validateBriefingSummaryImages(structured, categoryArticles)
 	structured.OverviewGroups, err = normalizedCategoryOverview(structured.OverviewGroups, category)
 	if err != nil {
-		return model.BriefingSummary{}, err
+		return model.BriefingSummary{}, briefingDiagnosticError("category_summary", "overview_invalid", err)
 	}
 	cache.put(prompt, structured)
 	return remapBriefingSummarySourceArticleIDs(structured, originalIndexes), nil
@@ -1275,14 +1311,14 @@ func (r *Runner) synthesizeBriefingContext(ctx context.Context, partial model.Br
 	prompt := briefingSynthesisPrompt + "\n\n---\n分类摘要 JSON：\n" + string(payload)
 	raw, err := r.callClaudeContext(ctx, prompt, r.summarizeRuntimeArgs()...)
 	if err != nil {
-		return briefingSynthesis{}, fmt.Errorf("synthesize briefing: %w", err)
+		return briefingSynthesis{}, briefingDiagnosticError("final_synthesis", "ai_cli_failed", fmt.Errorf("synthesize briefing: %w", err))
 	}
 	var synthesis briefingSynthesis
 	if err := json.Unmarshal([]byte(stripJSONCodeFence(strings.TrimSpace(raw))), &synthesis); err != nil {
-		return briefingSynthesis{}, fmt.Errorf("parse briefing synthesis: %w", err)
+		return briefingSynthesis{}, briefingDiagnosticError("final_synthesis", "invalid_json", fmt.Errorf("parse briefing synthesis: %w", err))
 	}
 	if err := validateBriefingSynthesis(synthesis.Situation, synthesis.XHSTopics, synthesis.Directions); err != nil {
-		return briefingSynthesis{}, fmt.Errorf("validate briefing synthesis: %w", err)
+		return briefingSynthesis{}, briefingDiagnosticError("final_synthesis", "synthesis_invalid", fmt.Errorf("validate briefing synthesis: %w", err))
 	}
 	return synthesis, nil
 }
