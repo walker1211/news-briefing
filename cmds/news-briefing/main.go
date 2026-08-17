@@ -102,13 +102,16 @@ Commands:
   news-briefing alerts            打印过去 24 小时 X 强事件候选（不发邮件，不调用 AI）
   news-briefing x routes          导出 rsshub-stack 可用的 X 账号 route 列表
   news-briefing x ready [flags]   上游 X visible 数据落地后立即处理指定窗口
+  news-briefing carryover add --url URL --target "YYYY-MM-DD HH:MM"  添加一次性补充新闻
+  news-briefing carryover list    查看补充新闻状态
+  news-briefing carryover remove --id ID  删除补充新闻
   news-briefing serve             守护模式，按 configs/config.yaml 中 schedule 配置自动执行
   news-briefing deep <topic>      深挖某话题，生成话题深挖包
   news-briefing resend-md --file <path>  按已有 Markdown 重发邮件
   news-briefing help              显示此帮助
 
 Note:
-  可执行文件名为 news-briefing；子命令包括 run / regen / fetch / alerts / x routes / x ready / serve / deep / resend-md / help
+  可执行文件名为 news-briefing；子命令包括 run / regen / fetch / alerts / x / carryover / serve / deep / resend-md / help
 
 Flags (for run):
   --raw                  同时显示原始文章列表

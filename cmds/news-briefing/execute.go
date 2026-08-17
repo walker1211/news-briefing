@@ -281,6 +281,12 @@ func executeContext(ctx context.Context, app *app, cmd command) error {
 		return app.runAlertsContext(ctx)
 	case xRoutesCommand:
 		return app.runXRoutesContext(ctx)
+	case carryoverAddCommand:
+		return app.runCarryoverAddContext(ctx, c)
+	case carryoverListCommand:
+		return app.runCarryoverListContext(ctx)
+	case carryoverRemoveCommand:
+		return app.runCarryoverRemoveContext(ctx, c)
 	case xReadyCommand:
 		return app.runXReadyContext(ctx, c)
 	case serveCommand:
@@ -767,6 +773,13 @@ func (app *app) runScheduledBriefingContextWithReporter(ctx context.Context, win
 	if err != nil {
 		return err
 	}
+	result, carryoverCount, err := app.injectCarryovers(window.To, result)
+	if err != nil {
+		return err
+	}
+	if reporter != nil && carryoverCount > 0 {
+		reporter.updateFields("carryover", map[string]string{"carryover_pending": fmt.Sprintf("%d", carryoverCount)})
+	}
 	logutil.Printf("Stage fetch completed in %s", time.Since(fetchStarted).Round(time.Second))
 	limitStarted := time.Now()
 	var limitReport articleLimitReport
@@ -1113,10 +1126,14 @@ func filterArticlesByCategoryLimitsWithRanking(articles []model.Article, limits 
 			continue
 		}
 		priority := ranking.priorities[strings.TrimSpace(article.Source)]
+		carryoverBoost := 0
+		if strings.TrimSpace(article.CarryoverID) != "" {
+			carryoverBoost = 1_000_000
+		}
 		byCategory[category] = append(byCategory[category], rankedArticleIndex{
 			index:            index,
 			priority:         priority,
-			baseScore:        priority*5 + articleKeywordRankingScore(article, ranking.categories[category]) + articleFreshnessRankingScore(article.Published, newestByCategory[category]),
+			baseScore:        carryoverBoost + priority*5 + articleKeywordRankingScore(article, ranking.categories[category]) + articleFreshnessRankingScore(article.Published, newestByCategory[category]),
 			published:        article.Published,
 			titleFingerprint: articleTitleFingerprint(article.Title),
 		})
@@ -1552,7 +1569,9 @@ func (app *app) renderBriefingContextWithReporterAndSourceStats(ctx context.Cont
 	var aiArticles []model.Article
 	finalSelectedArticles := []model.Article(nil)
 	seenArticlesToMark := seenArticles
-	if outputNeedsTranslatedContent(app.cfg.Output.Mode) {
+	if !outputNeedsTranslatedContent(app.cfg.Output.Mode) {
+		finalSelectedArticles = append([]model.Article(nil), articles...)
+	} else {
 		logutil.Println("Generating summary with AI CLI...")
 		aiStarted := time.Now()
 		result, err := app.summarizeBriefingWithFallback(ctx, articles, categoryOrder, app.displayLocation(), sendEmail, reporter)
@@ -1569,6 +1588,8 @@ func (app *app) renderBriefingContextWithReporterAndSourceStats(ctx context.Cont
 		if structuredSummary != nil {
 			finalSelectedArticles = briefingSelectedArticles(structuredSummary, aiArticles)
 			seenArticlesToMark = eligibleSelectedArticles(finalSelectedArticles, seenArticles)
+		} else if len(carryoverIDs(aiArticles)) > 0 {
+			return fmt.Errorf("carryover requires structured briefing output")
 		}
 	}
 	body, err := app.output.composeBody(commandPath, app.cfg.Output.Mode, content)
@@ -1630,6 +1651,12 @@ func (app *app) renderBriefingContextWithReporterAndSourceStats(ctx context.Cont
 		}); err != nil {
 			return fmt.Errorf("mark seen: %w", err)
 		}
+	}
+	if ids := carryoverIDs(finalSelectedArticles); len(ids) > 0 {
+		if err := app.carryoverStore().Consume(ctx, ids, path); err != nil {
+			return fmt.Errorf("consume carryover: %w", err)
+		}
+		logutil.Printf("Carryover consumed: entries=%d output=%s", len(ids), path)
 	}
 	return nil
 }

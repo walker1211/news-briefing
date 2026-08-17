@@ -64,6 +64,7 @@ content_type 必须按主体内容选择：news=新闻事件，tool=可直接使
 AI/科技分类中，白名单 X 账号直接发布的可操作产品能力、模型规格、上下文容量、API/CLI 配置、限额或访问方式变化属于高价值 tool 更新；只要包含明确产品或模型名和具体变化，即使暂时只有这一条直接来源也应保留。尤其不要把模型上下文从常规上限扩展到 1M tokens 之类会显著改变实际工作流的能力变化，当作普通技巧或低影响动态删除。
 category 必须逐字复制输入新闻条目的分类名；news、tool、case、insight 只能写入 content_type，绝不能写入 category。
 source_article_ids 必须使用输入新闻条目的 1-based 编号；同一事件有官方/一手来源和独立媒体来源时应合并并列出所有来源编号。优先使用 primary 与 original 来源交叉核验；radar/repost 只用于发现线索或补充讨论，不能取代可获得的一手或原创来源。
+标记为 Editorial: carryover_required 的条目是人工指定给本窗口的一次性补充，必须被某个 story 的 source_article_ids 引用；可以与同事件合并，但不能静默删除。
 每个 story 只能引用与自身 category 完全相同的新闻条目。不要输出 source_line；来源名称和时间会由程序根据 source_article_ids 确定性生成。
 image_url 只能使用输入新闻条目中的 Image 字段原值；没有可用图片时使用空字符串。不要编造、改写或重新托管图片 URL。不要使用 tracking pixel、RSS 统计图、透明占位图或与 story 主体事件无直接关系的配图。多条新闻合并为同一 story 时，如果无法明确判断哪张图直接对应主标题事件，就把 image_url 设为空字符串。AI/科技 分类下的重要 story 如果 source_article_ids 对应新闻有 Image 字段，应优先使用其中最相关且确定对应的一张。
 xhs_topics 输出 3 个适合整篇简报的小红书话题，最多 4 个；每项不要带 #、空格或特殊符号，优先使用平台上容易识别的通用话题，不要直接复制冗长标题。
@@ -96,6 +97,7 @@ const categoryBriefingPrompt = `你是一个国际新闻编辑。请只整理输
 
 同一事件的多条新闻应合并；stories 按重要程度排序。summary 要包含关键事实、背景、数字、参与方和最新进展，impact 要具体说明影响对象与后续变量。
 AI/科技分类中，白名单 X 账号直接发布的可操作产品能力、模型规格、上下文容量、API/CLI 配置、限额或访问方式变化属于高价值 tool 更新；只要包含明确产品或模型名和具体变化，即使暂时只有这一条直接来源也应保留。尤其不要把模型上下文从常规上限扩展到 1M tokens 之类会显著改变实际工作流的能力变化，当作普通技巧或低影响动态删除。
+标记为 Editorial: carryover_required 的条目是人工指定给本窗口的一次性补充，必须被某个 story 的 source_article_ids 引用；可以与同事件合并，但不能静默删除。
 category 必须逐字复制“当前分类”；news、tool、case、insight 只能写入 content_type，绝不能写入 category。content_type 必须是 news、tool、case、insight 之一，不使用固定类型配额。source_article_ids 必须使用输入条目的 1-based 编号，且只能引用当前分类；同一事件有 primary 与 original 来源时应合并引用，radar/repost 不能取代可获得的一手或原创来源。image_url 只能原样使用对应来源条目的 Image 字段；没有明确相关的可用图片时输出空字符串。overview_groups 必须且只能包含当前分类。`
 
 const briefingSynthesisPrompt = `你是一个国际新闻主编。下面是已经按分类完成的结构化新闻摘要。
@@ -133,6 +135,7 @@ const briefingEditorPrompt = `你是一个国际新闻主编。下面是由分�
 }
 
 selected_story_ids 只能引用输入中存在的 story_id，每个 ID 只能出现一次，并按全局重要性从高到低排列。不要重写候选 story 的标题、摘要、影响、图片或来源，程序会按 ID 复用分类编辑的原文。
+候选中 carryover_required=true 的 story 是人工指定给本窗口的一次性补充，selected_story_ids 必须全部包含；可以与其他候选共同排序，但不能静默删除。
 不要使用固定分类配额：分类数量应由当天新闻的重要性决定。优先保留影响范围大、时效强、事实或数字充分、有明确后续变量的内容；删除同一事件的跨分类重复、弱相关拼接、纯宣传、低信息量和仅有情绪无事实支撑的候选。
 内容类型也不使用固定配额：在质量相近时兼顾 news、tool、case、insight 的阅读价值；当天某类确实没有高质量内容时允许为零，重大事件密集时允许 news 自然增多。证据等级优先 corroborated，其次 supported；single_source 的重要官方发布可以保留，但不要让仅有 radar/repost 线索的内容挤掉证据更扎实的候选。
 来自白名单 X 账号、已经被分类编辑保留的可操作产品能力或模型规格变化，应按真实用户影响评估，而不是仅因 single_source/radar 自动降级删除。模型上下文扩展到 1M tokens、关键 API/CLI 配置、限额和访问方式变化属于应优先保留的高价值 tool；存在同事件官方来源时合并来源，不存在时可保留直接发布并清楚维持其证据等级。
@@ -790,6 +793,9 @@ func (r *Runner) summarizeBriefingSingleContext(ctx context.Context, articles []
 	if err != nil {
 		return model.BriefingSummary{}, "", fmt.Errorf("validate structured briefing references: %w", err)
 	}
+	if err := validateCarryoverCoverage(structured, promptArticles); err != nil {
+		return model.BriefingSummary{}, "", fmt.Errorf("validate structured briefing carryover: %w", err)
+	}
 	structured = validateBriefingSummaryImages(structured, promptArticles)
 	structured = remapBriefingSummarySourceArticleIDs(structured, promptToOriginal)
 	return structured, output.StructuredBriefingMarkdown(structured, categoryOrder), nil
@@ -1052,6 +1058,14 @@ func selectedEditorialStories(candidates []model.BriefingStory, ids []int, minSt
 		seen[id] = struct{}{}
 		selected = append(selected, candidates[id-1])
 	}
+	for index, candidate := range candidates {
+		if !candidate.CarryoverRequired {
+			continue
+		}
+		if _, ok := seen[index+1]; !ok {
+			return nil, fmt.Errorf("validate briefing editorial decision: carryover story id %d must be selected", index+1)
+		}
+	}
 	return selected, nil
 }
 
@@ -1203,6 +1217,9 @@ func (r *Runner) summarizeCategoryContext(ctx context.Context, articles []model.
 	structured, err = validateAndNormalizeBriefingSummaryReferences(structured, categoryArticles, loc)
 	if err != nil {
 		return model.BriefingSummary{}, fmt.Errorf("validate category briefing references: %w", err)
+	}
+	if err := validateCarryoverCoverage(structured, categoryArticles); err != nil {
+		return model.BriefingSummary{}, fmt.Errorf("validate category briefing carryover: %w", err)
 	}
 	structured = validateBriefingSummaryImages(structured, categoryArticles)
 	structured.OverviewGroups, err = normalizedCategoryOverview(structured.OverviewGroups, category)
@@ -1358,9 +1375,35 @@ func validateAndNormalizeBriefingSummaryReferences(summary model.BriefingSummary
 			story.ContentType = model.ContentTypeNews
 		}
 		story.EvidenceLevel = briefingEvidenceLevel(sources)
+		story.CarryoverRequired = false
+		for _, source := range sources {
+			if strings.TrimSpace(source.CarryoverID) != "" {
+				story.CarryoverRequired = true
+				break
+			}
+		}
 		story.SourceLine = deterministicBriefingSourceLine(sources, loc)
 	}
 	return summary, nil
+}
+
+func validateCarryoverCoverage(summary model.BriefingSummary, articles []model.Article) error {
+	referenced := make(map[int]struct{})
+	for _, story := range summary.Stories {
+		for _, id := range story.SourceArticleIDs {
+			referenced[id] = struct{}{}
+		}
+	}
+	for index, article := range articles {
+		if strings.TrimSpace(article.CarryoverID) == "" {
+			continue
+		}
+		id := index + 1
+		if _, ok := referenced[id]; !ok {
+			return fmt.Errorf("carryover article %d (%s) must be referenced", id, article.Title)
+		}
+	}
+	return nil
 }
 
 func deterministicBriefingSourceLine(articles []model.Article, loc *time.Location) string {

@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/walker1211/news-briefing/internal/config"
+	"github.com/walker1211/news-briefing/internal/model"
 )
 
 func TestFetchWindowDetailedIncludesXVisibleNDJSON(t *testing.T) {
@@ -1220,6 +1221,47 @@ func TestReadXVisibleNDJSONFileReadsGzip(t *testing.T) {
 	}
 	if len(items) != 1 || items[0].StatusURL != "https://x.com/OpenAI/status/gzip" {
 		t.Fatalf("items = %#v, want gzip-decoded X visible article", items)
+	}
+}
+
+func TestFindXVisibleArticleByURLReadsAllowedSnapshot(t *testing.T) {
+	dir := t.TempDir()
+	accountsPath := filepath.Join(dir, "accounts.ndjson")
+	content := `{"kind":"x-visible-article","schemaVersion":1,"targetRaw":"/twitter/user/team","targetType":"account","targetUrl":"https://x.com/team","sourceUrl":"https://x.com/team","finalUrl":"https://x.com/team","text":"Codex supports a 1M-token context window","datetime":"2026-08-17T04:12:00Z","statusUrl":"https://x.com/team/status/1","statusLinks":["https://x.com/team/status/1"],"linkCount":1}`
+	if err := os.WriteFile(accountsPath, []byte(content+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg := config.XAccountsConfig{
+		AccountsPath: accountsPath,
+		Category:     "AI/科技",
+		OriginalOnly: true,
+		Accounts:     []config.XAccountConfig{{Handle: "team"}},
+	}
+	article, err := FindXVisibleArticleByURL(cfg, "https://x.com/team/status/1?ref=test")
+	if err != nil {
+		t.Fatalf("FindXVisibleArticleByURL() error = %v", err)
+	}
+	if article.Link != "https://x.com/team/status/1" || article.Source != "X/@team" || article.SourceRole != model.SourceRoleRadar {
+		t.Fatalf("article = %#v", article)
+	}
+}
+
+func TestFindXVisibleArticleByURLReadsHistoryArchive(t *testing.T) {
+	dir := t.TempDir()
+	historyDir := filepath.Join(dir, "history")
+	writeXVisibleHistoryArchive(t, historyDir, "20260817T000000Z", "2026-08-16T10:00:00Z", "2026-08-17T00:00:00Z",
+		`{"kind":"x-visible-article","schemaVersion":1,"targetRaw":"/twitter/user/team","targetType":"account","targetUrl":"https://x.com/team","sourceUrl":"https://x.com/team","finalUrl":"https://x.com/team","text":"Codex supports a 1M-token context window","datetime":"2026-08-16T20:12:00Z","statusUrl":"https://x.com/team/status/history"}
+`, "")
+	cfg := config.XAccountsConfig{
+		AccountsPath: filepath.Join(dir, "missing.ndjson"),
+		HistoryDir:   historyDir,
+		Category:     "AI/科技",
+		OriginalOnly: true,
+		Accounts:     []config.XAccountConfig{{Handle: "team"}},
+	}
+	article, err := FindXVisibleArticleByURL(cfg, "https://x.com/team/status/history")
+	if err != nil || article.Link != "https://x.com/team/status/history" {
+		t.Fatalf("FindXVisibleArticleByURL() = %#v, %v", article, err)
 	}
 }
 

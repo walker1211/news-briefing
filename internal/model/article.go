@@ -3,14 +3,15 @@ package model
 import "time"
 
 type Article struct {
-	Title      string    `json:"title"`
-	Link       string    `json:"link"`
-	Summary    string    `json:"summary"`
-	ImageURL   string    `json:"image_url,omitempty"`
-	Source     string    `json:"source"`
-	SourceRole string    `json:"source_role,omitempty"`
-	Category   string    `json:"category"`
-	Published  time.Time `json:"published"`
+	Title       string    `json:"title"`
+	Link        string    `json:"link"`
+	Summary     string    `json:"summary"`
+	ImageURL    string    `json:"image_url,omitempty"`
+	Source      string    `json:"source"`
+	SourceRole  string    `json:"source_role,omitempty"`
+	CarryoverID string    `json:"carryover_id,omitempty"`
+	Category    string    `json:"category"`
+	Published   time.Time `json:"published"`
 }
 
 type Briefing struct {
