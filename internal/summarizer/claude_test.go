@@ -64,6 +64,20 @@ func TestBriefingPromptsKeepCategoryAndContentTypeDistinct(t *testing.T) {
 	}
 }
 
+func TestBriefingPromptsPreserveHighImpactProductCapabilityUpdates(t *testing.T) {
+	for name, prompt := range map[string]string{
+		"full":     briefingPrompt,
+		"category": categoryBriefingPrompt,
+		"editor":   briefingEditorPrompt,
+	} {
+		for _, want := range []string{"1M tokens", "上下文", "API/CLI", "高价值 tool"} {
+			if !strings.Contains(prompt, want) {
+				t.Fatalf("%s prompt missing product capability rule %q", name, want)
+			}
+		}
+	}
+}
+
 func TestBriefingPromptRequestsReusableXHSTopics(t *testing.T) {
 	for _, want := range []string{
 		`"xhs_topics": ["话题1", "话题2", "话题3"]`,

@@ -366,7 +366,9 @@ schedule_prefetch_wait_timeout: 2m
 
 Watch 默认走“索引快检 + 正文深检”：索引新增或变化会立即读取正文；未变化文章按 `watch.deep_verify_interval` 到期后，以 `watch.deep_verify_batch_size` 为上限按最旧检查时间轮转。这样仍能发现 URL、标题和摘要均未变化时的正文静默更新，同时避免每个简报窗口下载全部历史正文。
 
-RSS 源会在 `<output.dir>/state/rss-cache` 保存压缩响应和 ETag/Last-Modified 元数据。服务端返回 `304 Not Modified` 时复用已缓存 Feed；每份 `.source-stats.json` 同时记录各来源的抓取耗时、响应字节数与缓存状态，便于识别大 Feed 和低有效率来源。
+RSS 源会在 `<output.dir>/state/rss-cache` 保存压缩响应和 ETag/Last-Modified 元数据。服务端返回 `304 Not Modified` 时复用已缓存 Feed；每份 `.source-stats.json` 同时记录各来源的抓取耗时、响应字节数、缓存状态、进入 AI 的数量和最终入选数量，便于识别大 Feed、低有效率来源及 AI 编辑阶段的损耗。
+
+结构化简报只把最终 story 通过 `source_article_ids` 实际引用的主新闻写入 `seen.json`。通过关键词但被分类编辑或最终编辑舍弃的候选不会被提前标记已读，可在后续仍覆盖其发布时间的窗口中再次竞争；Watch 使用自己的状态库，不受此规则影响。
 
 注意：`serve` 启动时只恢复上述状态文件里尚未结束的窗口，不会推算或补跑服务完全错过的历史触发点。例如 07:50 停服、08:01 启动时不会自动创建 08:00 窗口，按需使用 `regen` 手动补跑。
 

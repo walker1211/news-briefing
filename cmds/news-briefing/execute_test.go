@@ -2138,6 +2138,55 @@ func TestRunBriefingMarksSeenAfterWriteMarkdownSucceeds(t *testing.T) {
 	}
 }
 
+func TestRenderBriefingMarksOnlyFinalSelectedMainArticles(t *testing.T) {
+	articles := []model.Article{
+		{Title: "selected", Link: "https://example.com/selected", Source: "X/@team", Category: "AI/科技"},
+		{Title: "omitted", Link: "https://example.com/omitted", Source: "X/@team", Category: "AI/科技"},
+		{Title: "watch", Link: "https://example.com/watch", Source: "Watch", Category: "AI/科技"},
+	}
+	eligibleMain := articles[:2]
+	var marked []model.Article
+	app := &app{
+		cfg: &config.Config{Output: config.OutputCfg{Dir: t.TempDir(), Mode: model.OutputModeTranslatedOnly}},
+		fetch: fetchDeps{markSeen: func(got []model.Article) error {
+			marked = append([]model.Article(nil), got...)
+			return nil
+		}},
+		ai: aiDeps{summarizeBriefingContext: func(context.Context, []model.Article, []string, *time.Location) (model.BriefingSummary, string, error) {
+			return model.BriefingSummary{Stories: []model.BriefingStory{
+				{Title: "selected story", SourceArticleIDs: []int{1, 1}},
+				{Title: "watch story", SourceArticleIDs: []int{3}},
+			}}, "summary", nil
+		}},
+		output: outputDeps{
+			composeBody:   func(string, model.OutputMode, model.OutputContent) (string, error) { return "body", nil },
+			printCLI:      func(*model.Briefing) {},
+			printFailed:   func([]fetcher.FailedSource) {},
+			writeMarkdown: func(*model.Briefing, string) (string, error) { return "briefing.md", nil },
+		},
+		suppressPublishHook: true,
+	}
+
+	if err := app.renderBriefingContext(context.Background(), "run", "26.08.17", "0800", articles, nil, eligibleMain, nil, false, false); err != nil {
+		t.Fatalf("renderBriefingContext() error = %v", err)
+	}
+	if len(marked) != 1 || marked[0].Link != articles[0].Link {
+		t.Fatalf("markSeen() articles = %#v, want only final selected eligible article", marked)
+	}
+}
+
+func TestBriefingSelectedArticlesIgnoresInvalidAndDuplicateReferences(t *testing.T) {
+	articles := []model.Article{{Title: "one"}, {Title: "two"}}
+	summary := &model.BriefingSummary{Stories: []model.BriefingStory{
+		{SourceArticleIDs: []int{2, 2, 0, 3}},
+		{SourceArticleIDs: []int{1}},
+	}}
+	got := briefingSelectedArticles(summary, articles)
+	if !reflect.DeepEqual(got, []model.Article{articles[1], articles[0]}) {
+		t.Fatalf("briefingSelectedArticles() = %#v", got)
+	}
+}
+
 func TestExecuteServeScheduledBriefingUsesServePathForOutputMode(t *testing.T) {
 	t.Setenv("EMAIL_SMTP_AUTH_CODE", "test")
 	var gotPath string

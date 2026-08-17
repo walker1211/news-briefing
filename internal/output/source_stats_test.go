@@ -49,3 +49,23 @@ func TestWriteSourceStatsSidecar(t *testing.T) {
 		t.Fatalf("decoded report = %#v", got)
 	}
 }
+
+func TestSourceStatsTracksEnteredAIAndFinalSelectionSeparately(t *testing.T) {
+	report := model.SourceStatsReport{Sources: []model.SourceStatsEntry{{Source: "X/@team", Category: "AI/科技"}}}
+	articles := []model.Article{
+		{Source: "X/@team", Category: "AI/科技"},
+		{Source: "X/@team", Category: "AI/科技"},
+	}
+	report.SetEnteredAI(articles)
+	report.SetSelectedFinal(articles[:1])
+
+	if got := report.Sources[0].EnteredAI; got != 2 {
+		t.Fatalf("EnteredAI = %d, want 2", got)
+	}
+	if got := report.Sources[0].SelectedFinal; got != 1 {
+		t.Fatalf("SelectedFinal = %d, want 1", got)
+	}
+	if report.Totals.EnteredAI != 2 || report.Totals.SelectedFinal != 1 {
+		t.Fatalf("Totals = %#v", report.Totals)
+	}
+}

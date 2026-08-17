@@ -1550,6 +1550,8 @@ func (app *app) renderBriefingContextWithReporterAndSourceStats(ctx context.Cont
 	summary := ""
 	var structuredSummary *model.BriefingSummary
 	var aiArticles []model.Article
+	finalSelectedArticles := []model.Article(nil)
+	seenArticlesToMark := seenArticles
 	if outputNeedsTranslatedContent(app.cfg.Output.Mode) {
 		logutil.Println("Generating summary with AI CLI...")
 		aiStarted := time.Now()
@@ -1564,6 +1566,10 @@ func (app *app) renderBriefingContextWithReporterAndSourceStats(ctx context.Cont
 		content.Original = output.GroupedArticleListView(articles, categoryOrder, app.displayLocation())
 		content.Translated = summary
 		aiArticles = articles
+		if structuredSummary != nil {
+			finalSelectedArticles = briefingSelectedArticles(structuredSummary, aiArticles)
+			seenArticlesToMark = eligibleSelectedArticles(finalSelectedArticles, seenArticles)
+		}
 	}
 	body, err := app.output.composeBody(commandPath, app.cfg.Output.Mode, content)
 	if err != nil {
@@ -1607,6 +1613,7 @@ func (app *app) renderBriefingContextWithReporterAndSourceStats(ctx context.Cont
 		stats.Date = date
 		stats.Period = period
 		stats.SetEnteredAI(aiArticles)
+		stats.SetSelectedFinal(finalSelectedArticles)
 		statsPath, err := output.WriteSourceStatsSidecar(stats, path)
 		if err != nil {
 			return err
@@ -1617,14 +1624,72 @@ func (app *app) renderBriefingContextWithReporterAndSourceStats(ctx context.Cont
 	if err := app.runPostMarkdownActions(ctx, briefing, path, sendEmail, failed, reporter); err != nil {
 		return err
 	}
-	if app.fetch.markSeen != nil && len(seenArticles) > 0 {
+	if app.fetch.markSeen != nil && len(seenArticlesToMark) > 0 {
 		if err := runIfActive(ctx, func() error {
-			return app.fetch.markSeen(seenArticles)
+			return app.fetch.markSeen(seenArticlesToMark)
 		}); err != nil {
 			return fmt.Errorf("mark seen: %w", err)
 		}
 	}
 	return nil
+}
+
+func briefingSelectedArticles(summary *model.BriefingSummary, articles []model.Article) []model.Article {
+	if summary == nil || len(articles) == 0 {
+		return nil
+	}
+	seen := make(map[int]struct{})
+	selected := make([]model.Article, 0)
+	for _, story := range summary.Stories {
+		for _, id := range story.SourceArticleIDs {
+			index := id - 1
+			if index < 0 || index >= len(articles) {
+				continue
+			}
+			if _, ok := seen[index]; ok {
+				continue
+			}
+			seen[index] = struct{}{}
+			selected = append(selected, articles[index])
+		}
+	}
+	return selected
+}
+
+func eligibleSelectedArticles(selected []model.Article, eligible []model.Article) []model.Article {
+	if len(selected) == 0 || len(eligible) == 0 {
+		return nil
+	}
+	allowed := make(map[string]struct{}, len(eligible))
+	for _, article := range eligible {
+		allowed[briefingArticleIdentity(article)] = struct{}{}
+	}
+	seen := make(map[string]struct{}, len(selected))
+	result := make([]model.Article, 0, len(selected))
+	for _, article := range selected {
+		key := briefingArticleIdentity(article)
+		if _, ok := allowed[key]; !ok {
+			continue
+		}
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		result = append(result, article)
+	}
+	return result
+}
+
+func briefingArticleIdentity(article model.Article) string {
+	if link := strings.TrimSpace(article.Link); link != "" {
+		return "link:" + link
+	}
+	return strings.Join([]string{
+		"fallback",
+		strings.TrimSpace(article.Source),
+		strings.TrimSpace(article.Title),
+		article.Published.UTC().Format(time.RFC3339Nano),
+	}, "\x00")
 }
 
 func (app *app) runPostMarkdownActions(ctx context.Context, briefing *model.Briefing, markdownPath string, sendEmail bool, _ []fetcher.FailedSource, reporter *scheduledRunReporter) error {
