@@ -47,6 +47,41 @@ func TestScheduledRunIDMatchesAutomationWindowNormalization(t *testing.T) {
 	}
 }
 
+func TestScheduledReporterPersistsAIFailureAndRecoveryMetadata(t *testing.T) {
+	app := newScheduledOnceTestApp(t, nil)
+	window := scheduledStateTestWindow()
+	leaseID, acquired, _, err := app.acquireScheduledRunWindow(window, "test")
+	if err != nil || !acquired {
+		t.Fatalf("acquireScheduledRunWindow() = %q, %v, %v", leaseID, acquired, err)
+	}
+	reporter := &scheduledRunReporter{app: app, leaseID: leaseID, window: window}
+	reporter.updateAIFailure(
+		aiBriefingAttempt{name: "primary", articles: []model.Article{{Category: "AI/科技"}}},
+		aiFailureDiagnostic{Stage: "final_editor", Code: "overview_invalid", Categories: []string{"AI/科技"}},
+		37*time.Second,
+	)
+	reporter.updateAIStage(aiBriefingAttempt{name: "reduced", fallback: true}, "ai_summary", 0)
+	reporter.updateAISuccess(aiBriefingAttempt{name: "reduced", fallback: true}, 21*time.Second)
+
+	record := mustScheduledWindowState(t, app, window)
+	want := map[string]string{
+		"ai_primary_status":            "failed",
+		"ai_primary_error_stage":       "final_editor",
+		"ai_primary_error_code":        "overview_invalid",
+		"ai_primary_failed_categories": "AI/科技",
+		"ai_primary_elapsed":           "37s",
+		"ai_reduced_status":            "succeeded",
+		"ai_reduced_elapsed":           "21s",
+		"ai_recovered":                 "true",
+		"ai_recovered_by":              "reduced",
+	}
+	for key, value := range want {
+		if record.Fields[key] != value {
+			t.Fatalf("record.Fields[%q] = %q, want %q; fields=%#v", key, record.Fields[key], value, record.Fields)
+		}
+	}
+}
+
 func TestScheduledBriefingOnceIsIdempotentAfterDone(t *testing.T) {
 	app := newScheduledOnceTestApp(t, nil)
 	window := scheduledStateTestWindow()

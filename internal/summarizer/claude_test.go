@@ -414,6 +414,18 @@ func TestFailedBriefingCategoriesReturnsCopy(t *testing.T) {
 	}
 }
 
+func TestBriefingFailureDiagnosticReturnsStableMetadataOnly(t *testing.T) {
+	raw := errors.New("secret token and private endpoint must stay local")
+	err := fmt.Errorf("wrapped: %w", briefingDiagnosticError("final_editor", "overview_invalid", raw))
+	stage, code, ok := BriefingFailureDiagnostic(err)
+	if !ok || stage != "final_editor" || code != "overview_invalid" {
+		t.Fatalf("BriefingFailureDiagnostic() = %q, %q, %v", stage, code, ok)
+	}
+	if strings.Contains(stage+code, "secret") || strings.Contains(stage+code, "endpoint") {
+		t.Fatalf("diagnostic leaked raw error: %q/%q", stage, code)
+	}
+}
+
 func TestValidateBriefingSummaryImagesSkipsTrackingPixelBackfill(t *testing.T) {
 	articles := []model.Article{{ImageURL: "https://media.npr.org/include/images/tracking/npr-rss-pixel.png?story=nx-s1"}}
 	summary := model.BriefingSummary{Stories: []model.BriefingStory{{SourceArticleIDs: []int{1}}}}

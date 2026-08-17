@@ -99,6 +99,39 @@ func (r *scheduledRunReporter) updateAIStage(attempt aiBriefingAttempt, stage st
 	r.updateFields(stage, fields)
 }
 
+func (r *scheduledRunReporter) updateAIFailure(attempt aiBriefingAttempt, diagnostic aiFailureDiagnostic, elapsed time.Duration) {
+	if r == nil {
+		return
+	}
+	prefix := "ai_" + aiAttemptFieldName(attempt.name)
+	fields := map[string]string{
+		prefix + "_status":      "failed",
+		prefix + "_error_stage": diagnostic.Stage,
+		prefix + "_error_code":  diagnostic.Code,
+		prefix + "_elapsed":     elapsed.Round(time.Second).String(),
+	}
+	if len(diagnostic.Categories) > 0 {
+		fields[prefix+"_failed_categories"] = strings.Join(diagnostic.Categories, ",")
+	}
+	r.updateFields("ai_summary_failed", fields)
+}
+
+func (r *scheduledRunReporter) updateAISuccess(attempt aiBriefingAttempt, elapsed time.Duration) {
+	if r == nil {
+		return
+	}
+	prefix := "ai_" + aiAttemptFieldName(attempt.name)
+	fields := map[string]string{
+		prefix + "_status":  "succeeded",
+		prefix + "_elapsed": elapsed.Round(time.Second).String(),
+	}
+	if attempt.fallback {
+		fields["ai_recovered"] = "true"
+		fields["ai_recovered_by"] = attempt.name
+	}
+	r.updateFields("ai_summary", fields)
+}
+
 func (r *scheduledRunReporter) updateFields(stage string, fields map[string]string) {
 	if r == nil || r.app == nil {
 		return
