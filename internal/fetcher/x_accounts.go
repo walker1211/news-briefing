@@ -858,20 +858,28 @@ func xVisibleCoverageWarning(item xVisibleArticle, from, to time.Time) *FailedSo
 }
 
 func xVisibleArticleCandidate(item xVisibleArticle, category string, keywords []string, from time.Time, to time.Time, allowedAccounts map[string]struct{}, originalOnly bool) (fetchedCandidate, bool) {
-	if item.Kind != "x-visible-article" || item.SchemaVersion != 1 || strings.TrimSpace(item.Text) == "" {
+	article, ok := xVisibleArticleModel(item, category, allowedAccounts, originalOnly)
+	if !ok || !articleWithinWindow(article, from, to) {
 		return fetchedCandidate{}, false
+	}
+	return fetchedCandidate{Article: article, MatchedKeywords: matchedKeywords(item.Text, keywords)}, true
+}
+
+func xVisibleArticleModel(item xVisibleArticle, category string, allowedAccounts map[string]struct{}, originalOnly bool) (model.Article, bool) {
+	if item.Kind != "x-visible-article" || item.SchemaVersion != 1 || strings.TrimSpace(item.Text) == "" {
+		return model.Article{}, false
 	}
 	if originalOnly && xVisibleArticleIsRepost(item) {
-		return fetchedCandidate{}, false
+		return model.Article{}, false
 	}
 	published, err := time.Parse(time.RFC3339, item.Datetime)
-	if err != nil || !articleWithinWindow(model.Article{Published: published}, from, to) {
-		return fetchedCandidate{}, false
+	if err != nil {
+		return model.Article{}, false
 	}
 	if item.TargetType == "account" {
 		handle := xVisibleHandle(item)
 		if _, ok := allowedAccounts[strings.ToLower(handle)]; !ok {
-			return fetchedCandidate{}, false
+			return model.Article{}, false
 		}
 	}
 	link := strings.TrimSpace(item.StatusURL)
@@ -881,17 +889,82 @@ func xVisibleArticleCandidate(item xVisibleArticle, category string, keywords []
 	if link == "" {
 		link = strings.TrimSpace(item.SourceURL)
 	}
-	return fetchedCandidate{
-		Article: model.Article{
-			Title:     xVisibleTitle(item),
-			Link:      link,
-			Summary:   item.Text,
-			Source:    xVisibleSource(item),
-			Category:  category,
-			Published: published,
-		},
-		MatchedKeywords: matchedKeywords(item.Text, keywords),
+	if link == "" {
+		return model.Article{}, false
+	}
+	return model.Article{
+		Title:      xVisibleTitle(item),
+		Link:       link,
+		Summary:    item.Text,
+		Source:     xVisibleSource(item),
+		SourceRole: model.SourceRoleRadar,
+		Category:   category,
+		Published:  published,
 	}, true
+}
+
+// FindXVisibleArticleByURL resolves a carryover snapshot from current or
+// archived X-visible output without making a network request.
+func FindXVisibleArticleByURL(cfg config.XAccountsConfig, rawURL string) (model.Article, error) {
+	wanted, err := canonicalXVisibleURL(rawURL)
+	if err != nil {
+		return model.Article{}, err
+	}
+	inputs := []string{cfg.AccountsPath, cfg.SearchesPath}
+	if strings.TrimSpace(cfg.HistoryDir) != "" {
+		entries, readErr := os.ReadDir(expandHomePath(cfg.HistoryDir))
+		if readErr != nil && !os.IsNotExist(readErr) {
+			return model.Article{}, readErr
+		}
+		names := make([]string, 0, len(entries))
+		for _, entry := range entries {
+			if entry.IsDir() && xVisibleHistoryPeriodPattern.MatchString(entry.Name()) {
+				names = append(names, entry.Name())
+			}
+		}
+		sort.Sort(sort.Reverse(sort.StringSlice(names)))
+		for _, name := range names {
+			base := filepath.Join(cfg.HistoryDir, name)
+			inputs = append(inputs, filepath.Join(base, "accounts.ndjson.gz"), filepath.Join(base, "searches.ndjson.gz"))
+		}
+	}
+
+	allowedAccounts := xAccountHandleSet(cfg.Accounts)
+	for _, path := range inputs {
+		if strings.TrimSpace(path) == "" {
+			continue
+		}
+		items, readErr := readXVisibleNDJSONFile(path)
+		if os.IsNotExist(readErr) {
+			continue
+		}
+		if readErr != nil {
+			return model.Article{}, fmt.Errorf("read X visible carryover source: %w", readErr)
+		}
+		for _, item := range items {
+			article, ok := xVisibleArticleModel(item, cfg.Category, allowedAccounts, cfg.OriginalOnly)
+			if !ok {
+				continue
+			}
+			candidate, candidateErr := canonicalXVisibleURL(article.Link)
+			if candidateErr == nil && candidate == wanted {
+				return article, nil
+			}
+		}
+	}
+	return model.Article{}, fmt.Errorf("X visible article not found for URL")
+}
+
+func canonicalXVisibleURL(raw string) (string, error) {
+	parsed, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil || parsed.Scheme == "" || parsed.Host == "" || (parsed.Scheme != "http" && parsed.Scheme != "https") {
+		return "", fmt.Errorf("invalid carryover URL")
+	}
+	parsed.RawQuery = ""
+	parsed.Fragment = ""
+	parsed.Host = strings.ToLower(parsed.Host)
+	parsed.Path = strings.TrimSuffix(parsed.Path, "/")
+	return parsed.String(), nil
 }
 
 func xVisibleArticleIsRepost(item xVisibleArticle) bool {

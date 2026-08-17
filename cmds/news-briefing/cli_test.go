@@ -115,6 +115,40 @@ func TestParseArgsXRoutes(t *testing.T) {
 	}
 }
 
+func TestParseArgsCarryoverCommands(t *testing.T) {
+	command, err := parseArgs([]string{"carryover", "add", "--url", "https://x.com/team/status/1", "--target", "2026-08-18 08:00"})
+	if err != nil {
+		t.Fatalf("parse add error = %v", err)
+	}
+	add, ok := command.(carryoverAddCommand)
+	if !ok || add.url == "" || add.targetRaw != "2026-08-18 08:00" {
+		t.Fatalf("add command = %#v", command)
+	}
+	if command, err = parseArgs([]string{"carryover", "list"}); err != nil {
+		t.Fatalf("parse list error = %v", err)
+	} else if _, ok := command.(carryoverListCommand); !ok {
+		t.Fatalf("list command = %T", command)
+	}
+	if command, err = parseArgs([]string{"carryover", "remove", "--id", "abc"}); err != nil {
+		t.Fatalf("parse remove error = %v", err)
+	} else if remove, ok := command.(carryoverRemoveCommand); !ok || remove.id != "abc" {
+		t.Fatalf("remove command = %#v", command)
+	}
+}
+
+func TestParseArgsCarryoverRejectsIncompleteAndUnknownFlags(t *testing.T) {
+	for _, args := range [][]string{
+		{"carryover", "add", "--url", "https://x.com/team/status/1"},
+		{"carryover", "add", "--url", "https://x.com/team/status/1", "--target", "2026-08-18 08:00", "--extra"},
+		{"carryover", "remove"},
+		{"carryover", "unknown"},
+	} {
+		if _, err := parseArgs(args); err == nil {
+			t.Fatalf("parseArgs(%v) error = nil", args)
+		}
+	}
+}
+
 func TestParseArgsXReady(t *testing.T) {
 	cmd, err := parseArgs([]string{"x", "ready", "--from", "2026-06-16T08:00:00+08:00", "--to", "2026-06-16T18:00:00+08:00", "--period", "1800", "--no-publish"})
 	if err != nil {

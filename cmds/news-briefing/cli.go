@@ -32,6 +32,12 @@ type regenCommand struct {
 type fetchCommand struct{ zh bool }
 type alertsCommand struct{}
 type xRoutesCommand struct{}
+type carryoverAddCommand struct {
+	url       string
+	targetRaw string
+}
+type carryoverListCommand struct{}
+type carryoverRemoveCommand struct{ id string }
 type xReadyCommand struct {
 	fromRaw   string
 	toRaw     string
@@ -52,16 +58,19 @@ type resendMDCommand struct {
 }
 type helpCommand struct{}
 
-func (runCommand) isCommand()      {}
-func (regenCommand) isCommand()    {}
-func (fetchCommand) isCommand()    {}
-func (alertsCommand) isCommand()   {}
-func (xRoutesCommand) isCommand()  {}
-func (xReadyCommand) isCommand()   {}
-func (serveCommand) isCommand()    {}
-func (deepCommand) isCommand()     {}
-func (resendMDCommand) isCommand() {}
-func (helpCommand) isCommand()     {}
+func (runCommand) isCommand()             {}
+func (regenCommand) isCommand()           {}
+func (fetchCommand) isCommand()           {}
+func (alertsCommand) isCommand()          {}
+func (xRoutesCommand) isCommand()         {}
+func (carryoverAddCommand) isCommand()    {}
+func (carryoverListCommand) isCommand()   {}
+func (carryoverRemoveCommand) isCommand() {}
+func (xReadyCommand) isCommand()          {}
+func (serveCommand) isCommand()           {}
+func (deepCommand) isCommand()            {}
+func (resendMDCommand) isCommand()        {}
+func (helpCommand) isCommand()            {}
 
 func parseArgs(args []string) (command, error) {
 	if len(args) == 0 {
@@ -75,6 +84,9 @@ func parseArgs(args []string) (command, error) {
 	}
 	if normalizedCmdName == "x" {
 		return parseXCommand(args[1:])
+	}
+	if normalizedCmdName == "carryover" {
+		return parseCarryoverCommand(args[1:])
 	}
 	cmdArgs := args[1:]
 	if err := preValidateCommandArgs(normalizedCmdName, cmdArgs); err != nil {
@@ -101,6 +113,61 @@ func parseArgs(args []string) (command, error) {
 	default:
 		return nil, fmt.Errorf("unknown command: %s", args[0])
 	}
+}
+
+func parseCarryoverCommand(args []string) (command, error) {
+	if len(args) == 0 {
+		return nil, fmt.Errorf("missing carryover subcommand")
+	}
+	switch args[0] {
+	case "add":
+		urlValue, ok := readStringFlag(args[1:], "--url")
+		if !ok || strings.TrimSpace(urlValue) == "" {
+			return nil, fmt.Errorf("--url is required")
+		}
+		target, ok := readStringFlag(args[1:], "--target")
+		if !ok || strings.TrimSpace(target) == "" {
+			return nil, fmt.Errorf("--target is required")
+		}
+		if err := validateExactFlags(args[1:], nil, map[string]struct{}{"--url": {}, "--target": {}}); err != nil {
+			return nil, err
+		}
+		return carryoverAddCommand{url: urlValue, targetRaw: target}, nil
+	case "list":
+		if len(args) != 1 {
+			return nil, fmt.Errorf("unexpected arguments for carryover list")
+		}
+		return carryoverListCommand{}, nil
+	case "remove":
+		id, ok := readStringFlag(args[1:], "--id")
+		if !ok || strings.TrimSpace(id) == "" {
+			return nil, fmt.Errorf("--id is required")
+		}
+		if err := validateExactFlags(args[1:], nil, map[string]struct{}{"--id": {}}); err != nil {
+			return nil, err
+		}
+		return carryoverRemoveCommand{id: id}, nil
+	default:
+		return nil, fmt.Errorf("unsupported carryover subcommand: %s", args[0])
+	}
+}
+
+func validateExactFlags(args []string, boolFlags, valueFlags map[string]struct{}) error {
+	for index := 0; index < len(args); index++ {
+		token := args[index]
+		if _, ok := boolFlags[token]; ok {
+			continue
+		}
+		if _, ok := valueFlags[token]; ok {
+			if index+1 >= len(args) || strings.HasPrefix(args[index+1], "--") {
+				return fmt.Errorf("%s is required", token)
+			}
+			index++
+			continue
+		}
+		return fmt.Errorf("unexpected carryover argument: %s", token)
+	}
+	return nil
 }
 
 func parseRunCommand(args []string) (command, error) {
@@ -331,7 +398,7 @@ func normalizeCommandName(name string) string {
 
 func isKnownCommandName(name string) bool {
 	switch name {
-	case "run", "regen", "fetch", "alerts", "x", "serve", "deep", "resend-md", "help":
+	case "run", "regen", "fetch", "alerts", "x", "carryover", "serve", "deep", "resend-md", "help":
 		return true
 	default:
 		return false

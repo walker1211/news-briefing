@@ -40,6 +40,9 @@ func writeArticleListItem(sb *strings.Builder, number int, article model.Article
 	if strings.TrimSpace(article.ImageURL) != "" {
 		sb.WriteString("   Image: " + strings.TrimSpace(article.ImageURL) + "\n")
 	}
+	if strings.TrimSpace(article.CarryoverID) != "" {
+		sb.WriteString("   Editorial: carryover_required\n")
+	}
 	sb.WriteString("\n")
 }
 

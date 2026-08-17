@@ -375,6 +375,26 @@ Rules:
 - recipients use the current email configuration by default; `--email-recipient-match` can select exactly one configured address
 - the email subject is derived from the Markdown filename; for example, `26.04.13-晚间-1800.md` becomes `国际资讯简报 26.04.13 晚间 18:00`
 
+### `carryover`
+
+Queue an important post already present in the current X-visible snapshot or its history for exactly one future scheduled window:
+
+```bash
+./news-briefing carryover add \
+  --url "https://x.com/example/status/123" \
+  --target "2026-08-18 08:00"
+./news-briefing carryover list
+./news-briefing carryover remove --id <id>
+```
+
+- `add` only writes state; it does not generate, email, or publish immediately, and `target` must be in the future.
+- The URL must resolve from an allowed X account in current or archived X-visible data. The stored snapshot retains its real publication time.
+- A URL/window pair is idempotent and each window accepts at most five entries.
+- The scheduled run bypasses the original time window and historical seen state for the queued snapshot, while category and final editors must still reference it.
+- The entry becomes `consumed` only after Markdown, email, enabled publish hooks, and seen-state updates succeed. Failures leave it `pending` for same-window recovery.
+- Unconsumed entries show as `expired` 24 hours after the target; terminal records are retained for 14 days.
+- State lives at `<output.dir>/state/carryover.json` and uses atomic writes plus a cross-process lock.
+
 ### `serve`
 
 Daemon mode. Runs automatically based on `schedule` in `configs/config.yaml` and uses the same output pipeline as `run`.

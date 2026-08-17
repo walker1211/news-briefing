@@ -344,6 +344,26 @@ output:
 - 收件人默认使用当前邮件配置；`--email-recipient-match` 可从已配置收件人中唯一匹配一个地址
 - 邮件主题从 Markdown 文件名推导，例如 `26.04.13-晚间-1800.md` 会发成 `国际资讯简报 26.04.13 晚间 18:00`
 
+### `carryover`
+
+把已存在于 X visible 当前快照或历史归档中的重要帖子，一次性补入未来某个正式窗口：
+
+```bash
+./news-briefing carryover add \
+  --url "https://x.com/example/status/123" \
+  --target "2026-08-18 08:00"
+./news-briefing carryover list
+./news-briefing carryover remove --id <id>
+```
+
+- `add` 只登记状态，不立即生成、发邮件或发布 XHS；`target` 必须是未来时间。
+- URL 必须能从配置允许的 X 账号当前快照或历史归档中解析，程序会保存文章快照及真实发布时间。
+- 同一 URL 和窗口幂等去重；每个窗口最多 5 条。
+- 正式任务会绕过该条目的原发布时间窗口和历史 `seen`，但仍保留真实发布时间，并要求分类编辑和最终终审必须引用。
+- Markdown、邮件、启用的发布钩子及已读状态全部成功后才标记 `consumed`；失败时保持 `pending`，供同窗口恢复任务重试。
+- 未消费条目在目标窗口 24 小时后显示为 `expired`；终态记录保留 14 天。
+- 状态文件为 `<output.dir>/state/carryover.json`，使用原子写和跨进程锁。
+
 ### `serve`
 
 守护模式，按 `configs/config.yaml` 中的 `schedule` 自动执行，与 `run` 使用同一输出链路。

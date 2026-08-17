@@ -78,6 +78,34 @@ func TestBriefingPromptsPreserveHighImpactProductCapabilityUpdates(t *testing.T)
 	}
 }
 
+func TestBriefingPromptsRequireCarryoverCoverage(t *testing.T) {
+	for name, prompt := range map[string]string{"full": briefingPrompt, "category": categoryBriefingPrompt, "editor": briefingEditorPrompt} {
+		if !strings.Contains(prompt, "carryover_required") || !strings.Contains(prompt, "不能静默删除") {
+			t.Fatalf("%s prompt missing carryover rule", name)
+		}
+	}
+}
+
+func TestValidateCarryoverCoverageRejectsOmittedArticle(t *testing.T) {
+	articles := []model.Article{{Title: "required", CarryoverID: "carry-1"}, {Title: "normal"}}
+	if err := validateCarryoverCoverage(model.BriefingSummary{Stories: []model.BriefingStory{{SourceArticleIDs: []int{2}}}}, articles); err == nil {
+		t.Fatal("validateCarryoverCoverage() error = nil")
+	}
+	if err := validateCarryoverCoverage(model.BriefingSummary{Stories: []model.BriefingStory{{SourceArticleIDs: []int{1}}}}, articles); err != nil {
+		t.Fatalf("validateCarryoverCoverage() error = %v", err)
+	}
+}
+
+func TestSelectedEditorialStoriesRequiresCarryoverCandidate(t *testing.T) {
+	candidates := []model.BriefingStory{{Title: "required", CarryoverRequired: true}, {Title: "normal"}}
+	if _, err := selectedEditorialStories(candidates, []int{2}, 1, 2); err == nil {
+		t.Fatal("selectedEditorialStories() error = nil")
+	}
+	if selected, err := selectedEditorialStories(candidates, []int{1}, 1, 2); err != nil || len(selected) != 1 {
+		t.Fatalf("selectedEditorialStories() = %#v, %v", selected, err)
+	}
+}
+
 func TestBriefingPromptRequestsReusableXHSTopics(t *testing.T) {
 	for _, want := range []string{
 		`"xhs_topics": ["话题1", "话题2", "话题3"]`,

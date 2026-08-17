@@ -78,9 +78,13 @@ func (report *SourceStatsReport) SetEnteredAI(articles []Article) {
 		}
 		index, ok := indexBySource[source]
 		if !ok {
+			sourceType := "watch"
+			if article.CarryoverID != "" {
+				sourceType = "carryover"
+			}
 			report.Sources = append(report.Sources, SourceStatsEntry{
 				Source:   source,
-				Type:     "watch",
+				Type:     sourceType,
 				Category: article.Category,
 			})
 			index = len(report.Sources) - 1
@@ -112,9 +116,13 @@ func (report *SourceStatsReport) SetSelectedFinal(articles []Article) {
 		}
 		index, ok := indexBySource[source]
 		if !ok {
+			sourceType := "watch"
+			if article.CarryoverID != "" {
+				sourceType = "carryover"
+			}
 			report.Sources = append(report.Sources, SourceStatsEntry{
 				Source:   source,
-				Type:     "watch",
+				Type:     sourceType,
 				Category: article.Category,
 			})
 			index = len(report.Sources) - 1
