@@ -25,7 +25,7 @@ var xhsPreselectionReportedTerms = []string{
 
 var xhsPreselectionOfficialLabels = []string{
 	"官方公告", "公司公告", "监管公告", "国务院", "人民银行", "发改委", "能源局", "国家统计局",
-	"证监会", "交易所", "法院", "检察院", "公安", "政府网站", "SEC", "HKEX",
+	"证监会", "交易所", "法院", "检察院", "公安", "政府网站",
 }
 
 var xhsPreselectionDefaultOfficialHosts = []string{
