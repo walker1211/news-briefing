@@ -20,7 +20,7 @@ var xhsPreselectionOfficialOnlyTerms = []string{
 }
 
 var xhsPreselectionReportedTerms = []string{
-	"据报", "报道称", "媒体报道", "援引知情人士", "知情人士称", "消息人士称", "调查称", "被曝", "传出",
+	"据报", "报道称", "媒体报道", "援引知情人士", "知情人士称", "消息人士称", "调查称", "被曝", "被指", "传出",
 }
 
 var xhsPreselectionOfficialLabels = []string{

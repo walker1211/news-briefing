@@ -61,7 +61,7 @@ func TestXHSStoryEligibilityRequiresOfficialSourcesForMaterialClaims(t *testing.
 		{name: "media-only revenue", story: model.BriefingStory{Category: "AI/科技", Title: "公司年化营收突破新高", SourceArticleIDs: []int{1, 2}}, want: false},
 		{name: "media-only acquisition", story: model.BriefingStory{Category: "AI/科技", Title: "公司据报完成收购", SourceArticleIDs: []int{1, 2}}, want: false},
 		{name: "official IPO", story: model.BriefingStory{Category: "AI/科技", Title: "公司上市安排", SourceArticleIDs: []int{3}}, want: true},
-		{name: "single-source reported claim", story: model.BriefingStory{Category: "AI/科技", Title: "媒体据报发布新功能", SourceArticleIDs: []int{1}}, want: false},
+		{name: "single-source reported claim", story: model.BriefingStory{Category: "AI/科技", Title: "企业被指拆解稀有书籍", SourceArticleIDs: []int{1}}, want: false},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
