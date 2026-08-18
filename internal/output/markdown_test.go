@@ -81,6 +81,32 @@ func TestBuildCardManifestGroupsStoriesByOverviewCategoryOrder(t *testing.T) {
 	}
 }
 
+func TestBuildCardManifestUsesXHSStoriesWithoutChangingBriefingStories(t *testing.T) {
+	summary := &model.BriefingSummary{
+		OverviewGroups: []model.BriefingOverviewGroup{{Category: "AI/科技", Items: []string{"邮件要点"}}},
+		Stories:        []model.BriefingStory{{Category: "AI/科技", Title: "邮件故事"}},
+		XHSStories:     []model.BriefingStory{{Category: "新闻财经", Title: "安全补位二"}, {Category: "AI/科技", Title: "安全补位一"}},
+	}
+	manifest := buildCardManifest(&model.Briefing{StructuredSummary: summary}, nil)
+	if got, want := cardManifestItemTitlesForTest(manifest.Items), []string{"安全补位一", "安全补位二"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("manifest titles = %#v, want %#v", got, want)
+	}
+	if got, want := manifest.Document.Summary, []string{"安全补位一", "安全补位二"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("manifest summary = %#v, want %#v", got, want)
+	}
+	if len(summary.Stories) != 1 || summary.Stories[0].Title != "邮件故事" {
+		t.Fatalf("email stories changed: %#v", summary.Stories)
+	}
+}
+
+func cardManifestItemTitlesForTest(items []cardManifestItem) []string {
+	titles := make([]string, 0, len(items))
+	for _, item := range items {
+		titles = append(titles, item.Title)
+	}
+	return titles
+}
+
 func TestWriteMarkdownKeepsDefaultHeaderAndOmitsTopHeroImage(t *testing.T) {
 	outputDir := t.TempDir()
 	path, err := WriteMarkdown(&model.Briefing{

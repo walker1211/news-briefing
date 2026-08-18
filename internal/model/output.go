@@ -20,6 +20,7 @@ type OutputContent struct {
 type BriefingSummary struct {
 	OverviewGroups []BriefingOverviewGroup `json:"overview_groups"`
 	Stories        []BriefingStory         `json:"stories"`
+	XHSStories     []BriefingStory         `json:"-"`
 	Situation      string                  `json:"situation"`
 	Directions     []BriefingDirection     `json:"directions"`
 	XHSTopics      []string                `json:"xhs_topics,omitempty"`

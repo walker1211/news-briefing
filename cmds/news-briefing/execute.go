@@ -110,6 +110,13 @@ func newApp(cfg *config.Config) *app {
 		cfg.AI.Summary.Editor.TargetStories,
 		cfg.AI.Summary.Editor.MaxStories,
 	)
+	aiRunner.SetXHSPreselectionOptions(
+		cfg.Output.XHSPreselection.Enabled,
+		cfg.Output.XHSPreselection.Categories,
+		cfg.Output.XHSPreselection.TargetItems,
+		cfg.Output.XHSPreselection.MinimumIndependentSources,
+		cfg.Output.XHSPreselection.OfficialSourceHosts,
+	)
 	emailSender := output.NewEmailSender()
 	imageFilter := imageFilterFromConfig(cfg.ImageFilter)
 	return &app{

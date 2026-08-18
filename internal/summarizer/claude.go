@@ -172,26 +172,31 @@ const deepDivePrompt = `你是一个资深新闻调研员和话题研究助手�
 - 可以继续追踪的延伸问题`
 
 type Runner struct {
-	commandName                string
-	commandArgs                []string
-	defaultModel               string
-	defaultEffort              string
-	summaryEditorModel         string
-	summaryEditorEffort        string
-	translationModel           string
-	translationEffort          string
-	summaryParallelByCategory  bool
-	summaryMaxConcurrency      int
-	summaryEditorEnabled       bool
-	summaryEditorMinStories    int
-	summaryEditorTargetStories int
-	summaryEditorMaxStories    int
-	appendSystemPrompt         bool
-	proxyEnv                   []string
-	retrySleep                 sleepFunc
-	retryDelays                []time.Duration
-	oauthRetryGate             chan struct{}
-	failureLogPath             string
+	commandName                  string
+	commandArgs                  []string
+	defaultModel                 string
+	defaultEffort                string
+	summaryEditorModel           string
+	summaryEditorEffort          string
+	translationModel             string
+	translationEffort            string
+	summaryParallelByCategory    bool
+	summaryMaxConcurrency        int
+	summaryEditorEnabled         bool
+	summaryEditorMinStories      int
+	summaryEditorTargetStories   int
+	summaryEditorMaxStories      int
+	xhsPreselectionEnabled       bool
+	xhsPreselectionCategories    []string
+	xhsPreselectionTargetItems   int
+	xhsPreselectionMinSources    int
+	xhsPreselectionOfficialHosts []string
+	appendSystemPrompt           bool
+	proxyEnv                     []string
+	retrySleep                   sleepFunc
+	retryDelays                  []time.Duration
+	oauthRetryGate               chan struct{}
+	failureLogPath               string
 }
 
 type callKind string
@@ -404,6 +409,16 @@ func (r *Runner) SetSummaryEditorOptions(enabled bool, model, effort string, min
 	r.summaryEditorMinStories = minStories
 	r.summaryEditorTargetStories = targetStories
 	r.summaryEditorMaxStories = maxStories
+}
+
+// SetXHSPreselectionOptions configures deterministic card-manifest-only story
+// selection. It never changes the email/Markdown story list or adds AI calls.
+func (r *Runner) SetXHSPreselectionOptions(enabled bool, categories []string, targetItems, minimumSources int, officialHosts []string) {
+	r.xhsPreselectionEnabled = enabled
+	r.xhsPreselectionCategories = append([]string(nil), categories...)
+	r.xhsPreselectionTargetItems = targetItems
+	r.xhsPreselectionMinSources = minimumSources
+	r.xhsPreselectionOfficialHosts = append([]string(nil), officialHosts...)
 }
 
 func withoutModelArgs(args []string) ([]string, string) {
@@ -798,6 +813,7 @@ func (r *Runner) summarizeBriefingSingleContext(ctx context.Context, articles []
 	}
 	structured = validateBriefingSummaryImages(structured, promptArticles)
 	structured = remapBriefingSummarySourceArticleIDs(structured, promptToOriginal)
+	r.applyXHSPreselection(&structured, structured.Stories, articles)
 	return structured, output.StructuredBriefingMarkdown(structured, categoryOrder), nil
 }
 
@@ -934,6 +950,13 @@ func cloneBriefingSummary(summary model.BriefingSummary) model.BriefingSummary {
 	for index := range cloned.Stories {
 		cloned.Stories[index].SourceArticleIDs = append([]int(nil), summary.Stories[index].SourceArticleIDs...)
 	}
+	if summary.XHSStories != nil {
+		cloned.XHSStories = make([]model.BriefingStory, len(summary.XHSStories))
+		copy(cloned.XHSStories, summary.XHSStories)
+		for index := range cloned.XHSStories {
+			cloned.XHSStories[index].SourceArticleIDs = append([]int(nil), summary.XHSStories[index].SourceArticleIDs...)
+		}
+	}
 	cloned.Directions = append([]model.BriefingDirection(nil), summary.Directions...)
 	cloned.XHSTopics = append([]string(nil), summary.XHSTopics...)
 	return cloned
@@ -1002,6 +1025,7 @@ func (r *Runner) summarizeBriefingParallelContext(ctx context.Context, articles 
 		combined.OverviewGroups = append(combined.OverviewGroups, result.summary.OverviewGroups...)
 		combined.Stories = append(combined.Stories, result.summary.Stories...)
 	}
+	xhsCandidates := append([]model.BriefingStory(nil), combined.Stories...)
 
 	if r.summaryEditorEnabled {
 		edited, err := r.editBriefingContext(ctx, combined, categories)
@@ -1018,6 +1042,7 @@ func (r *Runner) summarizeBriefingParallelContext(ctx context.Context, articles 
 		combined.XHSTopics = synthesis.XHSTopics
 		combined.Directions = synthesis.Directions
 	}
+	r.applyXHSPreselection(&combined, xhsCandidates, articles)
 	return combined, output.StructuredBriefingMarkdown(combined, categoryOrder), nil
 }
 

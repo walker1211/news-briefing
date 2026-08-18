@@ -386,6 +386,8 @@ schedule_prefetch_wait_timeout: 2m
 
 AI attempt 失败时，调度状态会持久化白名单字段，例如 `ai_primary_error_stage=final_editor`、`ai_primary_error_code=overview_invalid`、受影响分类和耗时；fallback 成功后同时记录 `ai_recovered=true` 与恢复层级。状态和告警都不保存 Prompt、文章正文、完整 stderr、堆栈、token 或连接信息。
 
+`output.xhs_preselection` 是可选的 XHS 专用前置筛选。启用后，邮件和 Markdown 仍使用 final editor 的原始 `stories`；card manifest 会优先采用其中符合来源规则的故事，再从分类 worker 的完整候选中按配置分类轮流补位到 `target_items`。企业重大负面、私营公司财务、融资估值、并购、IPO 条款和巨额担保必须有官方来源；普通产品与技术更新可保留单一来源。该流程不增加 AI 调用，`content-publisher` 仍保留最终硬门。
+
 Watch 默认走“索引快检 + 正文深检”：索引新增或变化会立即读取正文；未变化文章按 `watch.deep_verify_interval` 到期后，以 `watch.deep_verify_batch_size` 为上限按最旧检查时间轮转。这样仍能发现 URL、标题和摘要均未变化时的正文静默更新，同时避免每个简报窗口下载全部历史正文。
 
 RSS 源会在 `<output.dir>/state/rss-cache` 保存压缩响应和 ETag/Last-Modified 元数据。服务端返回 `304 Not Modified` 时复用已缓存 Feed；每份 `.source-stats.json` 同时记录各来源的抓取耗时、响应字节数、缓存状态、进入 AI 的数量和最终入选数量，便于识别大 Feed、低有效率来源及 AI 编辑阶段的损耗。

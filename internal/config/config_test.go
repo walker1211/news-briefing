@@ -76,6 +76,9 @@ proxy: {}
 	if got := cfg.AI.Summary.Editor; got.Enabled || got.MinStories != DefaultAISummaryEditorMinStories || got.TargetStories != DefaultAISummaryEditorTargetStories || got.MaxStories != DefaultAISummaryEditorMaxStories {
 		t.Fatalf("AI.Summary.Editor = %#v, want disabled defaults", got)
 	}
+	if got := cfg.Output.XHSPreselection; got.Enabled || got.TargetItems != DefaultXHSPreselectionTargetItems || got.MinimumIndependentSources != DefaultXHSPreselectionMinimumSources {
+		t.Fatalf("Output.XHSPreselection = %#v, want disabled defaults", got)
+	}
 	if !cfg.AI.ShouldAppendSystemPrompt() {
 		t.Fatalf("AI.ShouldAppendSystemPrompt() = false, want true")
 	}
@@ -85,6 +88,40 @@ proxy: {}
 	}
 	if cfg.SourceShadow.Retention != DefaultSourceShadowRetention || cfg.SourceShadow.Timeout != DefaultSourceShadowTimeout {
 		t.Fatalf("SourceShadow defaults = %#v", cfg.SourceShadow)
+	}
+}
+
+func TestLoadParsesXHSPreselection(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	content := `
+sources: []
+keywords: []
+email:
+  smtp_host: smtp.example.com
+  smtp_port: 465
+  from: from@example.com
+  to: to@example.com
+schedule: []
+output:
+  xhs_preselection:
+    enabled: true
+    categories: [AI/科技, 新闻财经]
+    target_items: 10
+    minimum_independent_sources: 2
+    official_source_hosts: [SSE.COM.CN]
+proxy: {}
+ai: {}
+`
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	got := cfg.Output.XHSPreselection
+	if !got.Enabled || !reflect.DeepEqual(got.Categories, []string{"AI/科技", "新闻财经"}) || got.TargetItems != 10 || got.MinimumIndependentSources != 2 || !reflect.DeepEqual(got.OfficialSourceHosts, []string{"sse.com.cn"}) {
+		t.Fatalf("Output.XHSPreselection = %#v", got)
 	}
 }
 
