@@ -245,14 +245,18 @@ func buildCardManifest(briefing *model.Briefing, localizedImages map[string]stri
 }
 
 func cardManifestStories(summary *model.BriefingSummary) []model.BriefingStory {
+	stories := summary.Stories
+	if summary.XHSStories != nil {
+		stories = summary.XHSStories
+	}
 	categoryOrder := make([]string, 0, len(summary.OverviewGroups))
 	for _, group := range summary.OverviewGroups {
 		categoryOrder = append(categoryOrder, group.Category)
 	}
 
-	ordered := make([]model.BriefingStory, 0, len(summary.Stories))
-	for _, category := range orderedStoryCategories(summary.Stories, categoryOrder) {
-		for _, story := range summary.Stories {
+	ordered := make([]model.BriefingStory, 0, len(stories))
+	for _, category := range orderedStoryCategories(stories, categoryOrder) {
+		for _, story := range stories {
 			storyCategory := strings.TrimSpace(story.Category)
 			if storyCategory == "" {
 				storyCategory = "未分类"
@@ -303,6 +307,15 @@ func cardManifestLocalImage(raw string, localizedImages map[string]string) strin
 func briefingManifestSummary(summary *model.BriefingSummary) []string {
 	if summary == nil {
 		return []string{}
+	}
+	if summary.XHSStories != nil {
+		items := make([]string, 0, len(summary.XHSStories))
+		for _, story := range cardManifestStories(summary) {
+			if title := strings.TrimSpace(story.Title); title != "" {
+				items = append(items, title)
+			}
+		}
+		return items
 	}
 	items := []string{}
 	for _, group := range summary.OverviewGroups {

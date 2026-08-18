@@ -419,6 +419,8 @@ When the service actually observes an 08:00 / 18:00 trigger, it records that win
 
 Failed AI attempts persist only allowlisted diagnostics such as `ai_primary_error_stage=final_editor`, `ai_primary_error_code=overview_invalid`, affected categories, and elapsed time. A successful fallback also records `ai_recovered=true` and the recovery level. Neither state nor alerts store prompts, article bodies, complete stderr, stack traces, tokens, or connection metadata.
 
+`output.xhs_preselection` optionally prepares an XHS-only card-manifest selection. Email and Markdown keep the final editor's original `stories`; the manifest first keeps eligible selected stories, then round-robin backfills safe stories from the configured category-worker candidate pools up to `target_items`. Material entity claims covering serious negative events, private financials, funding or valuation, M&A, IPO terms, and guarantees require an official source, while ordinary product and technical updates may keep one source. This adds no AI call, and `content-publisher` remains the final hard gate.
+
 Note: `serve` restores only unfinished windows already present in that state file. It does not infer or backfill a trigger that the service missed entirely. For example, if it is stopped at 07:50 and starts at 08:01, it will not invent the 08:00 window; use `regen` manually when needed.
 
 Recommendation: after changing cron / `schedule`, if you suspect a gap, use the built-in `regen --from --to` command to backfill that window manually, for example:

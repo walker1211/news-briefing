@@ -593,6 +593,28 @@ output:
     AI/科技: 90
     新闻财经: 30
     国际政治: 30
+  # Optional XHS-only preselection. Email and Markdown stories remain unchanged.
+  # Eligible final-editor stories are preferred, then safe candidates from the same configured categories backfill the card manifest.
+  xhs_preselection:
+    enabled: false
+    categories:
+      - AI/科技
+      - 新闻财经
+    target_items: 10
+    minimum_independent_sources: 2
+    official_source_hosts:
+      - gov.cn
+      - pbc.gov.cn
+      - ndrc.gov.cn
+      - nea.gov.cn
+      - csrc.gov.cn
+      - sse.com.cn
+      - szse.cn
+      - bse.cn
+      - hkexnews.hk
+      - hkex.com.hk
+      - sfc.hk
+      - sec.gov
   # Optional. If AI summary generation fails or times out, retry once per fallback level.
   fallback:
     enabled: true

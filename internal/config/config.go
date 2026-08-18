@@ -86,6 +86,8 @@ const (
 	DefaultAISummaryEditorMinStories      = 12
 	DefaultAISummaryEditorTargetStories   = 17
 	DefaultAISummaryEditorMaxStories      = 20
+	DefaultXHSPreselectionTargetItems     = 10
+	DefaultXHSPreselectionMinimumSources  = 2
 	DefaultAITranslationModel             = "gpt-5.3-codex-spark"
 	DefaultAITranslationEffort            = "high"
 	DefaultAISummaryMaxConcurrency        = 1
@@ -275,11 +277,20 @@ type Email struct {
 type Schedule []string
 
 type OutputCfg struct {
-	Dir                     string            `yaml:"dir"`
-	Mode                    model.OutputMode  `yaml:"mode"`
-	IncludeFilteredArticles bool              `yaml:"include_filtered_articles"`
-	MaxArticlesByCategory   map[string]int    `yaml:"max_articles"`
-	Fallback                OutputFallbackCfg `yaml:"fallback"`
+	Dir                     string             `yaml:"dir"`
+	Mode                    model.OutputMode   `yaml:"mode"`
+	IncludeFilteredArticles bool               `yaml:"include_filtered_articles"`
+	MaxArticlesByCategory   map[string]int     `yaml:"max_articles"`
+	Fallback                OutputFallbackCfg  `yaml:"fallback"`
+	XHSPreselection         XHSPreselectionCfg `yaml:"xhs_preselection"`
+}
+
+type XHSPreselectionCfg struct {
+	Enabled                   bool     `yaml:"enabled"`
+	Categories                []string `yaml:"categories"`
+	TargetItems               int      `yaml:"target_items"`
+	MinimumIndependentSources int      `yaml:"minimum_independent_sources"`
+	OfficialSourceHosts       []string `yaml:"official_source_hosts"`
 }
 
 type OutputFallbackCfg struct {
@@ -781,6 +792,22 @@ func (cfg *Config) Validate() error {
 	}
 	if err := validateOutputFallback(cfg.Output.Fallback); err != nil {
 		return err
+	}
+	if cfg.Output.XHSPreselection.Enabled {
+		if len(cfg.Output.XHSPreselection.Categories) == 0 {
+			return fmt.Errorf("validate output.xhs_preselection.categories: must not be empty when enabled")
+		}
+		for index, category := range cfg.Output.XHSPreselection.Categories {
+			if strings.TrimSpace(category) == "" {
+				return fmt.Errorf("validate output.xhs_preselection.categories[%d]: must not be empty", index)
+			}
+		}
+		if cfg.Output.XHSPreselection.TargetItems < 1 {
+			return fmt.Errorf("validate output.xhs_preselection.target_items: must be at least 1")
+		}
+		if cfg.Output.XHSPreselection.MinimumIndependentSources < 1 {
+			return fmt.Errorf("validate output.xhs_preselection.minimum_independent_sources: must be at least 1")
+		}
 	}
 	if err := validateFilters(cfg.Filters); err != nil {
 		return err
@@ -1314,6 +1341,18 @@ func Load(configPath string) (*Config, error) {
 	}
 	if cfg.Output.Mode == "" {
 		cfg.Output.Mode = model.OutputModeTranslatedOnly
+	}
+	if cfg.Output.XHSPreselection.TargetItems == 0 {
+		cfg.Output.XHSPreselection.TargetItems = DefaultXHSPreselectionTargetItems
+	}
+	if cfg.Output.XHSPreselection.MinimumIndependentSources == 0 {
+		cfg.Output.XHSPreselection.MinimumIndependentSources = DefaultXHSPreselectionMinimumSources
+	}
+	for index := range cfg.Output.XHSPreselection.Categories {
+		cfg.Output.XHSPreselection.Categories[index] = strings.TrimSpace(cfg.Output.XHSPreselection.Categories[index])
+	}
+	for index := range cfg.Output.XHSPreselection.OfficialSourceHosts {
+		cfg.Output.XHSPreselection.OfficialSourceHosts[index] = strings.ToLower(strings.TrimSpace(cfg.Output.XHSPreselection.OfficialSourceHosts[index]))
 	}
 	for i := range cfg.Sources {
 		if strings.TrimSpace(cfg.Sources[i].SourceRole) == "" {
