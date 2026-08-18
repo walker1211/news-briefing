@@ -47,7 +47,7 @@ func TestApplyXHSPreselectionKeepsEmailStoriesAndBackfillsSafeCandidates(t *test
 
 func TestXHSStoryEligibilityRequiresOfficialSourcesForMaterialClaims(t *testing.T) {
 	articles := []model.Article{
-		{Source: "媒体甲", Link: "https://example.com/a"},
+		{Source: "媒体甲", Link: "https://example.com/a", Summary: "second quarter results"},
 		{Source: "媒体乙", Link: "https://example.com/b"},
 		{Source: "交易所公告", Link: "https://www.sse.com.cn/c"},
 	}
