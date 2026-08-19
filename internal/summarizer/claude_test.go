@@ -968,6 +968,33 @@ func TestNormalizedEditorialOverviewRepairsEmptyAndMissingGroupsFromSelectedStor
 	}
 }
 
+func TestNormalizedEditorialOverviewTruncatesExcessItems(t *testing.T) {
+	stories := make([]model.BriefingStory, 0, maxEditorialOverviewItems+1)
+	items := make([]string, 0, maxEditorialOverviewItems+1)
+	for index := 1; index <= maxEditorialOverviewItems+1; index++ {
+		stories = append(stories, model.BriefingStory{Category: "国际政治", Title: fmt.Sprintf("国际新闻 %d", index)})
+		items = append(items, fmt.Sprintf("🌍 国际要点 %d", index))
+	}
+
+	got, normalized, err := normalizedEditorialOverview(
+		[]model.BriefingOverviewGroup{{Category: "国际政治", Items: items}},
+		stories,
+		[]string{"国际政治"},
+	)
+	if err != nil {
+		t.Fatalf("normalizedEditorialOverview() error = %v", err)
+	}
+	if want := []string{"国际政治"}; !reflect.DeepEqual(normalized, want) {
+		t.Fatalf("normalized categories = %#v, want %#v", normalized, want)
+	}
+	if len(got) != 1 || len(got[0].Items) != maxEditorialOverviewItems {
+		t.Fatalf("overview groups = %#v, want %d items", got, maxEditorialOverviewItems)
+	}
+	if got[0].Items[maxEditorialOverviewItems-1] != "🌍 国际要点 6" {
+		t.Fatalf("last retained item = %q, want sixth item", got[0].Items[maxEditorialOverviewItems-1])
+	}
+}
+
 func TestCallClaudeIncludesStdoutAndStderrOnExitError(t *testing.T) {
 	dir := t.TempDir()
 	oldPath := os.Getenv("PATH")

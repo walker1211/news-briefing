@@ -140,7 +140,7 @@ selected_story_ids 只能引用输入中存在的 story_id，每个 ID 只能出
 内容类型也不使用固定配额：在质量相近时兼顾 news、tool、case、insight 的阅读价值；当天某类确实没有高质量内容时允许为零，重大事件密集时允许 news 自然增多。证据等级优先 corroborated，其次 supported；single_source 的重要官方发布可以保留，但不要让仅有 radar/repost 线索的内容挤掉证据更扎实的候选。
 来自白名单 X 账号、已经被分类编辑保留的可操作产品能力或模型规格变化，应按真实用户影响评估，而不是仅因 single_source/radar 自动降级删除。模型上下文扩展到 1M tokens、关键 API/CLI 配置、限额和访问方式变化属于应优先保留的高价值 tool；存在同事件官方来源时合并来源，不存在时可保留直接发布并清楚维持其证据等级。
 最终数量允许在 %d 到 %d 条之间动态变化，以约 %d 条为目标：高质量候选不足时取下限附近，重大新闻密集时可接近上限。
-overview_groups 必须覆盖每个仍有入选 story 的分类且不得包含其他分类；每个入选分类的 items 严禁为空，必须输出 2-5 条简洁要点概括入选内容，不要提及已删除候选。
+overview_groups 必须覆盖每个仍有入选 story 的分类且不得包含其他分类；每个入选分类的 items 严禁为空，并根据当天入选新闻的重要性动态输出 1-6 条简洁要点，不要求各分类数量相同，也不要提及已删除候选。
 situation 必须综合不同分类之间的共同趋势，不要逐分类机械复述。xhs_topics 输出 3 个、最多 4 个适合整篇简报的通用话题，不带 #、空格或特殊符号。directions 输出 2-4 个高质量方向；相近方向应合并。deep_command 的关键词优先使用 2-6 个词的英文实体或英文新闻短语。`
 
 const nonInteractiveBriefingSystemPrompt = `这是一次无人值守的单轮批处理任务，不是对话。
@@ -981,6 +981,8 @@ type briefingEditorialCandidate struct {
 	model.BriefingStory
 }
 
+const maxEditorialOverviewItems = 6
+
 func (r *Runner) summarizeBriefingParallelContext(ctx context.Context, articles []model.Article, categoryOrder []string, loc *time.Location) (model.BriefingSummary, string, error) {
 	categories := populatedCategories(articles, categoryOrder)
 	results := make([]categorySummaryResult, len(categories))
@@ -1074,12 +1076,12 @@ func (r *Runner) editBriefingContext(ctx context.Context, partial model.Briefing
 	if err != nil {
 		return model.BriefingSummary{}, briefingDiagnosticError("final_editor", "selection_invalid", err)
 	}
-	overview, repairedOverviewCategories, err := normalizedEditorialOverview(decision.OverviewGroups, selected, categoryOrder)
+	overview, normalizedOverviewCategories, err := normalizedEditorialOverview(decision.OverviewGroups, selected, categoryOrder)
 	if err != nil {
 		return model.BriefingSummary{}, briefingDiagnosticError("final_editor", "overview_invalid", err)
 	}
-	if len(repairedOverviewCategories) > 0 {
-		logutil.Warnf("AI editorial overview repaired from selected stories: categories=%s", strings.Join(repairedOverviewCategories, ","))
+	if len(normalizedOverviewCategories) > 0 {
+		logutil.Warnf("AI editorial overview normalized: categories=%s", strings.Join(normalizedOverviewCategories, ","))
 	}
 	if err := validateBriefingSynthesis(decision.Situation, decision.XHSTopics, decision.Directions); err != nil {
 		return model.BriefingSummary{}, briefingDiagnosticError("final_editor", "synthesis_invalid", fmt.Errorf("validate briefing editorial decision: %w", err))
@@ -1145,8 +1147,9 @@ func normalizedEditorialOverview(groups []model.BriefingOverviewGroup, stories [
 			return nil, nil, fmt.Errorf("validate briefing editorial decision: overview contains unselected category %q", category)
 		}
 		items := normalizedOverviewItems(group.Items)
-		if len(items) > 5 {
-			return nil, nil, fmt.Errorf("validate briefing editorial decision: category %q overview must contain 1-5 items", category)
+		if len(items) > maxEditorialOverviewItems {
+			items = append([]string(nil), items[:maxEditorialOverviewItems]...)
+			repairedCategories = append(repairedCategories, category)
 		}
 		if len(items) == 0 {
 			items = editorialOverviewItems(category, storiesForCategory)
@@ -1210,7 +1213,7 @@ func editorialOverviewItems(category string, stories []model.BriefingStory) []st
 	if emoji == "" {
 		emoji = "📰"
 	}
-	items := make([]string, 0, min(len(stories), 5))
+	items := make([]string, 0, min(len(stories), maxEditorialOverviewItems))
 	seen := make(map[string]struct{}, len(stories))
 	for _, story := range stories {
 		title := strings.TrimSpace(story.Title)
@@ -1222,7 +1225,7 @@ func editorialOverviewItems(category string, stories []model.BriefingStory) []st
 		}
 		seen[title] = struct{}{}
 		items = append(items, emoji+" "+title)
-		if len(items) == 5 {
+		if len(items) == maxEditorialOverviewItems {
 			break
 		}
 	}
