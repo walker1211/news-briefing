@@ -2069,7 +2069,7 @@ func TestFetchBriefingArticlesWithWatchCarriesFilteredArticlesAndMarksOnlyAccept
 		},
 	}
 
-	result, err := app.fetchBriefingArticlesWithWatch(context.Background(), now, "26.04.15", "1600", func(ctx context.Context) (fetcher.FetchResult, error) {
+	result, err := app.fetchBriefingArticlesWithWatch(context.Background(), now, now.Add(-12*time.Hour), now, "26.04.15", "1600", func(ctx context.Context) (fetcher.FetchResult, error) {
 		return fetcher.FetchResult{
 			Articles:         []model.Article{accepted},
 			FilteredArticles: []model.Article{filtered},

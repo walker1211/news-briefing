@@ -25,6 +25,7 @@ type WatchIndexItem struct {
 type WatchArticleState struct {
 	URL           string    `json:"url"`
 	Title         string    `json:"title"`
+	PublishedAt   time.Time `json:"published_at,omitzero"`
 	SummaryHash   string    `json:"summary_hash"`
 	BodyHash      string    `json:"body_hash"`
 	LastCheckedAt time.Time `json:"last_checked_at"`
@@ -37,6 +38,7 @@ type WatchEvent struct {
 	Category          string    `json:"category"`
 	ArticleURL        string    `json:"article_url,omitempty"`
 	ArticleTitle      string    `json:"article_title,omitempty"`
+	PublishedAt       time.Time `json:"published_at,omitzero"`
 	DetectedAt        time.Time `json:"detected_at"`
 	MatchedKeywords   []string  `json:"matched_keywords,omitempty"`
 	IncludeInBriefing bool      `json:"include_in_briefing"`

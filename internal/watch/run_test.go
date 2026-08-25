@@ -385,11 +385,15 @@ func TestRunAnnouncementSiteIncludesNewArticleInBriefing(t *testing.T) {
 		t.Fatalf("Run() error = %v", err)
 	}
 	found := false
+	wantPublishedAt := time.Date(2026, 4, 16, 17, 0, 0, 0, time.UTC)
 	for _, event := range report.Events {
 		if event.EventType == "new_article" && event.ArticleURL == "https://www.anthropic.com/news/claude-opus-4-7" {
 			found = true
 			if !event.IncludeInBriefing {
 				t.Fatalf("event should be included in briefing: %#v", event)
+			}
+			if !event.PublishedAt.Equal(wantPublishedAt) {
+				t.Fatalf("event.PublishedAt = %v, want %v", event.PublishedAt, wantPublishedAt)
 			}
 		}
 	}
@@ -398,6 +402,9 @@ func TestRunAnnouncementSiteIncludesNewArticleInBriefing(t *testing.T) {
 	}
 	if len(articles) != 1 {
 		t.Fatalf("len(articles) = %d, want 1; articles=%#v", len(articles), articles)
+	}
+	if !articles[0].Published.Equal(wantPublishedAt) {
+		t.Fatalf("articles[0].Published = %v, want %v", articles[0].Published, wantPublishedAt)
 	}
 }
 

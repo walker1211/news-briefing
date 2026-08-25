@@ -99,6 +99,10 @@ func writeWatchSection(b *strings.Builder, events []model.WatchEvent) {
 			b.WriteString("\n  - URL: ")
 			b.WriteString(event.ArticleURL)
 		}
+		if !event.PublishedAt.IsZero() {
+			b.WriteString("\n  - 文章发布日期: ")
+			b.WriteString(event.PublishedAt.Format("2006-01-02 15:04 MST"))
+		}
 		b.WriteString("\n  - 进入主简报: ")
 		if event.IncludeInBriefing {
 			b.WriteString("是")

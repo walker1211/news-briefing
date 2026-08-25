@@ -19,6 +19,7 @@ func TestWriteWatchMarkdownWritesGroupedEvents(t *testing.T) {
 			Category:          "安全保障",
 			ArticleTitle:      "Claude 上的身份验证",
 			ArticleURL:        "https://support.claude.com/zh-CN/articles/14328960-claude-上的-身份验证",
+			PublishedAt:       time.Date(2026, 4, 14, 9, 30, 0, 0, time.UTC),
 			IncludeInBriefing: true,
 			Reason:            "命中高价值关键词：身份验证",
 		}},
@@ -36,6 +37,9 @@ func TestWriteWatchMarkdownWritesGroupedEvents(t *testing.T) {
 		t.Fatalf("text = %q", text)
 	}
 	if !strings.Contains(text, "Claude 上的身份验证") || !strings.Contains(text, "new_article") {
+		t.Fatalf("text = %q", text)
+	}
+	if !strings.Contains(text, "文章发布日期: 2026-04-14 09:30 UTC") {
 		t.Fatalf("text = %q", text)
 	}
 }
