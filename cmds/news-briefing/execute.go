@@ -577,7 +577,42 @@ func (app *app) mergeWatchFetchResult(ctx context.Context, articles []model.Arti
 	return articles, notices, nil
 }
 
-func (app *app) fetchBriefingArticlesWithWatch(ctx context.Context, watchTime time.Time, sidecarDate string, period string, fetchMain func(context.Context) (fetcher.FetchResult, error)) (briefingFetchResult, error) {
+func filterWatchFetchResultByWindow(result watchFetchResult, from, to time.Time) watchFetchResult {
+	if result.report == nil || from.IsZero() || to.IsZero() {
+		return result
+	}
+	excludedURLs := make(map[string]struct{})
+	for i := range result.report.Events {
+		event := &result.report.Events[i]
+		if !event.IncludeInBriefing || event.PublishedAt.IsZero() {
+			continue
+		}
+		if !event.PublishedAt.Before(from) && event.PublishedAt.Before(to) {
+			continue
+		}
+		event.IncludeInBriefing = false
+		if event.Reason == "" {
+			event.Reason = "文章发布日期不在本次简报时间窗"
+		} else {
+			event.Reason += "；文章发布日期不在本次简报时间窗"
+		}
+		excludedURLs[event.ArticleURL] = struct{}{}
+	}
+	if len(excludedURLs) == 0 {
+		return result
+	}
+	filtered := make([]model.Article, 0, len(result.articles))
+	for _, article := range result.articles {
+		if _, excluded := excludedURLs[article.Link]; excluded {
+			continue
+		}
+		filtered = append(filtered, article)
+	}
+	result.articles = filtered
+	return result
+}
+
+func (app *app) fetchBriefingArticlesWithWatch(ctx context.Context, watchTime, from, to time.Time, sidecarDate string, period string, fetchMain func(context.Context) (fetcher.FetchResult, error)) (briefingFetchResult, error) {
 	watchCtx, cancelWatch := context.WithCancel(ctx)
 	defer cancelWatch()
 	waitWatch := app.startWatchFetch(watchCtx, watchTime)
@@ -588,7 +623,7 @@ func (app *app) fetchBriefingArticlesWithWatch(ctx context.Context, watchTime ti
 	}
 	seenArticles := append([]model.Article(nil), result.Articles...)
 	watchSiteErrorNotices := []string(nil)
-	watchResult := waitWatch()
+	watchResult := filterWatchFetchResultByWindow(waitWatch(), from, to)
 	result.Articles, watchSiteErrorNotices, err = app.mergeWatchFetchResult(ctx, result.Articles, watchResult, sidecarDate, period)
 	if err != nil {
 		return briefingFetchResult{}, err
@@ -746,7 +781,7 @@ func (app *app) runBriefingContext(ctx context.Context, commandPath string, peri
 	now := app.currentTime()
 	date := now.Format("06.01.02")
 	fetchStarted := time.Now()
-	result, err := app.fetchBriefingArticlesWithWatch(ctx, now, date, period, func(ctx context.Context) (fetcher.FetchResult, error) {
+	result, err := app.fetchBriefingArticlesWithWatch(ctx, now, now.Add(-12*time.Hour), now, date, period, func(ctx context.Context) (fetcher.FetchResult, error) {
 		return app.fetchAllArticlesDetailed(ctx, false)
 	})
 	if err != nil {
@@ -2011,7 +2046,11 @@ func loadWatchSeenArticles(outputDir string, from, to time.Time) ([]model.Articl
 	}
 	articles := make([]model.Article, 0, len(state.Items))
 	for _, item := range state.Items {
-		if !item.DetectedAt.After(from) || item.DetectedAt.After(to) {
+		publishedAt := item.PublishedAt
+		if publishedAt.IsZero() {
+			publishedAt = item.DetectedAt
+		}
+		if !publishedAt.After(from) || publishedAt.After(to) {
 			continue
 		}
 		articles = append(articles, annotateWatchDeepArticle(item))
@@ -2030,6 +2069,10 @@ func annotateWatchDeepArticle(item model.WatchSeenArticle) model.Article {
 	if summary != "" {
 		summary = "[Watch][" + item.WatchCategory + "] " + summary
 	}
+	publishedAt := item.PublishedAt
+	if publishedAt.IsZero() {
+		publishedAt = item.DetectedAt
+	}
 	return model.Article{
 		Title:      item.Title,
 		Link:       item.URL,
@@ -2037,7 +2080,7 @@ func annotateWatchDeepArticle(item model.WatchSeenArticle) model.Article {
 		Source:     item.Source + " Watch",
 		SourceRole: model.SourceRolePrimary,
 		Category:   item.BriefingCategory,
-		Published:  item.DetectedAt,
+		Published:  publishedAt,
 	}
 }
 

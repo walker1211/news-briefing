@@ -514,6 +514,7 @@ func watchEventToSeenArticle(site config.WatchSite, event model.WatchEvent, summ
 		Summary:          summary,
 		Body:             body,
 		EventType:        event.EventType,
+		PublishedAt:      event.PublishedAt,
 		DetectedAt:       event.DetectedAt,
 	}
 }
@@ -524,6 +525,10 @@ func watchEventToArticle(site config.WatchSite, event model.WatchEvent) model.Ar
 	if summary == "" {
 		summary = fmt.Sprintf("%s 出现 %s 事件", event.ArticleTitle, event.EventType)
 	}
+	publishedAt := event.PublishedAt
+	if publishedAt.IsZero() {
+		publishedAt = event.DetectedAt
+	}
 	return model.Article{
 		Title:      title,
 		Link:       event.ArticleURL,
@@ -531,6 +536,6 @@ func watchEventToArticle(site config.WatchSite, event model.WatchEvent) model.Ar
 		Source:     site.Name + " Watch",
 		SourceRole: model.SourceRolePrimary,
 		Category:   site.BriefingCategory,
-		Published:  event.DetectedAt,
+		Published:  publishedAt,
 	}
 }

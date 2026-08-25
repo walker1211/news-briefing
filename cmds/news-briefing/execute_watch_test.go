@@ -139,6 +139,69 @@ func TestRunScheduledBriefingMergesWatchArticlesAndWritesSidecar(t *testing.T) {
 	}
 }
 
+func TestRunScheduledBriefingExcludesWatchArticlePublishedOutsideWindow(t *testing.T) {
+	now := time.Date(2026, 8, 25, 8, 0, 0, 0, time.UTC)
+	window := scheduler.Window{Period: "0800", From: now.Add(-14 * time.Hour), To: now}
+	oldPublishedAt := time.Date(2026, 7, 24, 17, 0, 0, 0, time.UTC)
+	watchURL := "https://www.anthropic.com/news/claude-opus-5"
+	var printed *model.Briefing
+	var writtenReport *model.WatchReport
+
+	app := &app{
+		cfg: &config.Config{ScheduleLocation: time.UTC, Output: config.OutputCfg{Dir: t.TempDir(), Mode: model.OutputModeOriginalOnly}},
+		fetch: fetchDeps{
+			fetchWindowContext: func(context.Context, *config.Config, time.Time, time.Time, bool, bool) ([]model.Article, []fetcher.FailedSource, error) {
+				return []model.Article{{Title: "today", Link: "https://example.com/today", Published: now.Add(-time.Hour)}}, nil, nil
+			},
+		},
+		watch: watchDeps{
+			fetchWatchContext: func(context.Context, *config.Config, time.Time) ([]model.Article, *model.WatchReport, error) {
+				return []model.Article{{Title: "Anthropic News 文档更新：Introducing Claude Opus 5", Link: watchURL, Published: oldPublishedAt}}, &model.WatchReport{
+					GeneratedAt: now,
+					Events: []model.WatchEvent{{
+						EventType:         "content_changed",
+						Source:            "Anthropic News",
+						ArticleURL:        watchURL,
+						ArticleTitle:      "Introducing Claude Opus 5",
+						PublishedAt:       oldPublishedAt,
+						DetectedAt:        now,
+						IncludeInBriefing: true,
+						Reason:            "正文发生变化",
+					}},
+				}, nil
+			},
+		},
+		output: outputDeps{
+			composeBody: func(string, model.OutputMode, model.OutputContent) (string, error) { return "ORIGINAL ONLY", nil },
+			writeWatchMarkdown: func(report *model.WatchReport, _, _, _ string) (string, error) {
+				writtenReport = report
+				return "", nil
+			},
+			printCLI:      func(briefing *model.Briefing) { printed = briefing },
+			printFailed:   func([]fetcher.FailedSource) {},
+			printArticles: func([]model.Article) {},
+			writeMarkdown: func(*model.Briefing, string) (string, error) { return "", nil },
+		},
+	}
+
+	if err := app.runScheduledBriefing(window, false); err != nil {
+		t.Fatalf("runScheduledBriefing() error = %v", err)
+	}
+	if printed == nil || len(printed.Articles) != 1 || printed.Articles[0].Title != "today" {
+		t.Fatalf("printed briefing articles = %#v, want only current-window article", printed)
+	}
+	if writtenReport == nil || len(writtenReport.Events) != 1 {
+		t.Fatalf("writtenReport = %#v", writtenReport)
+	}
+	event := writtenReport.Events[0]
+	if event.IncludeInBriefing {
+		t.Fatalf("event.IncludeInBriefing = true, want false")
+	}
+	if !strings.Contains(event.Reason, "文章发布日期不在本次简报时间窗") {
+		t.Fatalf("event.Reason = %q", event.Reason)
+	}
+}
+
 func TestRunBriefingFetchesWatchInParallelWithMainFetch(t *testing.T) {
 	now := time.Date(2026, 4, 15, 16, 0, 0, 0, time.UTC)
 	watchStarted := make(chan struct{})

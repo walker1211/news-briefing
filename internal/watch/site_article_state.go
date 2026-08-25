@@ -11,9 +11,10 @@ import (
 )
 
 type watchArticleContent struct {
-	title   string
-	summary string
-	body    string
+	title       string
+	summary     string
+	body        string
+	publishedAt time.Time
 }
 
 type watchArticleContentFetcher func(context.Context, string) (watchArticleContent, error)
@@ -258,6 +259,7 @@ func updateCurrentWatchArticleStates(ctx context.Context, run watchCategoryRun, 
 				Category:        run.current.Category,
 				ArticleURL:      item.URL,
 				ArticleTitle:    content.title,
+				PublishedAt:     content.publishedAt,
 				DetectedAt:      run.now,
 				BodyFetched:     true,
 				ContentChanged:  true,
@@ -269,6 +271,9 @@ func updateCurrentWatchArticleStates(ctx context.Context, run watchCategoryRun, 
 			seenPayloads[item.URL] = content
 			storeWatchArticleState(run.articleState, item.URL, content, run.now)
 			continue
+		}
+		if !content.publishedAt.IsZero() {
+			state.PublishedAt = content.publishedAt
 		}
 		state.LastCheckedAt = run.now
 		run.articleState[item.URL] = state
@@ -297,6 +302,7 @@ func enrichChangedWatchEvents(ctx context.Context, run watchCategoryRun, changed
 		if content.title != "" {
 			categoryEvents[matchedIndex].ArticleTitle = content.title
 		}
+		categoryEvents[matchedIndex].PublishedAt = content.publishedAt
 		categoryEvents[matchedIndex].BodyFetched = true
 		categoryEvents[matchedIndex].MatchedKeywords = matchedWatchKeywords(content.title+" "+content.summary+" "+content.body, run.site.HighValueKeywords)
 		if categoryEvents[matchedIndex].Reason == "" {
@@ -318,7 +324,6 @@ func materializeWatchEvents(ctx context.Context, run watchCategoryRun, categoryE
 		if !event.IncludeInBriefing {
 			continue
 		}
-		articles = append(articles, watchEventToArticle(run.site, event))
 		payload, ok := seenPayloads[event.ArticleURL]
 		if !ok {
 			content, err := run.fetchContent(ctx, event.ArticleURL)
@@ -327,6 +332,10 @@ func materializeWatchEvents(ctx context.Context, run watchCategoryRun, categoryE
 			}
 			payload = content
 		}
+		if event.PublishedAt.IsZero() {
+			event.PublishedAt = payload.publishedAt
+		}
+		articles = append(articles, watchEventToArticle(run.site, event))
 		seenItems = append(seenItems, watchEventToSeenArticle(run.site, event, payload.summary, payload.body))
 	}
 	return articles, seenItems, nil
@@ -336,6 +345,7 @@ func storeWatchArticleState(articleState ArticleState, url string, content watch
 	articleState[url] = model.WatchArticleState{
 		URL:           url,
 		Title:         content.title,
+		PublishedAt:   content.publishedAt,
 		SummaryHash:   hashWatchContent(content.summary),
 		BodyHash:      hashWatchContent(content.body),
 		LastCheckedAt: now,

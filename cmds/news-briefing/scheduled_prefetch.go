@@ -152,7 +152,7 @@ func (app *app) runScheduledPrefetchContext(ctx context.Context, window schedule
 
 	logutil.Printf("[prefetch] 窗口 %s 开始并行抓取普通 RSS 与 Watch", window.Period)
 	date := window.To.In(app.displayLocation()).Format("06.01.02")
-	result, err := app.fetchBriefingArticlesWithWatch(ctx, window.To, date, window.Period, func(ctx context.Context) (fetcher.FetchResult, error) {
+	result, err := app.fetchBriefingArticlesWithWatch(ctx, window.To, window.From, window.To, date, window.Period, func(ctx context.Context) (fetcher.FetchResult, error) {
 		return app.fetch.fetchWindowOrdinaryDetailedContext(ctx, app.cfg, window.From, window.To, false, false)
 	})
 	snapshot.FinishedAt = app.currentTime()
@@ -295,7 +295,7 @@ func (app *app) fetchScheduledBriefingArticles(ctx context.Context, window sched
 	prefetched, ok, reason := app.waitForScheduledPrefetch(ctx, window)
 	if !ok {
 		logutil.Printf("[prefetch] 窗口 %s 未复用预取（%s），执行完整抓取", window.Period, reason)
-		return app.fetchBriefingArticlesWithWatch(ctx, window.To, date, window.Period, func(ctx context.Context) (fetcher.FetchResult, error) {
+		return app.fetchBriefingArticlesWithWatch(ctx, window.To, window.From, window.To, date, window.Period, func(ctx context.Context) (fetcher.FetchResult, error) {
 			return app.fetchWindowArticlesDetailed(ctx, window.From, window.To, false, false)
 		})
 	}

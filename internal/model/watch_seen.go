@@ -12,6 +12,7 @@ type WatchSeenArticle struct {
 	Summary          string    `json:"summary"`
 	Body             string    `json:"body"`
 	EventType        string    `json:"event_type"`
+	PublishedAt      time.Time `json:"published_at,omitzero"`
 	DetectedAt       time.Time `json:"detected_at"`
 }
 

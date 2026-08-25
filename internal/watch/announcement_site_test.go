@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func mustReadAnnouncementFixture(t *testing.T, name string) string {
@@ -131,6 +132,26 @@ func TestParseAnthropicAnnouncementArticleExtractsSummaryAndBody(t *testing.T) {
 	}
 	if body == "" {
 		t.Fatal("body = empty")
+	}
+}
+
+func TestParseAnnouncementPublishedAtUsesPrimaryAnthropicPost(t *testing.T) {
+	html := mustReadAnnouncementFixture(t, "anthropic_news_opus47.html")
+
+	got := parseAnnouncementPublishedAt(html)
+	want := time.Date(2026, 4, 16, 17, 0, 0, 0, time.UTC)
+	if !got.Equal(want) {
+		t.Fatalf("parseAnnouncementPublishedAt() = %v, want %v", got, want)
+	}
+}
+
+func TestParseAnnouncementPublishedAtPrefersStandardMetadata(t *testing.T) {
+	html := `<html><head><meta property="article:published_time" content="2026-07-24T17:00:00Z"></head><body><script>{"publishedOn":"2026-08-24T17:00:00Z"}</script></body></html>`
+
+	got := parseAnnouncementPublishedAt(html)
+	want := time.Date(2026, 7, 24, 17, 0, 0, 0, time.UTC)
+	if !got.Equal(want) {
+		t.Fatalf("parseAnnouncementPublishedAt() = %v, want %v", got, want)
 	}
 }
 

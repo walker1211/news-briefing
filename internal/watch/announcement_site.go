@@ -15,6 +15,7 @@ import (
 )
 
 var claudeReleaseNotesDateFragmentPattern = regexp.MustCompile(`(?i)^(january|february|march|april|may|june|july|august|september|october|november|december)-[0-9]{1,2}-[0-9]{4}$`)
+var announcementPublishedAtPattern = regexp.MustCompile(`(?i)"(?:publishedOn|datePublished)"\s*:\s*"([^"\\]+)"`)
 
 const staleClaudeReleaseNotesEntryDays = 60
 
@@ -62,7 +63,11 @@ func runAnnouncementSite(ctx context.Context, site config.WatchSite, now time.Ti
 		if err != nil {
 			return watchArticleContent{}, err
 		}
-		return watchArticleContent{title: title, summary: summary, body: body}, nil
+		publishedAt := time.Time{}
+		if !isClaudeReleaseNotesOverviewEntryURL(url) {
+			publishedAt = parseAnnouncementPublishedAt(articleHTML)
+		}
+		return watchArticleContent{title: title, summary: summary, body: body, publishedAt: publishedAt}, nil
 	}
 
 	return runWatchCategory(ctx, watchCategoryRun{
@@ -353,6 +358,53 @@ func parseAnthropicAnnouncementArticle(html string) (title string, summary strin
 	}
 	body = normalizeWatchText(strings.Join(paragraphs, " "))
 	return title, summary, body, nil
+}
+
+func parseAnnouncementPublishedAt(html string) time.Time {
+	doc, err := goquery.NewDocumentFromReader(strings.NewReader(html))
+	if err == nil {
+		selectors := []string{
+			`meta[property='article:published_time']`,
+			`meta[name='article:published_time']`,
+			`time[datetime]`,
+		}
+		for _, selector := range selectors {
+			selection := doc.Find(selector).First()
+			value := selection.AttrOr("content", "")
+			if value == "" {
+				value = selection.AttrOr("datetime", "")
+			}
+			if publishedAt, ok := parseAnnouncementTime(value); ok {
+				return publishedAt
+			}
+		}
+	}
+
+	// Anthropic news pages currently serialize the canonical post as escaped
+	// Next.js data. The primary post appears before relatedPosts, so the first
+	// publishedOn value is the article's own publication time.
+	normalized := strings.ReplaceAll(html, `\"`, `"`)
+	match := announcementPublishedAtPattern.FindStringSubmatch(normalized)
+	if len(match) == 2 {
+		if publishedAt, ok := parseAnnouncementTime(match[1]); ok {
+			return publishedAt
+		}
+	}
+	return time.Time{}
+}
+
+func parseAnnouncementTime(value string) (time.Time, bool) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return time.Time{}, false
+	}
+	for _, layout := range []string{time.RFC3339Nano, time.RFC3339, "Jan 2, 2006", "January 2, 2006"} {
+		parsed, err := time.Parse(layout, value)
+		if err == nil {
+			return parsed, true
+		}
+	}
+	return time.Time{}, false
 }
 
 func isClaudeReleaseNotesOverviewEntryURL(rawURL string) bool {

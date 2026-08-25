@@ -771,6 +771,19 @@ func TestLoadWatchSeenArticlesFiltersOldItems(t *testing.T) {
 			EventType:        "new_article",
 			DetectedAt:       time.Date(2026, 4, 15, 10, 0, 0, 0, time.UTC),
 		},
+		{
+			ID:               "detected-now-published-old",
+			URL:              "https://www.anthropic.com/news/old",
+			Title:            "旧新闻今日变更",
+			Source:           "Anthropic News",
+			BriefingCategory: "AI/科技",
+			WatchCategory:    "Anthropic News",
+			Summary:          "旧新闻摘要",
+			Body:             "旧新闻正文",
+			EventType:        "content_changed",
+			PublishedAt:      time.Date(2026, 3, 1, 10, 0, 0, 0, time.UTC),
+			DetectedAt:       time.Date(2026, 4, 15, 11, 0, 0, 0, time.UTC),
+		},
 	}}); err != nil {
 		t.Fatalf("seenStore.Save() error = %v", err)
 	}
