@@ -16,8 +16,14 @@ import (
 
 var claudeReleaseNotesDateFragmentPattern = regexp.MustCompile(`(?i)^(january|february|march|april|may|june|july|august|september|october|november|december)-[0-9]{1,2}-[0-9]{4}$`)
 var announcementPublishedAtPattern = regexp.MustCompile(`(?i)"(?:publishedOn|datePublished)"\s*:\s*"([^"\\]+)"`)
+var announcementVisibleDatePattern = regexp.MustCompile(`(?i)(?:^|[^A-Za-z])((?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:tember)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)\s+[0-9]{1,2},\s+[0-9]{4}\b)`)
 
 const staleClaudeReleaseNotesEntryDays = 60
+
+// anthropicAnnouncementContentHashVersion tracks the body-selection contract
+// for Anthropic News pages. Increment it when the canonical article scope
+// changes so old state can be rehashed without emitting a false event.
+const anthropicAnnouncementContentHashVersion = 2
 
 var claudeReleaseNotesMonthByName = map[string]time.Month{
 	"january":   time.January,
@@ -64,10 +70,12 @@ func runAnnouncementSite(ctx context.Context, site config.WatchSite, now time.Ti
 			return watchArticleContent{}, err
 		}
 		publishedAt := time.Time{}
+		contentHashVersion := 0
 		if !isClaudeReleaseNotesOverviewEntryURL(url) {
 			publishedAt = parseAnnouncementPublishedAt(articleHTML)
+			contentHashVersion = anthropicAnnouncementContentHashVersion
 		}
-		return watchArticleContent{title: title, summary: summary, body: body, publishedAt: publishedAt}, nil
+		return watchArticleContent{title: title, summary: summary, body: body, publishedAt: publishedAt, contentHashVersion: contentHashVersion}, nil
 	}
 
 	return runWatchCategory(ctx, watchCategoryRun{
@@ -323,7 +331,12 @@ func parseAnthropicAnnouncementArticle(html string) (title string, summary strin
 		return "", "", "", fmt.Errorf("parse announcement article html: %w", err)
 	}
 
-	title = normalizeWatchText(doc.Find("article h1").First().Text())
+	hero := anthropicAnnouncementHeroArticle(doc)
+	canonical := anthropicAnnouncementCanonicalArticle(doc, hero)
+	title = normalizeWatchText(hero.Find("h1").First().Text())
+	if title == "" {
+		title = normalizeWatchText(doc.Find("article h1").First().Text())
+	}
 	if title == "" {
 		title = normalizeWatchText(doc.Find("h1").First().Text())
 	}
@@ -333,14 +346,14 @@ func parseAnthropicAnnouncementArticle(html string) (title string, summary strin
 
 	summary = normalizeWatchText(doc.Find("meta[name='description']").AttrOr("content", ""))
 	if summary == "" {
-		summary = normalizeWatchText(doc.Find("article p").First().Text())
+		summary = normalizeWatchText(canonical.Find("p").First().Text())
 	}
 	if summary == "" {
 		summary = normalizeWatchText(doc.Find("p").First().Text())
 	}
 
 	paragraphs := make([]string, 0)
-	doc.Find("article p").Each(func(i int, sel *goquery.Selection) {
+	canonical.Find("p").Each(func(i int, sel *goquery.Selection) {
 		text := normalizeWatchText(sel.Text())
 		if text == "" {
 			return
@@ -358,6 +371,32 @@ func parseAnthropicAnnouncementArticle(html string) (title string, summary strin
 	}
 	body = normalizeWatchText(strings.Join(paragraphs, " "))
 	return title, summary, body, nil
+}
+
+func anthropicAnnouncementHeroArticle(doc *goquery.Document) *goquery.Selection {
+	hero := doc.Find("main#main-content > article").First()
+	if hero.Length() == 0 {
+		hero = doc.Find("article").First()
+	}
+	return hero
+}
+
+func anthropicAnnouncementCanonicalArticle(doc *goquery.Document, hero *goquery.Selection) *goquery.Selection {
+	canonical := doc.Find("main#main-content > article > div.page-wrapper > article").First()
+	if canonical.Length() == 0 {
+		canonical = doc.Find("main#main-content > article article").First()
+	}
+	if canonical.Length() != 0 {
+		return canonical
+	}
+	if hero != nil && hero.Length() != 0 {
+		canonical = hero.Find("article").First()
+		if canonical.Length() != 0 {
+			return canonical
+		}
+		return hero
+	}
+	return doc.Find("article").First()
 }
 
 func parseAnnouncementPublishedAt(html string) time.Time {
@@ -390,7 +429,41 @@ func parseAnnouncementPublishedAt(html string) time.Time {
 			return publishedAt
 		}
 	}
+
+	if publishedAt, ok := parseAnnouncementVisiblePublishedAt(doc); ok {
+		return publishedAt
+	}
 	return time.Time{}
+}
+
+func parseAnnouncementVisiblePublishedAt(doc *goquery.Document) (time.Time, bool) {
+	if doc == nil {
+		return time.Time{}, false
+	}
+	hero := anthropicAnnouncementHeroArticle(doc)
+	if hero.Length() == 0 {
+		return time.Time{}, false
+	}
+	heading := hero.Find("h1").First()
+	if heading.Length() == 0 {
+		return time.Time{}, false
+	}
+
+	// The publication date is rendered next to the canonical title in the
+	// hero header. Walk only from that h1 to its containing hero article; this
+	// prevents dates in body changelogs and related-content cards from winning.
+	for scope := heading; scope.Length() > 0; scope = scope.Parent() {
+		match := announcementVisibleDatePattern.FindStringSubmatch(scope.Text())
+		if len(match) == 2 {
+			if publishedAt, ok := parseAnnouncementTime(match[1]); ok {
+				return publishedAt, true
+			}
+		}
+		if scope.Is("article") && scope.IsSelection(hero) {
+			break
+		}
+	}
+	return time.Time{}, false
 }
 
 func parseAnnouncementTime(value string) (time.Time, bool) {

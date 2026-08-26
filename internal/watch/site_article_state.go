@@ -11,10 +11,11 @@ import (
 )
 
 type watchArticleContent struct {
-	title       string
-	summary     string
-	body        string
-	publishedAt time.Time
+	title              string
+	summary            string
+	body               string
+	publishedAt        time.Time
+	contentHashVersion int
 }
 
 type watchArticleContentFetcher func(context.Context, string) (watchArticleContent, error)
@@ -122,6 +123,7 @@ func diffWatchCategoryEvents(site config.WatchSite, now time.Time, prev *model.W
 	categoryEvents, changedURLs := diffCategorySnapshots(prev, current)
 	for i := range categoryEvents {
 		categoryEvents[i].Source = site.Name
+		categoryEvents[i].PublishedAtRequired = watchSiteRequiresPublishedAt(site) && categoryEvents[i].ArticleURL != ""
 		categoryEvents[i].DetectedAt = now
 		if categoryEvents[i].Reason == "" {
 			categoryEvents[i].Reason = defaultWatchReason(categoryEvents[i].EventType, categoryEvents[i].ArticleTitle)
@@ -252,19 +254,32 @@ func updateCurrentWatchArticleStates(ctx context.Context, run watchCategoryRun, 
 			storeWatchArticleState(run.articleState, item.URL, content, run.now)
 			continue
 		}
+		if content.contentHashVersion > 0 && state.ContentHashVersion != content.contentHashVersion {
+			oldPublishedAt := state.PublishedAt
+			lastChangedAt := state.LastChangedAt
+			storeWatchArticleState(run.articleState, item.URL, content, run.now)
+			migrated := run.articleState[item.URL]
+			if migrated.PublishedAt.IsZero() {
+				migrated.PublishedAt = oldPublishedAt
+			}
+			migrated.LastChangedAt = lastChangedAt
+			run.articleState[item.URL] = migrated
+			continue
+		}
 		if state.Title != content.title || state.SummaryHash != summaryHash || state.BodyHash != bodyHash {
 			event := model.WatchEvent{
-				EventType:       "content_changed",
-				Source:          run.site.Name,
-				Category:        run.current.Category,
-				ArticleURL:      item.URL,
-				ArticleTitle:    content.title,
-				PublishedAt:     content.publishedAt,
-				DetectedAt:      run.now,
-				BodyFetched:     true,
-				ContentChanged:  true,
-				Reason:          "正文发生变化",
-				MatchedKeywords: matchedWatchKeywords(content.title+" "+content.summary+" "+content.body, run.site.HighValueKeywords),
+				EventType:           "content_changed",
+				Source:              run.site.Name,
+				Category:            run.current.Category,
+				ArticleURL:          item.URL,
+				ArticleTitle:        content.title,
+				PublishedAt:         content.publishedAt,
+				PublishedAtRequired: watchSiteRequiresPublishedAt(run.site),
+				DetectedAt:          run.now,
+				BodyFetched:         true,
+				ContentChanged:      true,
+				Reason:              "正文发生变化",
+				MatchedKeywords:     matchedWatchKeywords(content.title+" "+content.summary+" "+content.body, run.site.HighValueKeywords),
 			}
 			applyWatchEventPriorityAt(&event, run.now)
 			*categoryEvents = append(*categoryEvents, event)
@@ -303,6 +318,7 @@ func enrichChangedWatchEvents(ctx context.Context, run watchCategoryRun, changed
 			categoryEvents[matchedIndex].ArticleTitle = content.title
 		}
 		categoryEvents[matchedIndex].PublishedAt = content.publishedAt
+		categoryEvents[matchedIndex].PublishedAtRequired = watchSiteRequiresPublishedAt(run.site)
 		categoryEvents[matchedIndex].BodyFetched = true
 		categoryEvents[matchedIndex].MatchedKeywords = matchedWatchKeywords(content.title+" "+content.summary+" "+content.body, run.site.HighValueKeywords)
 		if categoryEvents[matchedIndex].Reason == "" {
@@ -343,12 +359,13 @@ func materializeWatchEvents(ctx context.Context, run watchCategoryRun, categoryE
 
 func storeWatchArticleState(articleState ArticleState, url string, content watchArticleContent, now time.Time) {
 	articleState[url] = model.WatchArticleState{
-		URL:           url,
-		Title:         content.title,
-		PublishedAt:   content.publishedAt,
-		SummaryHash:   hashWatchContent(content.summary),
-		BodyHash:      hashWatchContent(content.body),
-		LastCheckedAt: now,
-		LastChangedAt: now,
+		URL:                url,
+		Title:              content.title,
+		PublishedAt:        content.publishedAt,
+		SummaryHash:        hashWatchContent(content.summary),
+		BodyHash:           hashWatchContent(content.body),
+		ContentHashVersion: content.contentHashVersion,
+		LastCheckedAt:      now,
+		LastChangedAt:      now,
 	}
 }

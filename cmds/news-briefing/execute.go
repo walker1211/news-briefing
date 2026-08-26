@@ -584,7 +584,20 @@ func filterWatchFetchResultByWindow(result watchFetchResult, from, to time.Time)
 	excludedURLs := make(map[string]struct{})
 	for i := range result.report.Events {
 		event := &result.report.Events[i]
-		if !event.IncludeInBriefing || event.PublishedAt.IsZero() {
+		if !event.IncludeInBriefing {
+			continue
+		}
+		if event.PublishedAt.IsZero() {
+			if !event.PublishedAtRequired || event.ArticleURL == "" {
+				continue
+			}
+			event.IncludeInBriefing = false
+			if event.Reason == "" {
+				event.Reason = "文章发布日期缺失，仅记录在 watch 报告"
+			} else if !strings.Contains(event.Reason, "文章发布日期缺失，仅记录在 watch 报告") {
+				event.Reason += "；文章发布日期缺失，仅记录在 watch 报告"
+			}
+			excludedURLs[event.ArticleURL] = struct{}{}
 			continue
 		}
 		if !event.PublishedAt.Before(from) && event.PublishedAt.Before(to) {
