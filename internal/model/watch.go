@@ -23,28 +23,30 @@ type WatchIndexItem struct {
 }
 
 type WatchArticleState struct {
-	URL           string    `json:"url"`
-	Title         string    `json:"title"`
-	PublishedAt   time.Time `json:"published_at,omitzero"`
-	SummaryHash   string    `json:"summary_hash"`
-	BodyHash      string    `json:"body_hash"`
-	LastCheckedAt time.Time `json:"last_checked_at"`
-	LastChangedAt time.Time `json:"last_changed_at"`
+	URL                string    `json:"url"`
+	Title              string    `json:"title"`
+	PublishedAt        time.Time `json:"published_at,omitzero"`
+	SummaryHash        string    `json:"summary_hash"`
+	BodyHash           string    `json:"body_hash"`
+	ContentHashVersion int       `json:"content_hash_version,omitempty"`
+	LastCheckedAt      time.Time `json:"last_checked_at"`
+	LastChangedAt      time.Time `json:"last_changed_at"`
 }
 
 type WatchEvent struct {
-	EventType         string    `json:"event_type"`
-	Source            string    `json:"source"`
-	Category          string    `json:"category"`
-	ArticleURL        string    `json:"article_url,omitempty"`
-	ArticleTitle      string    `json:"article_title,omitempty"`
-	PublishedAt       time.Time `json:"published_at,omitzero"`
-	DetectedAt        time.Time `json:"detected_at"`
-	MatchedKeywords   []string  `json:"matched_keywords,omitempty"`
-	IncludeInBriefing bool      `json:"include_in_briefing"`
-	Reason            string    `json:"reason"`
-	BodyFetched       bool      `json:"body_fetched"`
-	ContentChanged    bool      `json:"content_changed"`
+	EventType           string    `json:"event_type"`
+	Source              string    `json:"source"`
+	Category            string    `json:"category"`
+	ArticleURL          string    `json:"article_url,omitempty"`
+	ArticleTitle        string    `json:"article_title,omitempty"`
+	PublishedAt         time.Time `json:"published_at,omitzero"`
+	PublishedAtRequired bool      `json:"published_at_required,omitempty"`
+	DetectedAt          time.Time `json:"detected_at"`
+	MatchedKeywords     []string  `json:"matched_keywords,omitempty"`
+	IncludeInBriefing   bool      `json:"include_in_briefing"`
+	Reason              string    `json:"reason"`
+	BodyFetched         bool      `json:"body_fetched"`
+	ContentChanged      bool      `json:"content_changed"`
 }
 
 type WatchReport struct {

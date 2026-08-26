@@ -202,6 +202,51 @@ func TestRunScheduledBriefingExcludesWatchArticlePublishedOutsideWindow(t *testi
 	}
 }
 
+func TestFilterWatchFetchResultByWindowFailsClosedOnlyWhenPublishedAtRequired(t *testing.T) {
+	now := time.Date(2026, 8, 26, 18, 0, 0, 0, time.UTC)
+	missingURL := "https://www.anthropic.com/news/undated-announcement"
+	genericURL := "https://example.com/watch/article"
+	result := watchFetchResult{
+		articles: []model.Article{
+			{Title: "undated announcement", Link: missingURL},
+			{Title: "generic watch article", Link: genericURL},
+		},
+		report: &model.WatchReport{Events: []model.WatchEvent{
+			{
+				EventType:           "new_article",
+				Source:              "Anthropic News",
+				ArticleURL:          missingURL,
+				IncludeInBriefing:   true,
+				PublishedAtRequired: true,
+				DetectedAt:          now,
+			},
+			{
+				EventType:         "content_changed",
+				Source:            "Generic Watch",
+				ArticleURL:        genericURL,
+				IncludeInBriefing: true,
+				DetectedAt:        now,
+			},
+		}},
+	}
+
+	filtered := filterWatchFetchResultByWindow(result, now.Add(-time.Hour), now.Add(time.Hour))
+	if len(filtered.articles) != 1 || filtered.articles[0].Link != genericURL {
+		t.Fatalf("filtered.articles = %#v, want only generic watch article", filtered.articles)
+	}
+	missing := filtered.report.Events[0]
+	if missing.IncludeInBriefing {
+		t.Fatalf("missing-date event IncludeInBriefing = true, want false")
+	}
+	if !strings.Contains(missing.Reason, "文章发布日期缺失，仅记录在 watch 报告") {
+		t.Fatalf("missing-date event Reason = %q", missing.Reason)
+	}
+	generic := filtered.report.Events[1]
+	if !generic.IncludeInBriefing {
+		t.Fatalf("generic missing-date event IncludeInBriefing = false, want true")
+	}
+}
+
 func TestRunBriefingFetchesWatchInParallelWithMainFetch(t *testing.T) {
 	now := time.Date(2026, 4, 15, 16, 0, 0, 0, time.UTC)
 	watchStarted := make(chan struct{})

@@ -1,6 +1,7 @@
 package watch
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -135,6 +136,33 @@ func TestParseAnthropicAnnouncementArticleExtractsSummaryAndBody(t *testing.T) {
 	}
 }
 
+func TestParseAnthropicAnnouncementArticleIgnoresRelatedContentChanges(t *testing.T) {
+	base := `<html><body><main id="main-content">
+		<article>
+			<div class="page-wrapper hero"><div class="post-header"><h1>Introducing Claude Opus 5</h1><div>Jul 24, 2026</div></div></div>
+			<div class="page-wrapper"><article><p>Claude Opus 5 is available today.</p><p>It improves coding reliability.</p></article></div>
+			<section class="related"><h2>Related content</h2><article><p>%s</p></article></section>
+		</article>
+	</main></body></html>`
+	firstHTML := fmt.Sprintf(base, "First recommendation")
+	secondHTML := fmt.Sprintf(base, "A different recommendation")
+
+	firstTitle, firstSummary, firstBody, err := parseAnthropicAnnouncementArticle(firstHTML)
+	if err != nil {
+		t.Fatalf("parseAnthropicAnnouncementArticle(first) error = %v", err)
+	}
+	secondTitle, secondSummary, secondBody, err := parseAnthropicAnnouncementArticle(secondHTML)
+	if err != nil {
+		t.Fatalf("parseAnthropicAnnouncementArticle(second) error = %v", err)
+	}
+	if firstTitle != secondTitle || firstSummary != secondSummary || firstBody != secondBody {
+		t.Fatalf("related content changed parsed result: first=(%q, %q, %q), second=(%q, %q, %q)", firstTitle, firstSummary, firstBody, secondTitle, secondSummary, secondBody)
+	}
+	if strings.Contains(firstBody, "recommendation") {
+		t.Fatalf("body = %q, want related content excluded", firstBody)
+	}
+}
+
 func TestParseAnnouncementPublishedAtUsesPrimaryAnthropicPost(t *testing.T) {
 	html := mustReadAnnouncementFixture(t, "anthropic_news_opus47.html")
 
@@ -150,6 +178,32 @@ func TestParseAnnouncementPublishedAtPrefersStandardMetadata(t *testing.T) {
 
 	got := parseAnnouncementPublishedAt(html)
 	want := time.Date(2026, 7, 24, 17, 0, 0, 0, time.UTC)
+	if !got.Equal(want) {
+		t.Fatalf("parseAnnouncementPublishedAt() = %v, want %v", got, want)
+	}
+}
+
+func TestParseAnnouncementPublishedAtUsesVisibleAbbreviatedDateNearTitle(t *testing.T) {
+	html := `<html><body><main id="main-content"><article>
+		<div class="page-wrapper"><div class="post-header"><h1>Introducing Claude Opus 5</h1><div class="body-3">Jul 24, 2026</div></div></div>
+		<div class="page-wrapper"><article><p>Article body.</p><p>Changelog: Aug 1, 2026.</p></article></div>
+	</article><section><p>Related: Sep 2, 2026.</p></section></main></body></html>`
+
+	got := parseAnnouncementPublishedAt(html)
+	want := time.Date(2026, 7, 24, 0, 0, 0, 0, time.UTC)
+	if !got.Equal(want) {
+		t.Fatalf("parseAnnouncementPublishedAt() = %v, want %v", got, want)
+	}
+}
+
+func TestParseAnnouncementPublishedAtUsesVisibleFullMonthNearTitle(t *testing.T) {
+	html := `<html><body><main id="main-content"><article>
+		<div class="page-wrapper"><div class="post-header"><h1>Introducing Claude Sonnet 5</h1><div class="body-3">June 30, 2026</div></div></div>
+		<div class="page-wrapper"><article><p>Article body.</p></article></div>
+	</article></main></body></html>`
+
+	got := parseAnnouncementPublishedAt(html)
+	want := time.Date(2026, 6, 30, 0, 0, 0, 0, time.UTC)
 	if !got.Equal(want) {
 		t.Fatalf("parseAnnouncementPublishedAt() = %v, want %v", got, want)
 	}

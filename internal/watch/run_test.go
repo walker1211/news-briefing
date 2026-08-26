@@ -336,6 +336,141 @@ func TestRunAnnouncementSiteBootstrapsWithoutBriefingOutput(t *testing.T) {
 	}
 }
 
+func TestRunAnnouncementSiteKeepsMissingPublishedAtInSidecarOnly(t *testing.T) {
+	const (
+		homeURL    = "https://www.anthropic.com/news"
+		articleURL = "https://www.anthropic.com/news/undated-announcement"
+	)
+	currentHome := `<html><body><main><a href="/news/undated-announcement"><h2>Introducing Claude Opus 5</h2></a></main></body></html>`
+	articleHTML := `<html><head><title>Introducing Claude Opus 5</title></head><body><main id="main-content"><article><div class="page-wrapper"><div class="post-header"><h1>Introducing Claude Opus 5</h1></div></div><div class="page-wrapper"><article><p>Claude Opus 5 is available today.</p></article></div></article></main></body></html>`
+	responses := map[string]string{homeURL: currentHome, articleURL: articleHTML}
+	fetchHTML := func(ctx context.Context, url string) (string, error) { return responses[url], nil }
+
+	cfg := &config.Config{
+		Output: config.OutputCfg{Dir: t.TempDir()},
+		Watch: config.WatchConfig{Sites: []config.WatchSite{{
+			Name:             "Anthropic News",
+			Type:             config.WatchTypeAnnouncementPage,
+			HomeURL:          homeURL,
+			BriefingCategory: "AI/科技",
+			HighValueKeywords: []string{
+				"Claude", "Opus",
+			},
+		}}},
+	}
+	baseline := model.WatchIndexSnapshot{Scope: "category", Source: "Anthropic News", Category: "Anthropic News", URL: homeURL}
+	if err := NewIndexStore(cfg.Output.Dir).Save(IndexState{Categories: map[string]model.WatchIndexSnapshot{
+		"Anthropic News::Anthropic News": baseline,
+	}}); err != nil {
+		t.Fatalf("indexStore.Save() error = %v", err)
+	}
+
+	articles, report, err := runContext(context.Background(), cfg, time.Date(2026, 8, 26, 18, 0, 0, 0, time.UTC), fetchHTML)
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if len(articles) != 0 {
+		t.Fatalf("articles = %#v, want missing-date article to stay sidecar only", articles)
+	}
+	var found *model.WatchEvent
+	for i := range report.Events {
+		if report.Events[i].ArticleURL == articleURL {
+			found = &report.Events[i]
+			break
+		}
+	}
+	if found == nil {
+		t.Fatalf("report.Events = %#v, want article event", report.Events)
+	}
+	if found.IncludeInBriefing {
+		t.Fatalf("event.IncludeInBriefing = true, want false: %#v", *found)
+	}
+	if !found.PublishedAtRequired {
+		t.Fatalf("event.PublishedAtRequired = false, want true: %#v", *found)
+	}
+	if !strings.Contains(found.Reason, "文章发布日期缺失，仅记录在 watch 报告") {
+		t.Fatalf("event.Reason = %q, want missing-date reason", found.Reason)
+	}
+}
+
+func TestRunAnnouncementSiteMigratesLegacyContentHashesWithoutEvent(t *testing.T) {
+	const (
+		homeURL    = "https://www.anthropic.com/news"
+		articleURL = "https://www.anthropic.com/news/claude-opus-5"
+	)
+	currentHome := `<html><body><main><a href="/news/claude-opus-5"><h2>Introducing Claude Opus 5</h2></a></main></body></html>`
+	articleHTML := `<html><head><title>Introducing Claude Opus 5</title></head><body><main id="main-content"><article><div class="page-wrapper"><div class="post-header"><h1>Introducing Claude Opus 5</h1><div>Jul 24, 2026</div></div></div><div class="page-wrapper"><article><p>Claude Opus 5 is available today.</p><p>It improves coding reliability.</p></article></div><section><h2>Related content</h2><article><p>Rotating recommendation.</p></article></section></article></main></body></html>`
+	responses := map[string]string{homeURL: currentHome, articleURL: articleHTML}
+	fetchHTML := func(ctx context.Context, url string) (string, error) { return responses[url], nil }
+
+	cfg := &config.Config{
+		Output: config.OutputCfg{Dir: t.TempDir()},
+		Watch: config.WatchConfig{Sites: []config.WatchSite{{
+			Name:             "Anthropic News",
+			Type:             config.WatchTypeAnnouncementPage,
+			HomeURL:          homeURL,
+			BriefingCategory: "AI/科技",
+			HighValueKeywords: []string{
+				"Claude", "Opus",
+			},
+		}}},
+	}
+	baseline, err := parseAnthropicAnnouncementIndex("Anthropic News", homeURL, currentHome)
+	if err != nil {
+		t.Fatalf("parseAnthropicAnnouncementIndex() error = %v", err)
+	}
+	if err := NewIndexStore(cfg.Output.Dir).Save(IndexState{Categories: map[string]model.WatchIndexSnapshot{
+		"Anthropic News::Anthropic News": baseline,
+	}}); err != nil {
+		t.Fatalf("indexStore.Save() error = %v", err)
+	}
+	lastChangedAt := time.Date(2026, 8, 1, 10, 0, 0, 0, time.UTC)
+	if err := NewArticleStore(cfg.Output.Dir).Save(ArticleState{articleURL: {
+		URL:           articleURL,
+		Title:         "Introducing Claude Opus 5",
+		SummaryHash:   hashWatchContent("Claude Opus 5 is available today."),
+		BodyHash:      hashWatchContent("Claude Opus 5 is available today. It improves coding reliability. Rotating recommendation."),
+		LastChangedAt: lastChangedAt,
+	}}); err != nil {
+		t.Fatalf("articleStore.Save() error = %v", err)
+	}
+
+	now := time.Date(2026, 8, 26, 18, 0, 0, 0, time.UTC)
+	articles, report, err := runContext(context.Background(), cfg, now, fetchHTML)
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if len(report.Events) != 0 {
+		t.Fatalf("report.Events = %#v, want hash migration without event", report.Events)
+	}
+	if len(articles) != 0 {
+		t.Fatalf("articles = %#v, want no briefing article during hash migration", articles)
+	}
+	state, err := NewArticleStore(cfg.Output.Dir).Load()
+	if err != nil {
+		t.Fatalf("articleStore.Load() error = %v", err)
+	}
+	migrated, ok := state[articleURL]
+	if !ok {
+		t.Fatalf("migrated article state missing: %#v", state)
+	}
+	if migrated.ContentHashVersion != anthropicAnnouncementContentHashVersion {
+		t.Fatalf("ContentHashVersion = %d, want %d", migrated.ContentHashVersion, anthropicAnnouncementContentHashVersion)
+	}
+	if migrated.SummaryHash != hashWatchContent("Claude Opus 5 is available today.") || migrated.BodyHash != hashWatchContent("Claude Opus 5 is available today. It improves coding reliability.") {
+		t.Fatalf("migrated hashes = %#v, want canonical article hashes", migrated)
+	}
+	if !migrated.PublishedAt.Equal(time.Date(2026, 7, 24, 0, 0, 0, 0, time.UTC)) {
+		t.Fatalf("PublishedAt = %v, want visible publication date", migrated.PublishedAt)
+	}
+	if !migrated.LastCheckedAt.Equal(now) {
+		t.Fatalf("LastCheckedAt = %v, want %v", migrated.LastCheckedAt, now)
+	}
+	if !migrated.LastChangedAt.Equal(lastChangedAt) {
+		t.Fatalf("LastChangedAt = %v, want legacy value %v", migrated.LastChangedAt, lastChangedAt)
+	}
+}
+
 func TestRunAnnouncementSiteIncludesNewArticleInBriefing(t *testing.T) {
 	oldHome := `<html><body><main><a href="/news/claude-sonnet-4-6"><h2>Introducing Claude Sonnet 4.6</h2><p>Feb 17, 2026</p></a></main></body></html>`
 	responses := map[string]string{

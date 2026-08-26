@@ -406,11 +406,34 @@ func applyWatchEventPriority(event *model.WatchEvent) {
 
 func applyWatchEventPriorityAt(event *model.WatchEvent, now time.Time) {
 	applyWatchEventPriority(event)
+	if event.PublishedAtRequired && event.ArticleURL != "" && event.PublishedAt.IsZero() {
+		event.IncludeInBriefing = false
+		appendWatchEventReason(event, "文章发布日期缺失，仅记录在 watch 报告")
+		return
+	}
 	if !event.IncludeInBriefing || !isStaleClaudeReleaseNotesOverviewEntry(event.ArticleURL, now) {
 		return
 	}
 	event.IncludeInBriefing = false
 	event.Reason += "；旧日期锚点仅记录在 watch 报告"
+}
+
+func watchSiteRequiresPublishedAt(site config.WatchSite) bool {
+	return site.Type == config.WatchTypeAnnouncementPage && !isClaudeReleaseNotesOverviewURL(site.HomeURL)
+}
+
+func appendWatchEventReason(event *model.WatchEvent, reason string) {
+	if event == nil || reason == "" {
+		return
+	}
+	if event.Reason == "" {
+		event.Reason = reason
+		return
+	}
+	if strings.Contains(event.Reason, reason) {
+		return
+	}
+	event.Reason += "；" + reason
 }
 
 func dedupeWatchArticles(articles []model.Article) []model.Article {
