@@ -537,7 +537,7 @@ watch:
         - API
     - name: Claude Platform Release Notes
       type: announcement_page
-      home_url: https://docs.claude.com/en/release-notes/overview
+      home_url: https://platform.claude.com/docs/en/release-notes/overview
       briefing_category: AI/科技
       high_value_keywords:
         - Claude

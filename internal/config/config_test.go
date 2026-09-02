@@ -2173,7 +2173,7 @@ func TestProjectConfigIncludesAnthropicOfficialAnnouncementWatchSites(t *testing
 		{
 			Name:             "Claude Platform Release Notes",
 			Type:             WatchTypeAnnouncementPage,
-			HomeURL:          "https://docs.claude.com/en/release-notes/overview",
+			HomeURL:          "https://platform.claude.com/docs/en/release-notes/overview",
 			BriefingCategory: "AI/科技",
 		},
 	}

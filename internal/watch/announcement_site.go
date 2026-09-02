@@ -171,9 +171,15 @@ func parseAnnouncementLinkIndex(doc *goquery.Document, pageURL string) []model.W
 
 func parseClaudeReleaseNotesOverview(doc *goquery.Document, pageURL string) []model.WatchIndexItem {
 	items := make([]model.WatchIndexItem, 0)
-	doc.Find("h3 div[id]").Each(func(i int, heading *goquery.Selection) {
+	seen := make(map[string]struct{})
+	// The docs site has used both an ID on the heading and an ID on a
+	// nested div. Keep the date-only contract for both layouts.
+	doc.Find("h3[id], h3 div[id]").Each(func(i int, heading *goquery.Selection) {
 		fragment := strings.TrimSpace(heading.AttrOr("id", ""))
 		if fragment == "" || !isClaudeReleaseNotesDateFragment(fragment) {
+			return
+		}
+		if _, ok := seen[fragment]; ok {
 			return
 		}
 		entryURL := releaseNotesOverviewURLWithFragment(pageURL, fragment)
@@ -185,7 +191,8 @@ func parseClaudeReleaseNotesOverview(doc *goquery.Document, pageURL string) []mo
 		if title == "" {
 			return
 		}
-		snippet := normalizeWatchText(content.Find("li, p").First().Text())
+		snippet := normalizeWatchText(releaseNotesOverviewParagraphs(content).First().Text())
+		seen[fragment] = struct{}{}
 		items = append(items, model.WatchIndexItem{
 			Title:    title,
 			URL:      entryURL,
@@ -500,7 +507,7 @@ func parseClaudeReleaseNotesOverviewArticle(rawURL string, html string) (title s
 	}
 
 	heading := doc.Find("#" + fragment).First()
-	if heading.Length() != 0 && goquery.NodeName(heading) == "div" && heading.Parent().Is("h3") {
+	if heading.Is("h3") || (heading.Is("div") && heading.Closest("h3").Length() != 0) {
 		content := releaseNotesOverviewContent(heading)
 		title = releaseNotesOverviewTitle(content)
 		if title == "" {
@@ -508,17 +515,18 @@ func parseClaudeReleaseNotesOverviewArticle(rawURL string, html string) (title s
 		}
 
 		parts := make([]string, 0)
-		content.Find("li, p").Each(func(i int, sel *goquery.Selection) {
+		releaseNotesOverviewParagraphs(content).Each(func(i int, sel *goquery.Selection) {
 			text := normalizeWatchText(sel.Text())
 			if text == "" {
 				return
 			}
 			parts = append(parts, text)
 		})
-		if len(parts) > 0 {
-			summary = parts[0]
-			body = normalizeWatchText(strings.Join(parts, " "))
+		if len(parts) == 0 {
+			return "", "", "", fmt.Errorf("release notes entry content not found")
 		}
+		summary = parts[0]
+		body = normalizeWatchText(strings.Join(parts, " "))
 		return title, summary, body, nil
 	}
 
@@ -566,11 +574,27 @@ func releaseNotesOverviewURLWithFragment(pageURL string, fragment string) string
 }
 
 func releaseNotesOverviewContent(heading *goquery.Selection) *goquery.Selection {
-	content := heading.Parent().Next()
-	for content.Length() > 0 && goquery.NodeName(content) != "ul" && goquery.NodeName(content) != "p" {
-		content = content.Next()
+	if !heading.Is("h3") {
+		heading = heading.Closest("h3")
 	}
-	return content
+	// Preserve the existing first-content-block contract so a layout-only
+	// migration does not change every historical entry's content hash.
+	for content := heading.Next(); content.Length() > 0; content = content.Next() {
+		if content.Is("h1, h2, h3") {
+			break
+		}
+		if content.Is("ul, p") {
+			return content
+		}
+	}
+	return heading.Slice(0, 0)
+}
+
+func releaseNotesOverviewParagraphs(content *goquery.Selection) *goquery.Selection {
+	if content.Is("p") {
+		return content
+	}
+	return content.Find("li, p")
 }
 
 func releaseNotesOverviewTitle(content *goquery.Selection) string {
