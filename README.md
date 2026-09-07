@@ -175,6 +175,10 @@ Notes:
 
 Stories prefer first-party plus original-media corroboration. Email/Markdown citations are deterministic clickable links derived from the input articles, while XHS card manifests keep compact source names and omit long citation lists.
 
+The example `新闻财经` category covers domestic finance, global equities, interest rates, currencies, Treasuries, and gold. Bloomberg Markets supplies market reporting, the Federal Reserve monetary-policy feed supplies primary announcements, and Investing Commodities adds commodity and gold leads (classified as reposts). Their per-run article limits are 6, 3, and 4 respectively, within the existing category budget. Candidates still undergo deduplication and editorial selection; coverage does not imply a fixed quota per topic.
+
+Extend category `include_keywords` / `weak_keywords` rather than only the global keyword list. Include rules use the first available configuration in this order: `filters.sources.<name>.include_keywords`, `sources[].keywords`, category rules, then global `keywords`. They are not merged. One strong keyword or at least two weak keywords qualifies; finance exclusions target stock-picking promotions instead of broadly rejecting intraday or limit-up/down reports. Validate feed parsing, publication dates, and filtering before enabling a new source. Existing time windows and deduplication still apply.
+
 New feeds can be observed without entering summaries, email, XHS, seen state, or source-health alerts:
 
 ```yaml

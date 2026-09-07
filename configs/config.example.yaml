@@ -83,6 +83,25 @@ sources:
     type: rss
     category: 新闻财经
     source_role: original
+  - name: Bloomberg Markets
+    url: https://feeds.bloomberg.com/markets/news.rss
+    type: rss
+    category: 新闻财经
+    source_role: original
+    max_items: 30
+  - name: Federal Reserve Monetary Policy
+    url: https://www.federalreserve.gov/feeds/press_monetary.xml
+    type: rss
+    category: 新闻财经
+    source_role: primary
+    max_items: 30
+    keywords: ["Federal Reserve", "Federal Open Market Committee", "FOMC", "discount rate", "monetary policy"]
+  - name: Investing Commodities
+    url: https://www.investing.com/rss/news_11.rss
+    type: rss
+    category: 新闻财经
+    source_role: repost
+    max_items: 30
   - name: NPR World
     url: https://feeds.npr.org/1004/rss.xml
     type: rss
@@ -311,6 +330,54 @@ filters:
         - 创业板
         - 科创板
         - 碳达峰
+        # Global markets and gold: category rules take precedence over global keywords.
+        - 黄金
+        - 金价
+        - 贵金属
+        - 美股
+        - 美联储
+        - 美债
+        - 美元指数
+        - 纳斯达克
+        - 标普500
+        - 道琼斯
+        - 日经
+        - 恒生指数
+        - 降息
+        - 加息
+        - 非农
+        - gold
+        - bullion
+        - Federal Reserve
+        - FOMC
+        - central bank
+        - central banks
+        - interest rate
+        - interest rates
+        - rate cut
+        - rate cuts
+        - rate-cut
+        - rate hike
+        - rate hikes
+        - rate-hike
+        - inflation
+        - payrolls
+        - unemployment
+        - PCE
+        - recession
+        - Treasury
+        - Treasuries
+        - bond yield
+        - bond yields
+        - stock market
+        - stock markets
+        - Wall Street
+        - S&P 500
+        - Nasdaq
+        - Dow Jones
+        - Nikkei
+        - Hang Seng
+        - tariff
       weak_keywords:
         - 中国
         - 国内
@@ -321,6 +388,20 @@ filters:
         - 银行
         - 金融
         - 贸易
+        - Fed
+        - stocks
+        - equities
+        - bonds
+        - dollar
+        - markets
+        - rates
+        - yields
+        - oil
+        - trade
+        - earnings
+        - economy
+        - economic
+        - investors
       min_weak_keyword_matches: 2
       exclude_keywords:
         - 文旅
@@ -329,12 +410,12 @@ filters:
         - 台风
         - 防汛
         - 救灾
-        - 涨停
-        - 跌停
-        - 概念股
-        - 个股
-        - 盘中
-        - 日内
+        - 涨停揭秘
+        - 涨停复盘
+        - 概念股推荐
+        - 个股推荐
+        - 短线荐股
+        - 炒股秘籍
         - 世界杯
         - 足球
     国际政治:
@@ -439,6 +520,15 @@ filters:
     BBC Business:
       max_articles: 8
       priority: 65
+    Bloomberg Markets:
+      max_articles: 6
+      priority: 80
+    Federal Reserve Monetary Policy:
+      max_articles: 3
+      priority: 100
+    Investing Commodities:
+      max_articles: 4
+      priority: 75
     Reddit WorldNews:
       max_articles: 5
       priority: 10
@@ -615,6 +705,7 @@ output:
       - hkex.com.hk
       - sfc.hk
       - sec.gov
+      - federalreserve.gov
   # Optional. If AI summary generation fails or times out, retry once per fallback level.
   fallback:
     enabled: true
