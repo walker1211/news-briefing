@@ -116,6 +116,7 @@ func newApp(cfg *config.Config) *app {
 		cfg.Output.XHSPreselection.TargetItems,
 		cfg.Output.XHSPreselection.MinimumIndependentSources,
 		cfg.Output.XHSPreselection.OfficialSourceHosts,
+		cfg.Output.XHSPreselection.ExcludedKeywords,
 	)
 	emailSender := output.NewEmailSender()
 	imageFilter := imageFilterFromConfig(cfg.ImageFilter)

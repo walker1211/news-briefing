@@ -706,6 +706,13 @@ output:
       - sfc.hk
       - sec.gov
       - federalreserve.gov
+    # Optional XHS-only hard exclusions. Match against title, summary, and impact
+    # even when a story has an official source; email and Markdown are unchanged.
+    excluded_keywords:
+      - 威胁叙事
+      - 火灾调查
+      - 回款难
+      - 拖欠
   # Optional. If AI summary generation fails or times out, retry once per fallback level.
   fallback:
     enabled: true

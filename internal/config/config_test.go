@@ -109,6 +109,7 @@ output:
     target_items: 10
     minimum_independent_sources: 2
     official_source_hosts: [SSE.COM.CN]
+    excluded_keywords: [" 回款难 ", "火灾调查"]
 proxy: {}
 ai: {}
 `
@@ -120,8 +121,43 @@ ai: {}
 		t.Fatalf("Load() error = %v", err)
 	}
 	got := cfg.Output.XHSPreselection
-	if !got.Enabled || !reflect.DeepEqual(got.Categories, []string{"AI/科技", "新闻财经"}) || got.TargetItems != 10 || got.MinimumIndependentSources != 2 || !reflect.DeepEqual(got.OfficialSourceHosts, []string{"sse.com.cn"}) {
+	if !got.Enabled || !reflect.DeepEqual(got.Categories, []string{"AI/科技", "新闻财经"}) || got.TargetItems != 10 || got.MinimumIndependentSources != 2 || !reflect.DeepEqual(got.OfficialSourceHosts, []string{"sse.com.cn"}) || !reflect.DeepEqual(got.ExcludedKeywords, []string{"回款难", "火灾调查"}) {
 		t.Fatalf("Output.XHSPreselection = %#v", got)
+	}
+}
+
+func TestLoadRejectsInvalidXHSPreselectionExcludedKeywords(t *testing.T) {
+	tests := []struct {
+		name     string
+		keywords string
+		wantErr  string
+	}{
+		{name: "empty keyword", keywords: "['']", wantErr: "excluded_keywords[0]: must not be empty"},
+		{name: "duplicate keyword", keywords: "[回款难, ' 回款难 ']", wantErr: "duplicate keyword"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "config.yaml")
+			content := `sources: []
+keywords: []
+email: {}
+schedule: []
+output:
+  xhs_preselection:
+    enabled: true
+    categories: [AI/科技]
+    excluded_keywords: ` + tt.keywords + `
+proxy: {}
+ai: {}
+`
+			if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+				t.Fatalf("WriteFile() error = %v", err)
+			}
+			_, err := Load(path)
+			if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
+				t.Fatalf("Load() error = %v, want %q", err, tt.wantErr)
+			}
+		})
 	}
 }
 

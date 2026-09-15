@@ -4,6 +4,7 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"unicode"
 
 	"github.com/walker1211/news-briefing/internal/model"
 )
@@ -45,10 +46,15 @@ func (r *Runner) applyXHSPreselection(summary *model.BriefingSummary, candidates
 		r.xhsPreselectionTargetItems,
 		r.xhsPreselectionMinSources,
 		r.xhsPreselectionOfficialHosts,
+		r.xhsPreselectionExcludedTerms,
 	)
+	// XHSTopics is only consumed by the card manifest. Rebuild it from the
+	// selected XHS subset so topics from omitted briefing categories cannot leak
+	// into the XHS post.
+	summary.XHSTopics = xhsTopicsForStories(summary.XHSStories)
 }
 
-func preselectXHSStories(finalStories, candidates []model.BriefingStory, articles []model.Article, categories []string, targetItems, minimumSources int, officialHosts []string) []model.BriefingStory {
+func preselectXHSStories(finalStories, candidates []model.BriefingStory, articles []model.Article, categories []string, targetItems, minimumSources int, officialHosts, excludedTerms []string) []model.BriefingStory {
 	if targetItems <= 0 {
 		return []model.BriefingStory{}
 	}
@@ -71,7 +77,7 @@ func preselectXHSStories(finalStories, candidates []model.BriefingStory, article
 	selected := make([]model.BriefingStory, 0, targetItems)
 	seen := map[string]struct{}{}
 	appendEligible := func(story model.BriefingStory) bool {
-		if len(selected) >= targetItems || !xhsStoryEligible(story, articles, allowed, minimumSources, officialHosts) {
+		if len(selected) >= targetItems || !xhsStoryEligible(story, articles, allowed, minimumSources, officialHosts, excludedTerms) {
 			return false
 		}
 		key := xhsStoryIdentity(story)
@@ -95,7 +101,7 @@ func preselectXHSStories(finalStories, candidates []model.BriefingStory, article
 		if _, ok := allowed[category]; !ok {
 			continue
 		}
-		if !xhsStoryEligible(story, articles, allowed, minimumSources, officialHosts) {
+		if !xhsStoryEligible(story, articles, allowed, minimumSources, officialHosts, excludedTerms) {
 			continue
 		}
 		if _, exists := seen[xhsStoryIdentity(story)]; exists {
@@ -127,7 +133,7 @@ func preselectXHSStories(finalStories, candidates []model.BriefingStory, article
 	return selected
 }
 
-func xhsStoryEligible(story model.BriefingStory, articles []model.Article, allowed map[string]struct{}, minimumSources int, officialHosts []string) bool {
+func xhsStoryEligible(story model.BriefingStory, articles []model.Article, allowed map[string]struct{}, minimumSources int, officialHosts, excludedTerms []string) bool {
 	if _, ok := allowed[strings.TrimSpace(story.Category)]; !ok {
 		return false
 	}
@@ -136,6 +142,9 @@ func xhsStoryEligible(story model.BriefingStory, articles []model.Article, allow
 		return false
 	}
 	combined := strings.Join([]string{story.Title, story.Summary, story.Impact}, "\n")
+	if containsXHSTerm(combined, excludedTerms) {
+		return false
+	}
 	official := xhsStoryHasOfficialSource(sources, officialHosts)
 	material := containsXHSTerm(combined, xhsPreselectionOfficialOnlyTerms) || containsXHSTerm(combined, xhsPreselectionNegativeTerms)
 	if material && !official {
@@ -145,6 +154,118 @@ func xhsStoryEligible(story model.BriefingStory, articles []model.Article, allow
 		return false
 	}
 	return true
+}
+
+type xhsTopicRule struct {
+	topic    string
+	keywords []string
+}
+
+var xhsSpecificTopicRules = []xhsTopicRule{
+	{topic: "人工智能", keywords: []string{"人工智能", "大模型", "语言模型", "生成式", "openai", "chatgpt", "claude", "gemini", "copilot", "llm", "ai"}},
+	{topic: "开发者工具", keywords: []string{"开发者", "开源", "github", "gitlab", "编程", "代码", "codex", "cursor", "sdk", "api"}},
+	{topic: "机器人", keywords: []string{"机器人", "robot", "具身智能", "自动驾驶"}},
+	{topic: "芯片与算力", keywords: []string{"芯片", "半导体", "gpu", "npu", "算力", "处理器", "risc-v", "英伟达", "nvidia"}},
+	{topic: "宏观经济", keywords: []string{"央行", "利率", "通胀", "经济增长", "gdp", "pmi", "就业", "货币政策", "财政政策"}},
+	{topic: "财经观察", keywords: []string{"股市", "股票", "债券", "黄金", "汇率", "银行", "财报", "市场", "金融"}},
+}
+
+// xhsTopicsForStories builds manifest-only topics from the final XHS selection.
+// The fixed rule order makes the same story set produce the same topics.
+func xhsTopicsForStories(stories []model.BriefingStory) []string {
+	if len(stories) == 0 {
+		return nil
+	}
+	combined := make([]string, 0, len(stories))
+	hasTechnology := false
+	hasFinance := false
+	for _, story := range stories {
+		combined = append(combined, strings.Join([]string{story.Title, story.Summary, story.Impact}, "\n"))
+		switch strings.TrimSpace(story.Category) {
+		case "AI/科技":
+			hasTechnology = true
+		case "新闻财经":
+			hasFinance = true
+		}
+	}
+	content := strings.Join(combined, "\n")
+	topics := make([]string, 0, 4)
+	for _, rule := range xhsSpecificTopicRules {
+		if containsXHSTopicTerm(content, rule.keywords) {
+			topics = appendXHSTopic(topics, rule.topic)
+		}
+	}
+	if len(topics) < 3 && hasTechnology {
+		topics = appendXHSTopic(topics, "科技资讯")
+	}
+	if len(topics) < 3 && hasFinance {
+		topics = appendXHSTopic(topics, "财经观察")
+	}
+	if len(topics) < 3 && hasTechnology {
+		topics = appendXHSTopic(topics, "科技动态")
+	}
+	if len(topics) < 3 && hasFinance {
+		topics = appendXHSTopic(topics, "市场动态")
+	}
+	if len(topics) < 3 {
+		topics = appendXHSTopic(topics, "每日资讯")
+	}
+	if len(topics) < 3 {
+		// A selected story from a custom category still needs safe generic topics.
+		topics = appendXHSTopic(topics, "资讯速览")
+	}
+	if len(topics) < 3 {
+		topics = appendXHSTopic(topics, "今日观察")
+	}
+	if len(topics) > 4 {
+		return topics[:4]
+	}
+	return topics
+}
+
+func containsXHSTopicTerm(value string, terms []string) bool {
+	value = strings.ToLower(value)
+	for _, term := range terms {
+		term = strings.ToLower(term)
+		if term == "ai" {
+			for offset := 0; ; {
+				index := strings.Index(value[offset:], term)
+				if index < 0 {
+					break
+				}
+				index += offset
+				beforeOK := index == 0 || !isASCIIAlphaNumeric(rune(value[index-1]))
+				after := index + len(term)
+				afterOK := after == len(value) || !isASCIIAlphaNumeric(rune(value[after]))
+				if beforeOK && afterOK {
+					return true
+				}
+				offset = index + len(term)
+			}
+			continue
+		}
+		if strings.Contains(value, term) {
+			return true
+		}
+	}
+	return false
+}
+
+func isASCIIAlphaNumeric(value rune) bool {
+	return value <= unicode.MaxASCII && (unicode.IsLetter(value) || unicode.IsDigit(value))
+}
+
+func appendXHSTopic(topics []string, topic string) []string {
+	topic = strings.TrimSpace(strings.TrimPrefix(topic, "#"))
+	if topic == "" || strings.ContainsAny(topic, " \t\n\r") {
+		return topics
+	}
+	for _, existing := range topics {
+		if existing == topic {
+			return topics
+		}
+	}
+	return append(topics, topic)
 }
 
 func xhsStorySourceArticles(story model.BriefingStory, articles []model.Article) []model.Article {
