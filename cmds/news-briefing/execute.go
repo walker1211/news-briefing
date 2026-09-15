@@ -117,6 +117,7 @@ func newApp(cfg *config.Config) *app {
 		cfg.Output.XHSPreselection.MinimumIndependentSources,
 		cfg.Output.XHSPreselection.OfficialSourceHosts,
 		cfg.Output.XHSPreselection.ExcludedKeywords,
+		xhsContextualExclusionRules(cfg.Output.XHSPreselection.ContextualExclusions),
 	)
 	emailSender := output.NewEmailSender()
 	imageFilter := imageFilterFromConfig(cfg.ImageFilter)
@@ -189,6 +190,17 @@ func newApp(cfg *config.Config) *app {
 		},
 		publishHook: runPublishHook,
 	}
+}
+
+func xhsContextualExclusionRules(configured []config.XHSContextualExclusionCfg) []summarizer.XHSContextualExclusionRule {
+	rules := make([]summarizer.XHSContextualExclusionRule, 0, len(configured))
+	for _, rule := range configured {
+		rules = append(rules, summarizer.XHSContextualExclusionRule{
+			AnchorKeywords:  append([]string(nil), rule.AnchorKeywords...),
+			ContextKeywords: append([]string(nil), rule.ContextKeywords...),
+		})
+	}
+	return rules
 }
 
 func imageFilterFromConfig(cfg config.ImageFilterConfig) imageutil.Filter {

@@ -34,6 +34,24 @@ var xhsPreselectionDefaultOfficialHosts = []string{
 	"szse.cn", "bse.cn", "hkexnews.hk", "hkex.com.hk", "sfc.hk", "sec.gov",
 }
 
+// XHSContextualExclusionRule keeps contextual safety policy independent from
+// configuration loading. A story is excluded only when both lists match.
+type XHSContextualExclusionRule struct {
+	AnchorKeywords  []string
+	ContextKeywords []string
+}
+
+func cloneXHSContextualExclusionRules(rules []XHSContextualExclusionRule) []XHSContextualExclusionRule {
+	cloned := make([]XHSContextualExclusionRule, 0, len(rules))
+	for _, rule := range rules {
+		cloned = append(cloned, XHSContextualExclusionRule{
+			AnchorKeywords:  append([]string(nil), rule.AnchorKeywords...),
+			ContextKeywords: append([]string(nil), rule.ContextKeywords...),
+		})
+	}
+	return cloned
+}
+
 func (r *Runner) applyXHSPreselection(summary *model.BriefingSummary, candidates []model.BriefingStory, articles []model.Article) {
 	if summary == nil || !r.xhsPreselectionEnabled {
 		return
@@ -47,6 +65,7 @@ func (r *Runner) applyXHSPreselection(summary *model.BriefingSummary, candidates
 		r.xhsPreselectionMinSources,
 		r.xhsPreselectionOfficialHosts,
 		r.xhsPreselectionExcludedTerms,
+		r.xhsPreselectionContextualExclusions,
 	)
 	// XHSTopics is only consumed by the card manifest. Rebuild it from the
 	// selected XHS subset so topics from omitted briefing categories cannot leak
@@ -54,7 +73,7 @@ func (r *Runner) applyXHSPreselection(summary *model.BriefingSummary, candidates
 	summary.XHSTopics = xhsTopicsForStories(summary.XHSStories)
 }
 
-func preselectXHSStories(finalStories, candidates []model.BriefingStory, articles []model.Article, categories []string, targetItems, minimumSources int, officialHosts, excludedTerms []string) []model.BriefingStory {
+func preselectXHSStories(finalStories, candidates []model.BriefingStory, articles []model.Article, categories []string, targetItems, minimumSources int, officialHosts, excludedTerms []string, contextualExclusions []XHSContextualExclusionRule) []model.BriefingStory {
 	if targetItems <= 0 {
 		return []model.BriefingStory{}
 	}
@@ -77,7 +96,7 @@ func preselectXHSStories(finalStories, candidates []model.BriefingStory, article
 	selected := make([]model.BriefingStory, 0, targetItems)
 	seen := map[string]struct{}{}
 	appendEligible := func(story model.BriefingStory) bool {
-		if len(selected) >= targetItems || !xhsStoryEligible(story, articles, allowed, minimumSources, officialHosts, excludedTerms) {
+		if len(selected) >= targetItems || !xhsStoryEligible(story, articles, allowed, minimumSources, officialHosts, excludedTerms, contextualExclusions) {
 			return false
 		}
 		key := xhsStoryIdentity(story)
@@ -101,7 +120,7 @@ func preselectXHSStories(finalStories, candidates []model.BriefingStory, article
 		if _, ok := allowed[category]; !ok {
 			continue
 		}
-		if !xhsStoryEligible(story, articles, allowed, minimumSources, officialHosts, excludedTerms) {
+		if !xhsStoryEligible(story, articles, allowed, minimumSources, officialHosts, excludedTerms, contextualExclusions) {
 			continue
 		}
 		if _, exists := seen[xhsStoryIdentity(story)]; exists {
@@ -133,7 +152,7 @@ func preselectXHSStories(finalStories, candidates []model.BriefingStory, article
 	return selected
 }
 
-func xhsStoryEligible(story model.BriefingStory, articles []model.Article, allowed map[string]struct{}, minimumSources int, officialHosts, excludedTerms []string) bool {
+func xhsStoryEligible(story model.BriefingStory, articles []model.Article, allowed map[string]struct{}, minimumSources int, officialHosts, excludedTerms []string, contextualExclusions []XHSContextualExclusionRule) bool {
 	if _, ok := allowed[strings.TrimSpace(story.Category)]; !ok {
 		return false
 	}
@@ -145,6 +164,9 @@ func xhsStoryEligible(story model.BriefingStory, articles []model.Article, allow
 	if containsXHSTerm(combined, excludedTerms) {
 		return false
 	}
+	if matchesXHSContextualExclusion(combined, contextualExclusions) {
+		return false
+	}
 	official := xhsStoryHasOfficialSource(sources, officialHosts)
 	material := containsXHSTerm(combined, xhsPreselectionOfficialOnlyTerms) || containsXHSTerm(combined, xhsPreselectionNegativeTerms)
 	if material && !official {
@@ -154,6 +176,15 @@ func xhsStoryEligible(story model.BriefingStory, articles []model.Article, allow
 		return false
 	}
 	return true
+}
+
+func matchesXHSContextualExclusion(value string, rules []XHSContextualExclusionRule) bool {
+	for _, rule := range rules {
+		if containsXHSTerm(value, rule.AnchorKeywords) && containsXHSTerm(value, rule.ContextKeywords) {
+			return true
+		}
+	}
+	return false
 }
 
 type xhsTopicRule struct {

@@ -172,32 +172,33 @@ const deepDivePrompt = `你是一个资深新闻调研员和话题研究助手�
 - 可以继续追踪的延伸问题`
 
 type Runner struct {
-	commandName                  string
-	commandArgs                  []string
-	defaultModel                 string
-	defaultEffort                string
-	summaryEditorModel           string
-	summaryEditorEffort          string
-	translationModel             string
-	translationEffort            string
-	summaryParallelByCategory    bool
-	summaryMaxConcurrency        int
-	summaryEditorEnabled         bool
-	summaryEditorMinStories      int
-	summaryEditorTargetStories   int
-	summaryEditorMaxStories      int
-	xhsPreselectionEnabled       bool
-	xhsPreselectionCategories    []string
-	xhsPreselectionTargetItems   int
-	xhsPreselectionMinSources    int
-	xhsPreselectionOfficialHosts []string
-	xhsPreselectionExcludedTerms []string
-	appendSystemPrompt           bool
-	proxyEnv                     []string
-	retrySleep                   sleepFunc
-	retryDelays                  []time.Duration
-	oauthRetryGate               chan struct{}
-	failureLogPath               string
+	commandName                         string
+	commandArgs                         []string
+	defaultModel                        string
+	defaultEffort                       string
+	summaryEditorModel                  string
+	summaryEditorEffort                 string
+	translationModel                    string
+	translationEffort                   string
+	summaryParallelByCategory           bool
+	summaryMaxConcurrency               int
+	summaryEditorEnabled                bool
+	summaryEditorMinStories             int
+	summaryEditorTargetStories          int
+	summaryEditorMaxStories             int
+	xhsPreselectionEnabled              bool
+	xhsPreselectionCategories           []string
+	xhsPreselectionTargetItems          int
+	xhsPreselectionMinSources           int
+	xhsPreselectionOfficialHosts        []string
+	xhsPreselectionExcludedTerms        []string
+	xhsPreselectionContextualExclusions []XHSContextualExclusionRule
+	appendSystemPrompt                  bool
+	proxyEnv                            []string
+	retrySleep                          sleepFunc
+	retryDelays                         []time.Duration
+	oauthRetryGate                      chan struct{}
+	failureLogPath                      string
 }
 
 type callKind string
@@ -414,13 +415,14 @@ func (r *Runner) SetSummaryEditorOptions(enabled bool, model, effort string, min
 
 // SetXHSPreselectionOptions configures deterministic card-manifest-only story
 // selection. It never changes the email/Markdown story list or adds AI calls.
-func (r *Runner) SetXHSPreselectionOptions(enabled bool, categories []string, targetItems, minimumSources int, officialHosts, excludedTerms []string) {
+func (r *Runner) SetXHSPreselectionOptions(enabled bool, categories []string, targetItems, minimumSources int, officialHosts, excludedTerms []string, contextualExclusions []XHSContextualExclusionRule) {
 	r.xhsPreselectionEnabled = enabled
 	r.xhsPreselectionCategories = append([]string(nil), categories...)
 	r.xhsPreselectionTargetItems = targetItems
 	r.xhsPreselectionMinSources = minimumSources
 	r.xhsPreselectionOfficialHosts = append([]string(nil), officialHosts...)
 	r.xhsPreselectionExcludedTerms = append([]string(nil), excludedTerms...)
+	r.xhsPreselectionContextualExclusions = cloneXHSContextualExclusionRules(contextualExclusions)
 }
 
 func withoutModelArgs(args []string) ([]string, string) {

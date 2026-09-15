@@ -390,7 +390,7 @@ schedule_prefetch_wait_timeout: 2m
 
 AI attempt 失败时，调度状态会持久化白名单字段，例如 `ai_primary_error_stage=final_editor`、`ai_primary_error_code=overview_invalid`、受影响分类和耗时；fallback 成功后同时记录 `ai_recovered=true` 与恢复层级。状态和告警都不保存 Prompt、文章正文、完整 stderr、堆栈、token 或连接信息。
 
-`output.xhs_preselection` 是可选的 XHS 专用前置筛选。启用后，邮件和 Markdown 仍使用 final editor 的原始 `stories`；card manifest 会优先采用其中符合来源规则的故事，再从分类 worker 的完整候选中按配置分类轮流补位到 `target_items`。`excluded_keywords` 是可选的大小写无关硬排除词，匹配 story 的标题、摘要或影响；即使来源是官方也会排除，且不安全内容绝不会为了凑足 `target_items` 被补回。企业重大负面、私营公司财务、融资估值、并购、IPO 条款和巨额担保必须有官方来源；普通产品与技术更新可保留单一来源。启用后，manifest 话题会从最终的 XHS 子集按受控 taxonomy 确定性重算，不再继承被排除分类的话题。该流程不增加 AI 调用，`content-publisher` 仍保留最终硬门。
+`output.xhs_preselection` 是可选的 XHS 专用前置筛选。启用后，邮件和 Markdown 仍使用 final editor 的原始 `stories`；card manifest 会优先采用其中符合来源规则的故事，再从分类 worker 的完整候选中按配置分类轮流补位到 `target_items`。`excluded_keywords` 是可选的大小写无关硬排除词，匹配 story 的标题、摘要或影响；即使来源是官方也会排除，且不安全内容绝不会为了凑足 `target_items` 被补回。`contextual_exclusions` 可定义多组 `anchor_keywords` 与 `context_keywords`：同一组必须同时命中才会排除，因此像“中国”这样的宽泛锚点不会单独过滤普通科技或产业内容。企业重大负面、私营公司财务、融资估值、并购、IPO 条款和巨额担保必须有官方来源；普通产品与技术更新可保留单一来源。启用后，manifest 话题会从最终的 XHS 子集按受控 taxonomy 确定性重算，不再继承被排除分类的话题。该流程不增加 AI 调用，`content-publisher` 仍保留最终硬门。
 
 Watch 默认走“索引快检 + 正文深检”：索引新增或变化会立即读取正文；未变化文章按 `watch.deep_verify_interval` 到期后，以 `watch.deep_verify_batch_size` 为上限按最旧检查时间轮转。这样仍能发现 URL、标题和摘要均未变化时的正文静默更新，同时避免每个简报窗口下载全部历史正文。
 

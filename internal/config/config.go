@@ -286,12 +286,21 @@ type OutputCfg struct {
 }
 
 type XHSPreselectionCfg struct {
-	Enabled                   bool     `yaml:"enabled"`
-	Categories                []string `yaml:"categories"`
-	TargetItems               int      `yaml:"target_items"`
-	MinimumIndependentSources int      `yaml:"minimum_independent_sources"`
-	OfficialSourceHosts       []string `yaml:"official_source_hosts"`
-	ExcludedKeywords          []string `yaml:"excluded_keywords"`
+	Enabled                   bool                        `yaml:"enabled"`
+	Categories                []string                    `yaml:"categories"`
+	TargetItems               int                         `yaml:"target_items"`
+	MinimumIndependentSources int                         `yaml:"minimum_independent_sources"`
+	OfficialSourceHosts       []string                    `yaml:"official_source_hosts"`
+	ExcludedKeywords          []string                    `yaml:"excluded_keywords"`
+	ContextualExclusions      []XHSContextualExclusionCfg `yaml:"contextual_exclusions"`
+}
+
+// XHSContextualExclusionCfg excludes a story only when one anchor keyword and
+// one context keyword in the same rule both match its title, summary, or impact.
+// It keeps broad anchors such as a country name from becoming blanket exclusions.
+type XHSContextualExclusionCfg struct {
+	AnchorKeywords  []string `yaml:"anchor_keywords"`
+	ContextKeywords []string `yaml:"context_keywords"`
 }
 
 type OutputFallbackCfg struct {
@@ -811,6 +820,21 @@ func (cfg *Config) Validate() error {
 		}
 		if err := validateKeywordList("output.xhs_preselection.excluded_keywords", cfg.Output.XHSPreselection.ExcludedKeywords); err != nil {
 			return err
+		}
+		for index, rule := range cfg.Output.XHSPreselection.ContextualExclusions {
+			prefix := fmt.Sprintf("output.xhs_preselection.contextual_exclusions[%d]", index)
+			if len(rule.AnchorKeywords) == 0 {
+				return fmt.Errorf("validate %s.anchor_keywords: must not be empty", prefix)
+			}
+			if len(rule.ContextKeywords) == 0 {
+				return fmt.Errorf("validate %s.context_keywords: must not be empty", prefix)
+			}
+			if err := validateKeywordList(prefix+".anchor_keywords", rule.AnchorKeywords); err != nil {
+				return err
+			}
+			if err := validateKeywordList(prefix+".context_keywords", rule.ContextKeywords); err != nil {
+				return err
+			}
 		}
 	}
 	if err := validateFilters(cfg.Filters); err != nil {
@@ -1360,6 +1384,15 @@ func Load(configPath string) (*Config, error) {
 	}
 	for index := range cfg.Output.XHSPreselection.ExcludedKeywords {
 		cfg.Output.XHSPreselection.ExcludedKeywords[index] = strings.TrimSpace(cfg.Output.XHSPreselection.ExcludedKeywords[index])
+	}
+	for ruleIndex := range cfg.Output.XHSPreselection.ContextualExclusions {
+		rule := &cfg.Output.XHSPreselection.ContextualExclusions[ruleIndex]
+		for index := range rule.AnchorKeywords {
+			rule.AnchorKeywords[index] = strings.TrimSpace(rule.AnchorKeywords[index])
+		}
+		for index := range rule.ContextKeywords {
+			rule.ContextKeywords[index] = strings.TrimSpace(rule.ContextKeywords[index])
+		}
 	}
 	for i := range cfg.Sources {
 		if strings.TrimSpace(cfg.Sources[i].SourceRole) == "" {
