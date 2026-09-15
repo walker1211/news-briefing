@@ -713,6 +713,21 @@ output:
       - 火灾调查
       - 回款难
       - 拖欠
+    # Optional contextual exclusions. A story is excluded only when one anchor
+    # and one context keyword in the same rule both match title, summary, or impact.
+    # This keeps ordinary China technology and industry coverage eligible.
+    contextual_exclusions:
+      - anchor_keywords:
+          - 中国
+          - 中方
+        context_keywords:
+          - 执法
+          - 监管
+          - 行政指导
+          - 经济压力
+          - 投资降幅
+          - 政治对抗
+          - 威胁叙事
   # Optional. If AI summary generation fails or times out, retry once per fallback level.
   fallback:
     enabled: true
