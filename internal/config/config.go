@@ -291,6 +291,7 @@ type XHSPreselectionCfg struct {
 	TargetItems               int      `yaml:"target_items"`
 	MinimumIndependentSources int      `yaml:"minimum_independent_sources"`
 	OfficialSourceHosts       []string `yaml:"official_source_hosts"`
+	ExcludedKeywords          []string `yaml:"excluded_keywords"`
 }
 
 type OutputFallbackCfg struct {
@@ -807,6 +808,9 @@ func (cfg *Config) Validate() error {
 		}
 		if cfg.Output.XHSPreselection.MinimumIndependentSources < 1 {
 			return fmt.Errorf("validate output.xhs_preselection.minimum_independent_sources: must be at least 1")
+		}
+		if err := validateKeywordList("output.xhs_preselection.excluded_keywords", cfg.Output.XHSPreselection.ExcludedKeywords); err != nil {
+			return err
 		}
 	}
 	if err := validateFilters(cfg.Filters); err != nil {
@@ -1353,6 +1357,9 @@ func Load(configPath string) (*Config, error) {
 	}
 	for index := range cfg.Output.XHSPreselection.OfficialSourceHosts {
 		cfg.Output.XHSPreselection.OfficialSourceHosts[index] = strings.ToLower(strings.TrimSpace(cfg.Output.XHSPreselection.OfficialSourceHosts[index]))
+	}
+	for index := range cfg.Output.XHSPreselection.ExcludedKeywords {
+		cfg.Output.XHSPreselection.ExcludedKeywords[index] = strings.TrimSpace(cfg.Output.XHSPreselection.ExcludedKeywords[index])
 	}
 	for i := range cfg.Sources {
 		if strings.TrimSpace(cfg.Sources[i].SourceRole) == "" {
