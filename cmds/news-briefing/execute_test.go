@@ -1506,6 +1506,22 @@ func TestArticleRankingBalancesSourceKeywordsAndFreshness(t *testing.T) {
 	}
 }
 
+func TestArticleRankingRetainsOlderPrivacyIncidentAtCategoryLimit(t *testing.T) {
+	newest := time.Date(2026, 9, 19, 0, 0, 0, 0, time.UTC)
+	articles := []model.Article{
+		{Title: "AI developer tools platform release", Summary: "AI developer tools model", Source: "Source", Category: "AI/科技", Published: newest},
+		{Title: "ExampleCode 被质疑偷传代码：官方回应称已修复", Summary: "AI developer tools", Source: "Source", Category: "AI/科技", Published: newest.Add(-12 * time.Hour)},
+	}
+	ranking := articleRankingConfig{
+		priorities: map[string]int{"Source": 40},
+		categories: map[string]config.CategoryFilterConfig{"AI/科技": {IncludeKeywords: []string{"AI", "developer tools", "model"}}},
+	}
+	limited := filterArticlesByCategoryLimitsWithRanking(articles, map[string]int{"AI/科技": 1}, ranking)
+	if got, want := articleTitles(limited), []string{articles[1].Title}; !slices.Equal(got, want) {
+		t.Fatalf("limited titles = %v, want %v", got, want)
+	}
+}
+
 func TestArticleRankingPenalizesNearDuplicateTitles(t *testing.T) {
 	newest := time.Date(2026, 8, 11, 8, 0, 0, 0, time.UTC)
 	articles := []model.Article{

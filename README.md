@@ -179,6 +179,15 @@ The example `新闻财经` category covers domestic finance, global equities, in
 
 Extend category `include_keywords` / `weak_keywords` rather than only the global keyword list. Include rules use the first available configuration in this order: `filters.sources.<name>.include_keywords`, `sources[].keywords`, category rules, then global `keywords`. They are not merged. One strong keyword or at least two weak keywords qualifies; finance exclusions target stock-picking promotions instead of broadly rejecting intraday or limit-up/down reports. Validate feed parsing, publication dates, and filtering before enabling a new source. Existing time windows and deduplication still apply.
 
+Per-source `max_articles` now ranks eligible articles after time/keyword filtering rather than taking only the newest entries. Category limits reuse the same deterministic score:
+
+- Relevance: each strong keyword adds 120 in the title or 50 in the summary; weak keywords add 35 or 15 respectively, capped at 400 total. Each keyword counts once per field; HTML markup and attributes do not count.
+- Security/privacy events: fixed title signals such as data/code leaks, unauthorized uploads, or vulnerabilities add 600; jailbreaks and intrusions also require a digital-technology context. An accompanying response, apology, or fix signal adds another 100. Repeated matches do not stack; a response alone earns no event bonus.
+- Freshness: 100 for the newest eligible article in the source (or category at the category cap), minus 5 per complete hour of age, with a floor of zero.
+- Roundups: fixed daily/weekly roundup title prefixes subtract 450 and receive no incident bonus, so digests do not crowd out standalone reporting.
+
+Source selection uses score, then publication time, with stable ties, while output retains chronological order. Category ranking also preserves source `priority × 5`, near-duplicate penalties, and carryover precedence. These fixed code weights rank candidates; they do not establish truth, severity, or guaranteed publication. Time windows, exclusions, deduplication, editorial review, and XHS rules still apply independently. Scoring makes no additional AI calls.
+
 New feeds can be observed without entering summaries, email, XHS, seen state, or source-health alerts:
 
 ```yaml

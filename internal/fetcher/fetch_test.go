@@ -331,6 +331,65 @@ func TestFetchWindowDetailedAppliesCategoryFiltersExcludesSourceLimitsAndStats(t
 	}
 }
 
+func TestSourceLimitRanksImportantOlderArticleAndKeepsSourcesIndependent(t *testing.T) {
+	from := time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)
+	to := from.Add(24 * time.Hour)
+	cfg := &config.Config{
+		Output:   config.OutputCfg{Dir: t.TempDir()},
+		Keywords: []string{"AI", "OpenAI"},
+		Filters: config.FiltersConfig{Sources: map[string]config.SourceFilterConfig{
+			"limited": {MaxArticles: 1, ExcludeKeywords: []string{"blocked"}},
+			"other":   {MaxArticles: 1},
+		}},
+	}
+	fetchAll := func(context.Context, *config.Config, time.Time) ([]sourceFetchResult, []FailedSource, error) {
+		return []sourceFetchResult{
+			{Source: config.Source{Name: "limited"}, Candidates: []fetchedCandidate{
+				{Article: model.Article{Title: "AI blocked data breach", Link: "excluded", Source: "limited", Published: from.Add(21 * time.Hour)}},
+				{Article: model.Article{Title: "OpenAI 数据泄露后官方回应", Link: "old-important", Source: "limited", Published: from.Add(time.Hour)}},
+				{Article: model.Article{Title: "AI routine update", Link: "new-routine", Source: "limited", Published: from.Add(20 * time.Hour)}},
+				{Article: model.Article{Title: "AI out of window", Link: "out-window", Source: "limited", Published: to.Add(time.Hour)}},
+			}},
+			{Source: config.Source{Name: "other"}, Candidates: []fetchedCandidate{
+				{Article: model.Article{Title: "AI other source update", Link: "other-new", Source: "other", Published: from.Add(19 * time.Hour)}},
+				{Article: model.Article{Title: "AI other source older", Link: "other-old", Source: "other", Published: from.Add(2 * time.Hour)}},
+			}},
+			{Source: config.Source{Name: "unlimited"}, Candidates: []fetchedCandidate{
+				{Article: model.Article{Title: "AI unlimited one", Link: "unlimited-one", Source: "unlimited", Published: from.Add(18 * time.Hour)}},
+				{Article: model.Article{Title: "AI unlimited two", Link: "unlimited-two", Source: "unlimited", Published: from.Add(17 * time.Hour)}},
+			}},
+		}, nil, nil
+	}
+
+	result, err := fetchWindowDetailedContext(context.Background(), cfg, from, to, false, true, fetchAll)
+	if err != nil {
+		t.Fatalf("fetchWindowDetailedContext() error = %v", err)
+	}
+	if got, want := fetchTestArticleTitles(result.Articles), []string{"AI other source update", "AI unlimited one", "AI unlimited two", "OpenAI 数据泄露后官方回应"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("Articles titles = %#v, want %#v", got, want)
+	}
+	if got, want := fetchTestArticleTitles(result.FilteredArticles), []string{"AI blocked data breach", "AI routine update", "AI other source older"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("Filtered titles = %#v, want %#v", got, want)
+	}
+	if result.SourceStats.Totals.AcceptedBeforeDedup != 4 || result.SourceStats.Totals.FilteredSourceLimit != 2 || result.SourceStats.Totals.Filtered != 3 {
+		t.Fatalf("stats totals = %#v", result.SourceStats.Totals)
+	}
+}
+
+func TestSourceLimitBreaksScoreTiesByNewerPublication(t *testing.T) {
+	newest := time.Date(2026, 9, 1, 12, 0, 0, 0, time.UTC)
+	articles := []model.Article{
+		{Title: "older", Summary: "OpenAI", Source: "limited", Published: newest.Add(-10 * time.Hour)},
+		{Title: "newer", Source: "limited", Published: newest},
+	}
+	filters := newFilterContext(&config.Config{Keywords: []string{"OpenAI"}, Filters: config.FiltersConfig{Sources: map[string]config.SourceFilterConfig{"limited": {MaxArticles: 1}}}})
+	stats := newSourceStatsAccumulator(filters.cfg, time.Time{}, newest)
+	accepted, filtered := applySourceLimits(articles, nil, filters, stats)
+	if len(accepted) != 1 || accepted[0].Title != "newer" || len(filtered) != 1 || filtered[0].Title != "older" {
+		t.Fatalf("applySourceLimits() accepted=%#v filtered=%#v", accepted, filtered)
+	}
+}
+
 func TestFilterCandidateRequiresStrongOrEnoughWeakKeywords(t *testing.T) {
 	cfg := &config.Config{Filters: config.FiltersConfig{Categories: map[string]config.CategoryFilterConfig{
 		"AI/科技": {

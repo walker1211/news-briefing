@@ -485,7 +485,7 @@ filters:
         - game
         - gaming
     IT之家:
-      max_articles: 10
+      max_articles: 7
       priority: 40
       exclude_keywords:
         - 游戏
