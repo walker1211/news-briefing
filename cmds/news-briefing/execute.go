@@ -1198,10 +1198,12 @@ func filterArticlesByCategoryLimitsWithRanking(articles []model.Article, limits 
 		if strings.TrimSpace(article.CarryoverID) != "" {
 			carryoverBoost = 1_000_000
 		}
+		filter := ranking.categories[category]
+		score := fetcher.ScoreArticle(article, filter.IncludeKeywords, filter.WeakKeywords, newestByCategory[category])
 		byCategory[category] = append(byCategory[category], rankedArticleIndex{
 			index:            index,
 			priority:         priority,
-			baseScore:        carryoverBoost + priority*5 + articleKeywordRankingScore(article, ranking.categories[category]) + articleFreshnessRankingScore(article.Published, newestByCategory[category]),
+			baseScore:        carryoverBoost + priority*5 + score.Total,
 			published:        article.Published,
 			titleFingerprint: articleTitleFingerprint(article.Title),
 		})
@@ -1240,33 +1242,6 @@ func filterArticlesByCategoryLimitsWithRanking(articles []model.Article, limits 
 		}
 	}
 	return out
-}
-
-func articleKeywordRankingScore(article model.Article, filter config.CategoryFilterConfig) int {
-	titleStrong := len(fetcher.MatchKeywords(article.Title, filter.IncludeKeywords))
-	summaryStrong := len(fetcher.MatchKeywords(article.Summary, filter.IncludeKeywords))
-	titleWeak := len(fetcher.MatchKeywords(article.Title, filter.WeakKeywords))
-	summaryWeak := len(fetcher.MatchKeywords(article.Summary, filter.WeakKeywords))
-	score := titleStrong*120 + summaryStrong*50 + titleWeak*35 + summaryWeak*15
-	if score > 400 {
-		return 400
-	}
-	return score
-}
-
-func articleFreshnessRankingScore(published time.Time, newest time.Time) int {
-	if published.IsZero() || newest.IsZero() {
-		return 0
-	}
-	age := newest.Sub(published)
-	if age < 0 {
-		age = 0
-	}
-	score := 100 - int(age/time.Hour)*5
-	if score < 0 {
-		return 0
-	}
-	return score
 }
 
 func applyNearDuplicateRankingPenalties(candidates []rankedArticleIndex) {

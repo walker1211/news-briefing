@@ -589,21 +589,63 @@ func applySourceLimits(articles []model.Article, filtered []model.Article, filte
 	if len(articles) == 0 {
 		return articles, filtered
 	}
-	out := make([]model.Article, 0, len(articles))
-	counts := make(map[string]int)
-	for _, article := range articles {
+	type rankedArticle struct {
+		index int
+		score ArticleRankingScore
+	}
+
+	bySource := make(map[string][]int)
+	for index, article := range articles {
 		sourceName := articleSourceName(article, config.Source{})
-		maxArticles := filters.maxArticlesForSource(article)
-		if maxArticles > 0 && counts[sourceName] >= maxArticles {
-			stat := stats.statForArticle(article, config.Source{})
-			stat.Filtered++
-			stat.FilteredSourceLimit++
-			filtered = append(filtered, article)
+		bySource[sourceName] = append(bySource[sourceName], index)
+	}
+	selected := make([]bool, len(articles))
+	for sourceName, indexes := range bySource {
+		maxArticles := filters.maxArticlesForSource(articles[indexes[0]])
+		if maxArticles <= 0 {
+			for _, index := range indexes {
+				selected[index] = true
+			}
 			continue
 		}
-		out = append(out, article)
-		counts[sourceName]++
-		stats.statForArticle(article, config.Source{}).AcceptedBeforeDedup++
+
+		newest := time.Time{}
+		for _, index := range indexes {
+			if articles[index].Published.After(newest) {
+				newest = articles[index].Published
+			}
+		}
+		rule := filters.includeKeywordRule(articles[indexes[0]], config.Source{Name: sourceName})
+		ranked := make([]rankedArticle, 0, len(indexes))
+		for _, index := range indexes {
+			ranked = append(ranked, rankedArticle{index: index, score: ScoreArticle(articles[index], rule.strong, rule.weak, newest)})
+		}
+		sort.SliceStable(ranked, func(i, j int) bool {
+			if ranked[i].score.Total != ranked[j].score.Total {
+				return ranked[i].score.Total > ranked[j].score.Total
+			}
+			left, right := articles[ranked[i].index], articles[ranked[j].index]
+			if !left.Published.Equal(right.Published) {
+				return left.Published.After(right.Published)
+			}
+			return ranked[i].index < ranked[j].index
+		})
+		for rank, item := range ranked {
+			selected[item.index] = rank < maxArticles
+		}
+	}
+
+	out := make([]model.Article, 0, len(articles))
+	for index, article := range articles {
+		if selected[index] {
+			out = append(out, article)
+			stats.statForArticle(article, config.Source{}).AcceptedBeforeDedup++
+			continue
+		}
+		stat := stats.statForArticle(article, config.Source{})
+		stat.Filtered++
+		stat.FilteredSourceLimit++
+		filtered = append(filtered, article)
 	}
 	return out, filtered
 }
