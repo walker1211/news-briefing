@@ -4,6 +4,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/walker1211/news-briefing/internal/model"
 	"github.com/walker1211/news-briefing/internal/output"
@@ -41,9 +42,110 @@ func TestApplyXHSPreselectionKeepsEmailStoriesAndBackfillsSafeCandidates(t *test
 	for _, story := range summary.XHSStories {
 		gotTitles = append(gotTitles, story.Title)
 	}
-	wantTitles := []string{"Codex 开放 1M 上下文", "Cursor 推出托管平台", "前7月投资数据发布", "数字支付扩容"}
+	wantTitles := []string{"Codex 开放 1M 上下文", "Cursor 推出托管平台"}
 	if !reflect.DeepEqual(gotTitles, wantTitles) {
 		t.Fatalf("XHS titles = %#v, want %#v", gotTitles, wantTitles)
+	}
+}
+
+func TestXHSBackfillRanksEligibleStoriesByTechnologyEvidenceAndFreshness(t *testing.T) {
+	latest := time.Date(2026, 9, 21, 8, 0, 0, 0, time.UTC)
+	articles := []model.Article{
+		{Source: "财经媒体", SourceRole: model.SourceRoleOriginal, Category: "新闻财经", Link: "https://example.com/rates", Published: latest},
+		{Source: "科技媒体", SourceRole: model.SourceRoleOriginal, Category: "AI/科技", Link: "https://example.com/fbi", Published: latest},
+		{Source: "芯片厂商", SourceRole: model.SourceRolePrimary, Category: "新闻财经", Link: "https://example.com/chips", Published: latest.Add(-2 * time.Hour)},
+		{Source: "独立媒体", SourceRole: model.SourceRoleOriginal, Category: "新闻财经", Link: "https://example.com/chip-analysis", Published: latest.Add(-3 * time.Hour)},
+		{Source: "产品博客", SourceRole: model.SourceRolePrimary, Category: "AI/科技", Link: "https://example.com/cursor", Published: latest.Add(-18 * time.Hour)},
+		{Source: "官方", SourceRole: model.SourceRolePrimary, Category: "AI/科技", Link: "https://example.com/war", Published: latest},
+	}
+	final := model.BriefingStory{Category: "新闻财经", Title: "央行维持利率", SourceArticleIDs: []int{1}}
+	candidates := []model.BriefingStory{
+		{Category: "AI/科技", Title: "FBI称AI使用量增长", Summary: "执法机构采用AI。", SourceArticleIDs: []int{2}},
+		{Category: "新闻财经", Title: "芯片厂商发布新工艺", Summary: "制造技术更新。", SourceArticleIDs: []int{3, 4}},
+		{Category: "AI/科技", ContentType: model.ContentTypeTool, Title: "Cursor发布开发者API", Summary: "新工具发布。", SourceArticleIDs: []int{5}},
+		{Category: "AI/科技", ContentType: model.ContentTypeTool, Title: "AI工具涉及战争", SourceArticleIDs: []int{6}},
+	}
+	got := preselectXHSStories([]model.BriefingStory{final}, candidates, articles, []string{"AI/科技", "新闻财经"}, 3, 2, nil, []string{"战争"}, nil)
+	want := []string{"央行维持利率", "Cursor发布开发者API", "芯片厂商发布新工艺"}
+	if len(got) != len(want) {
+		t.Fatalf("XHS stories = %#v, want %d eligible stories", got, len(want))
+	}
+	for index, title := range want {
+		if got[index].Title != title {
+			t.Fatalf("XHS story %d = %q, want %q", index, got[index].Title, title)
+		}
+	}
+}
+
+func TestXHSBackfillPrefersCorroborationAndUsesFreshnessThenInputOrder(t *testing.T) {
+	latest := time.Date(2026, 9, 21, 8, 0, 0, 0, time.UTC)
+	articles := []model.Article{
+		{Source: "厂商甲", SourceRole: model.SourceRolePrimary, Category: "AI/科技", Link: "https://example.com/old", Published: latest.Add(-36 * time.Hour)},
+		{Source: "厂商乙", SourceRole: model.SourceRolePrimary, Category: "AI/科技", Link: "https://example.com/new", Published: latest},
+		{Source: "媒体丙", SourceRole: model.SourceRoleOriginal, Category: "AI/科技", Link: "https://example.com/corroboration", Published: latest.Add(-time.Hour)},
+		{Source: "无关来源", SourceRole: model.SourceRoleOriginal, Category: "国际政治", Link: "https://example.com/unrelated", Published: latest.Add(72 * time.Hour)},
+	}
+	candidates := []model.BriefingStory{
+		{Category: "AI/科技", Title: "旧款芯片更新", SourceArticleIDs: []int{1}},
+		{Category: "AI/科技", Title: "新版芯片更新甲", SourceArticleIDs: []int{2}},
+		{Category: "AI/科技", Title: "新版芯片更新乙", SourceArticleIDs: []int{2}},
+		{Category: "AI/科技", Title: "新版芯片获多方验证", SourceArticleIDs: []int{2, 3}},
+	}
+	got := preselectXHSStories(nil, candidates, articles, []string{"AI/科技"}, 4, 2, nil, nil, nil)
+	want := []string{"新版芯片获多方验证", "新版芯片更新甲", "新版芯片更新乙", "旧款芯片更新"}
+	for index, title := range want {
+		if got[index].Title != title {
+			t.Fatalf("XHS story %d = %q, want %q", index, got[index].Title, title)
+		}
+	}
+}
+
+func TestXHSBackfillDoesNotTreatMediaMentionAsDirectSource(t *testing.T) {
+	articles := []model.Article{
+		{Source: "科技媒体", SourceRole: model.SourceRoleOriginal, Link: "https://example.com/report", Summary: "报道提及国务院的公告。"},
+		{Source: "发布机构", SourceRole: model.SourceRolePrimary, Link: "https://example.com/release"},
+	}
+	media := model.BriefingStory{Category: "AI/科技", Title: "AI产品更新", SourceArticleIDs: []int{1}}
+	primary := model.BriefingStory{Category: "AI/科技", Title: "AI产品发布", SourceArticleIDs: []int{2}}
+	if !xhsStoryHasOfficialSource(articles[:1], nil) {
+		t.Fatal("existing eligibility should still accept an official mention")
+	}
+	if xhsStoryHasDirectSource(articles[:1], nil) {
+		t.Fatal("a media mention must not count as direct provenance")
+	}
+	if xhsBackfillSelection(media, articles, time.Time{}, nil).Score >= xhsBackfillSelection(primary, articles, time.Time{}, nil).Score {
+		t.Fatal("a media mention must not outrank a direct primary source")
+	}
+	if !xhsStoryHasDirectSource([]model.Article{{Link: "https://sub.gov.cn/release"}}, nil) {
+		t.Fatal("an official host should count as a direct source even without a source role")
+	}
+}
+
+func TestXHSBackfillRequiresLowRiskTechnologyAndReliableSources(t *testing.T) {
+	articles := []model.Article{
+		{Source: "科技媒体", SourceRole: model.SourceRoleOriginal, Link: "https://example.com/fbi"},
+		{Source: "厂商", SourceRole: model.SourceRolePrimary, Link: "https://example.com/product"},
+		{Source: "媒体甲", SourceRole: model.SourceRoleOriginal, Link: "https://example.com/a"},
+		{Source: "媒体乙", SourceRole: model.SourceRoleOriginal, Link: "https://example.com/b"},
+	}
+	allowed := map[string]struct{}{"AI/科技": {}, "新闻财经": {}}
+	tests := []struct {
+		name  string
+		story model.BriefingStory
+		want  bool
+	}{
+		{name: "single source public safety AI", story: model.BriefingStory{Category: "AI/科技", Title: "FBI扩大AI使用", Summary: "执法机构称协助阻止枪击。", SourceArticleIDs: []int{1}}, want: false},
+		{name: "direct regulatory technology", story: model.BriefingStory{Category: "AI/科技", Title: "AI监管平台上线", Summary: "执法流程数字化。", SourceArticleIDs: []int{2}}, want: false},
+		{name: "direct product source", story: model.BriefingStory{Category: "AI/科技", Title: "Cursor发布开发者API", SourceArticleIDs: []int{2}}, want: true},
+		{name: "corroborated chip reporting", story: model.BriefingStory{Category: "新闻财经", Title: "芯片制造工艺更新", SourceArticleIDs: []int{3, 4}}, want: true},
+		{name: "non technology finance", story: model.BriefingStory{Category: "新闻财经", Title: "短债收益率发生变化", SourceArticleIDs: []int{3, 4}}, want: false},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := xhsBackfillEligible(tc.story, articles, allowed, 2, nil, nil, nil); got != tc.want {
+				t.Fatalf("xhsBackfillEligible() = %v, want %v", got, tc.want)
+			}
+		})
 	}
 }
 

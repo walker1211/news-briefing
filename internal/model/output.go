@@ -32,16 +32,23 @@ type BriefingOverviewGroup struct {
 }
 
 type BriefingStory struct {
-	Category          string `json:"category"`
-	ContentType       string `json:"content_type,omitempty"`
-	EvidenceLevel     string `json:"evidence_level,omitempty"`
-	Title             string `json:"title"`
-	ImageURL          string `json:"image_url,omitempty"`
-	Summary           string `json:"summary"`
-	Impact            string `json:"impact"`
-	SourceArticleIDs  []int  `json:"source_article_ids,omitempty"`
-	SourceLine        string `json:"source_line,omitempty"`
-	CarryoverRequired bool   `json:"carryover_required,omitempty"`
+	Category          string             `json:"category"`
+	ContentType       string             `json:"content_type,omitempty"`
+	EvidenceLevel     string             `json:"evidence_level,omitempty"`
+	Title             string             `json:"title"`
+	ImageURL          string             `json:"image_url,omitempty"`
+	Summary           string             `json:"summary"`
+	Impact            string             `json:"impact"`
+	SourceArticleIDs  []int              `json:"source_article_ids,omitempty"`
+	SourceLine        string             `json:"source_line,omitempty"`
+	CarryoverRequired bool               `json:"carryover_required,omitempty"`
+	XHSSelection      *XHSSelectionTrace `json:"-"`
+}
+
+type XHSSelectionTrace struct {
+	Origin          string         `json:"origin"`
+	Score           int            `json:"score,omitempty"`
+	ScoreComponents map[string]int `json:"score_components,omitempty"`
 }
 
 type BriefingDirection struct {

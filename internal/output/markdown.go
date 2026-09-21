@@ -172,15 +172,22 @@ type cardManifestDoc struct {
 }
 
 type cardManifestItem struct {
-	ID          string             `json:"id"`
-	Category    string             `json:"category"`
-	Title       string             `json:"title"`
-	Summary     string             `json:"summary"`
-	Impact      string             `json:"impact"`
-	Source      string             `json:"source,omitempty"`
-	PublishedAt string             `json:"published_at,omitempty"`
-	URL         string             `json:"url,omitempty"`
-	Image       *cardManifestImage `json:"image,omitempty"`
+	ID          string                 `json:"id"`
+	Category    string                 `json:"category"`
+	Title       string                 `json:"title"`
+	Summary     string                 `json:"summary"`
+	Impact      string                 `json:"impact"`
+	Source      string                 `json:"source,omitempty"`
+	PublishedAt string                 `json:"published_at,omitempty"`
+	URL         string                 `json:"url,omitempty"`
+	Image       *cardManifestImage     `json:"image,omitempty"`
+	Selection   *cardManifestSelection `json:"selection,omitempty"`
+}
+
+type cardManifestSelection struct {
+	Origin          string         `json:"origin"`
+	Score           int            `json:"score,omitempty"`
+	ScoreComponents map[string]int `json:"score_components,omitempty"`
 }
 
 type cardManifestImage struct {
@@ -229,6 +236,13 @@ func buildCardManifest(briefing *model.Briefing, localizedImages map[string]stri
 			Summary:  strings.TrimSpace(story.Summary),
 			Impact:   strings.TrimSpace(story.Impact),
 		}
+		if story.XHSSelection != nil {
+			item.Selection = &cardManifestSelection{
+				Origin:          story.XHSSelection.Origin,
+				Score:           story.XHSSelection.Score,
+				ScoreComponents: cloneStringIntMap(story.XHSSelection.ScoreComponents),
+			}
+		}
 		if source := firstSourceArticle(story.SourceArticleIDs, briefing.Articles); source != nil {
 			item.Source = cardManifestSourceLabel(story.SourceArticleIDs, briefing.Articles)
 			item.URL = strings.TrimSpace(source.Link)
@@ -244,11 +258,24 @@ func buildCardManifest(briefing *model.Briefing, localizedImages map[string]stri
 	return manifest
 }
 
-func cardManifestStories(summary *model.BriefingSummary) []model.BriefingStory {
-	stories := summary.Stories
-	if summary.XHSStories != nil {
-		stories = summary.XHSStories
+func cloneStringIntMap(value map[string]int) map[string]int {
+	if len(value) == 0 {
+		return nil
 	}
+	cloned := make(map[string]int, len(value))
+	for key, item := range value {
+		cloned[key] = item
+	}
+	return cloned
+}
+
+func cardManifestStories(summary *model.BriefingSummary) []model.BriefingStory {
+	if summary.XHSStories != nil {
+		// XHS preselection already preserves eligible email order and appends
+		// backfills in score order. Do not regroup it by category here.
+		return append([]model.BriefingStory(nil), summary.XHSStories...)
+	}
+	stories := summary.Stories
 	categoryOrder := make([]string, 0, len(summary.OverviewGroups))
 	for _, group := range summary.OverviewGroups {
 		categoryOrder = append(categoryOrder, group.Category)
