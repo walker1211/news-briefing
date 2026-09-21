@@ -68,6 +68,7 @@ func (r *Runner) applyXHSPreselection(summary *model.BriefingSummary, candidates
 		summary.Stories,
 		candidates,
 		articles,
+		r.xhsPreselectionEmailOnly,
 		r.xhsPreselectionCategories,
 		r.xhsPreselectionTargetItems,
 		r.xhsPreselectionMinSources,
@@ -81,7 +82,7 @@ func (r *Runner) applyXHSPreselection(summary *model.BriefingSummary, candidates
 	summary.XHSTopics = xhsTopicsForStories(summary.XHSStories)
 }
 
-func preselectXHSStories(finalStories, candidates []model.BriefingStory, articles []model.Article, categories []string, targetItems, minimumSources int, officialHosts, excludedTerms []string, contextualExclusions []XHSContextualExclusionRule) []model.BriefingStory {
+func preselectXHSStories(finalStories, candidates []model.BriefingStory, articles []model.Article, emailOnly bool, categories []string, targetItems, minimumSources int, officialHosts, excludedTerms []string, contextualExclusions []XHSContextualExclusionRule) []model.BriefingStory {
 	if targetItems <= 0 {
 		return []model.BriefingStory{}
 	}
@@ -118,7 +119,7 @@ func preselectXHSStories(finalStories, candidates []model.BriefingStory, article
 	for _, story := range finalStories {
 		appendEligible(story, &model.XHSSelectionTrace{Origin: "email"})
 	}
-	if len(selected) >= targetItems {
+	if emailOnly || len(selected) >= targetItems {
 		return selected
 	}
 

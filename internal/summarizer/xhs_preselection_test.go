@@ -32,7 +32,7 @@ func TestApplyXHSPreselectionKeepsEmailStoriesAndBackfillsSafeCandidates(t *test
 	summary := model.BriefingSummary{Stories: append([]model.BriefingStory(nil), finalStories...)}
 	wantEmail := append([]model.BriefingStory(nil), summary.Stories...)
 	runner := &Runner{}
-	runner.SetXHSPreselectionOptions(true, []string{"AI/科技", "新闻财经"}, 4, 2, nil, nil, nil)
+	runner.SetXHSPreselectionOptions(true, false, []string{"AI/科技", "新闻财经"}, 4, 2, nil, nil, nil)
 	runner.applyXHSPreselection(&summary, candidates, articles)
 
 	if !reflect.DeepEqual(summary.Stories, wantEmail) {
@@ -45,6 +45,26 @@ func TestApplyXHSPreselectionKeepsEmailStoriesAndBackfillsSafeCandidates(t *test
 	wantTitles := []string{"Codex 开放 1M 上下文", "Cursor 推出托管平台"}
 	if !reflect.DeepEqual(gotTitles, wantTitles) {
 		t.Fatalf("XHS titles = %#v, want %#v", gotTitles, wantTitles)
+	}
+}
+
+func TestApplyXHSPreselectionEmailOnlyDoesNotBackfillToTarget(t *testing.T) {
+	articles := []model.Article{
+		{Source: "产品博客", SourceRole: model.SourceRolePrimary, Category: "AI/科技", Link: "https://example.com/codex"},
+		{Source: "产品博客", SourceRole: model.SourceRolePrimary, Category: "AI/科技", Link: "https://example.com/cursor"},
+	}
+	emailStory := model.BriefingStory{Category: "AI/科技", Title: "Codex 发布新能力", SourceArticleIDs: []int{1}}
+	backfillStory := model.BriefingStory{Category: "AI/科技", Title: "Cursor 发布开发者 API", SourceArticleIDs: []int{2}}
+	summary := model.BriefingSummary{Stories: []model.BriefingStory{emailStory}}
+	runner := &Runner{}
+	runner.SetXHSPreselectionOptions(true, true, []string{"AI/科技"}, 10, 2, nil, nil, nil)
+	runner.applyXHSPreselection(&summary, []model.BriefingStory{emailStory, backfillStory}, articles)
+
+	if len(summary.XHSStories) != 1 || summary.XHSStories[0].Title != emailStory.Title {
+		t.Fatalf("XHS stories = %#v, want only the eligible email story", summary.XHSStories)
+	}
+	if got := summary.XHSStories[0].XHSSelection; got == nil || got.Origin != "email" {
+		t.Fatalf("selection trace = %#v, want email origin", got)
 	}
 }
 
@@ -65,7 +85,7 @@ func TestXHSBackfillRanksEligibleStoriesByTechnologyEvidenceAndFreshness(t *test
 		{Category: "AI/科技", ContentType: model.ContentTypeTool, Title: "Cursor发布开发者API", Summary: "新工具发布。", SourceArticleIDs: []int{5}},
 		{Category: "AI/科技", ContentType: model.ContentTypeTool, Title: "AI工具涉及战争", SourceArticleIDs: []int{6}},
 	}
-	got := preselectXHSStories([]model.BriefingStory{final}, candidates, articles, []string{"AI/科技", "新闻财经"}, 3, 2, nil, []string{"战争"}, nil)
+	got := preselectXHSStories([]model.BriefingStory{final}, candidates, articles, false, []string{"AI/科技", "新闻财经"}, 3, 2, nil, []string{"战争"}, nil)
 	want := []string{"央行维持利率", "Cursor发布开发者API", "芯片厂商发布新工艺"}
 	if len(got) != len(want) {
 		t.Fatalf("XHS stories = %#v, want %d eligible stories", got, len(want))
@@ -91,7 +111,7 @@ func TestXHSBackfillPrefersCorroborationAndUsesFreshnessThenInputOrder(t *testin
 		{Category: "AI/科技", Title: "新版芯片更新乙", SourceArticleIDs: []int{2}},
 		{Category: "AI/科技", Title: "新版芯片获多方验证", SourceArticleIDs: []int{2, 3}},
 	}
-	got := preselectXHSStories(nil, candidates, articles, []string{"AI/科技"}, 4, 2, nil, nil, nil)
+	got := preselectXHSStories(nil, candidates, articles, false, []string{"AI/科技"}, 4, 2, nil, nil, nil)
 	want := []string{"新版芯片获多方验证", "新版芯片更新甲", "新版芯片更新乙", "旧款芯片更新"}
 	for index, title := range want {
 		if got[index].Title != title {
@@ -201,7 +221,7 @@ func TestApplyXHSPreselectionExcludesConfiguredRiskTermsAndRebuildsTopics(t *tes
 	wantStories := append([]model.BriefingStory(nil), summary.Stories...)
 	canonicalMarkdown := output.StructuredBriefingMarkdown(summary, []string{"AI/科技", "新闻财经"})
 	runner := &Runner{}
-	runner.SetXHSPreselectionOptions(true, []string{"AI/科技", "新闻财经"}, 10, 1, nil, []string{"威胁叙事", "火灾调查", "回款难", "拖欠"}, nil)
+	runner.SetXHSPreselectionOptions(true, false, []string{"AI/科技", "新闻财经"}, 10, 1, nil, []string{"威胁叙事", "火灾调查", "回款难", "拖欠"}, nil)
 	runner.applyXHSPreselection(&summary, summary.Stories, articles)
 
 	if !reflect.DeepEqual(summary.Stories, wantStories) {
@@ -246,7 +266,7 @@ func TestApplyXHSPreselectionDoesNotBackfillExcludedStories(t *testing.T) {
 	}}
 	candidates := append(append([]model.BriefingStory(nil), summary.Stories...), model.BriefingStory{Category: "新闻财经", Title: "回款难仍在持续", Summary: "拖欠问题。", SourceArticleIDs: []int{2}})
 	runner := &Runner{}
-	runner.SetXHSPreselectionOptions(true, []string{"新闻财经"}, 5, 1, nil, []string{"回款难", "拖欠"}, nil)
+	runner.SetXHSPreselectionOptions(true, false, []string{"新闻财经"}, 5, 1, nil, []string{"回款难", "拖欠"}, nil)
 	runner.applyXHSPreselection(&summary, candidates, articles)
 	if got := len(summary.XHSStories); got != 1 {
 		t.Fatalf("XHS story count = %d, want 1; unsafe backfill must not fill target", got)
@@ -285,7 +305,7 @@ func TestApplyXHSPreselectionExcludesChinaOnlyWithConfiguredRiskContext(t *testi
 		ContextKeywords: []string{"执法", "监管", "投资降幅", "经济压力", "威胁叙事", "政治对抗"},
 	}}
 	runner := &Runner{}
-	runner.SetXHSPreselectionOptions(true, []string{"AI/科技", "新闻财经"}, 10, 1, nil, nil, rules)
+	runner.SetXHSPreselectionOptions(true, false, []string{"AI/科技", "新闻财经"}, 10, 1, nil, nil, rules)
 	runner.applyXHSPreselection(&summary, summary.Stories, articles)
 
 	if !reflect.DeepEqual(summary.Stories, wantStories) {
