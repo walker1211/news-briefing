@@ -26,6 +26,15 @@
       "source": "Contract Fixture",
       "published_at": "2026-08-11T18:00:00+08:00",
       "url": "https://example.com/contract-ai-1",
+      "selection": {
+        "origin": "backfill",
+        "score": 56,
+        "score_components": {
+          "technology_category": 24,
+          "evidence": 24,
+          "freshness": 8
+        }
+      },
       "sections": [
         {
           "label": "关键变化",
@@ -46,6 +55,9 @@
       "source": "Contract Fixture",
       "published_at": "2026-08-11T18:00:00+08:00",
       "url": "https://example.com/contract-finance-1",
+      "selection": {
+        "origin": "email"
+      },
       "sections": [],
       "image": {
         "src": "",

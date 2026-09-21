@@ -2,8 +2,10 @@ package summarizer
 
 import (
 	"net/url"
+	"sort"
 	"strconv"
 	"strings"
+	"time"
 	"unicode"
 
 	"github.com/walker1211/news-briefing/internal/model"
@@ -32,6 +34,12 @@ var xhsPreselectionOfficialLabels = []string{
 var xhsPreselectionDefaultOfficialHosts = []string{
 	"gov.cn", "pbc.gov.cn", "ndrc.gov.cn", "nea.gov.cn", "csrc.gov.cn", "sse.com.cn",
 	"szse.cn", "bse.cn", "hkexnews.hk", "hkex.com.hk", "sfc.hk", "sec.gov",
+}
+
+var xhsBackfillDisallowedTerms = []string{
+	"fbi", "监管", "执法", "执法机构", "公共安全", "警方", "警察", "枪击", "枪支", "犯罪", "刑事", "逮捕",
+	"中东局势", "地缘政治", "战争", "战事", "军事", "武装", "导弹", "核武", "空袭",
+	"袭击", "伤亡", "死亡", "恐怖", "制裁", "冲突",
 }
 
 // XHSContextualExclusionRule keeps contextual safety policy independent from
@@ -81,7 +89,6 @@ func preselectXHSStories(finalStories, candidates []model.BriefingStory, article
 		minimumSources = 2
 	}
 	allowed := make(map[string]struct{}, len(categories))
-	orderedCategories := make([]string, 0, len(categories))
 	for _, category := range categories {
 		category = strings.TrimSpace(category)
 		if category == "" {
@@ -91,11 +98,10 @@ func preselectXHSStories(finalStories, candidates []model.BriefingStory, article
 			continue
 		}
 		allowed[category] = struct{}{}
-		orderedCategories = append(orderedCategories, category)
 	}
 	selected := make([]model.BriefingStory, 0, targetItems)
 	seen := map[string]struct{}{}
-	appendEligible := func(story model.BriefingStory) bool {
+	appendEligible := func(story model.BriefingStory, trace *model.XHSSelectionTrace) bool {
 		if len(selected) >= targetItems || !xhsStoryEligible(story, articles, allowed, minimumSources, officialHosts, excludedTerms, contextualExclusions) {
 			return false
 		}
@@ -104,52 +110,138 @@ func preselectXHSStories(finalStories, candidates []model.BriefingStory, article
 			return false
 		}
 		seen[key] = struct{}{}
-		selected = append(selected, cloneBriefingStory(story))
+		story = cloneBriefingStory(story)
+		story.XHSSelection = cloneXHSSelectionTrace(trace)
+		selected = append(selected, story)
 		return true
 	}
 	for _, story := range finalStories {
-		appendEligible(story)
+		appendEligible(story, &model.XHSSelectionTrace{Origin: "email"})
 	}
 	if len(selected) >= targetItems {
 		return selected
 	}
 
-	queues := make(map[string][]model.BriefingStory, len(orderedCategories))
+	type rankedCandidate struct {
+		story     model.BriefingStory
+		selection model.XHSSelectionTrace
+	}
+	ranked := make([]rankedCandidate, 0, len(candidates))
+	newest := time.Time{}
 	for _, story := range candidates {
 		category := strings.TrimSpace(story.Category)
 		if _, ok := allowed[category]; !ok {
 			continue
 		}
-		if !xhsStoryEligible(story, articles, allowed, minimumSources, officialHosts, excludedTerms, contextualExclusions) {
+		if !xhsBackfillEligible(story, articles, allowed, minimumSources, officialHosts, excludedTerms, contextualExclusions) {
 			continue
 		}
 		if _, exists := seen[xhsStoryIdentity(story)]; exists {
 			continue
 		}
-		queues[category] = append(queues[category], story)
-	}
-	indexes := make(map[string]int, len(orderedCategories))
-	for len(selected) < targetItems {
-		progressed := false
-		for _, category := range orderedCategories {
-			queue := queues[category]
-			for indexes[category] < len(queue) {
-				story := queue[indexes[category]]
-				indexes[category]++
-				if appendEligible(story) {
-					progressed = true
-					break
-				}
-			}
-			if len(selected) >= targetItems {
-				break
+		for _, source := range xhsStorySourceArticles(story, articles) {
+			if source.Published.After(newest) {
+				newest = source.Published
 			}
 		}
-		if !progressed {
+		ranked = append(ranked, rankedCandidate{story: story})
+	}
+	for index := range ranked {
+		ranked[index].selection = xhsBackfillSelection(ranked[index].story, articles, newest, officialHosts)
+	}
+	// The category workers already order their stories by importance. Preserve
+	// that order for equal scores, but compare eligible backfills across
+	// categories instead of filling a fixed quota from each category.
+	sort.SliceStable(ranked, func(i, j int) bool {
+		return ranked[i].selection.Score > ranked[j].selection.Score
+	})
+	for _, candidate := range ranked {
+		if len(selected) >= targetItems {
 			break
 		}
+		appendEligible(candidate.story, &candidate.selection)
 	}
 	return selected
+}
+
+// xhsBackfillSelection ranks already-eligible stories, never raw articles. Source
+// reliability and freshness are measured from the story's referenced articles;
+// a title's keyword count cannot outweigh independently verified sources.
+func xhsBackfillSelection(story model.BriefingStory, articles []model.Article, newest time.Time, officialHosts []string) model.XHSSelectionTrace {
+	components := map[string]int{}
+	if strings.TrimSpace(story.Category) == "AI/科技" {
+		components["technology_category"] = 24
+	}
+	if xhsTechnologyTitle(story.Title) {
+		components["technology_title"] = 12
+	}
+	switch strings.TrimSpace(story.ContentType) {
+	case model.ContentTypeTool:
+		components["content_type"] = 12
+	case model.ContentTypeCase:
+		components["content_type"] = 8
+	case model.ContentTypeInsight:
+		components["content_type"] = 6
+	}
+
+	sources := xhsStorySourceArticles(story, articles)
+	switch briefingEvidenceLevel(sources) {
+	case model.EvidenceCorroborated:
+		components["evidence"] = 24
+	case model.EvidenceSupported:
+		components["evidence"] = 12
+	}
+	if xhsStoryHasDirectSource(sources, officialHosts) {
+		components["direct_source"] = 12
+	}
+	if !newest.IsZero() {
+		latestSource := time.Time{}
+		for _, source := range sources {
+			if source.Published.After(latestSource) {
+				latestSource = source.Published
+			}
+		}
+		if !latestSource.IsZero() {
+			switch age := newest.Sub(latestSource); {
+			case age <= 6*time.Hour:
+				components["freshness"] = 8
+			case age <= 24*time.Hour:
+				components["freshness"] = 4
+			}
+		}
+	}
+	score := 0
+	for _, value := range components {
+		score += value
+	}
+	return model.XHSSelectionTrace{Origin: "backfill", Score: score, ScoreComponents: components}
+}
+
+func xhsBackfillEligible(story model.BriefingStory, articles []model.Article, allowed map[string]struct{}, minimumSources int, officialHosts, excludedTerms []string, contextualExclusions []XHSContextualExclusionRule) bool {
+	if !xhsStoryEligible(story, articles, allowed, minimumSources, officialHosts, excludedTerms, contextualExclusions) {
+		return false
+	}
+	if !xhsTechnologyTitle(story.Title) {
+		return false
+	}
+	combined := strings.Join([]string{story.Title, story.Summary, story.Impact}, "\n")
+	if containsXHSTerm(combined, xhsBackfillDisallowedTerms) {
+		return false
+	}
+	sources := xhsStorySourceArticles(story, articles)
+	return xhsStoryHasDirectSource(sources, officialHosts) || briefingEvidenceLevel(sources) == model.EvidenceCorroborated
+}
+
+func xhsTechnologyTitle(title string) bool {
+	for _, rule := range xhsSpecificTopicRules {
+		switch rule.topic {
+		case "人工智能", "开发者工具", "机器人", "芯片与算力":
+			if containsXHSTopicTerm(title, rule.keywords) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func xhsStoryEligible(story model.BriefingStory, articles []model.Article, allowed map[string]struct{}, minimumSources int, officialHosts, excludedTerms []string, contextualExclusions []XHSContextualExclusionRule) bool {
@@ -322,16 +414,36 @@ func xhsStoryHasOfficialSource(articles []model.Article, configuredHosts []strin
 		if containsXHSTerm(article.Source+"\n"+article.Summary, xhsPreselectionOfficialLabels) || strings.TrimSpace(article.SourceRole) == model.SourceRolePrimary {
 			return true
 		}
-		parsed, err := url.Parse(strings.TrimSpace(article.Link))
-		if err != nil {
-			continue
+		if xhsArticleHasOfficialHost(article, hosts) {
+			return true
 		}
-		host := strings.ToLower(parsed.Hostname())
-		for _, candidate := range hosts {
-			candidate = strings.ToLower(strings.TrimSpace(candidate))
-			if candidate != "" && (host == candidate || strings.HasSuffix(host, "."+candidate)) {
-				return true
-			}
+	}
+	return false
+}
+
+// Rank only a direct primary source or an official host. A media article that
+// merely mentions an official agency can satisfy the existing eligibility
+// rule, but it should not get the same provenance bonus as the direct source.
+func xhsStoryHasDirectSource(articles []model.Article, configuredHosts []string) bool {
+	hosts := append(append([]string(nil), xhsPreselectionDefaultOfficialHosts...), configuredHosts...)
+	for _, article := range articles {
+		if strings.TrimSpace(article.SourceRole) == model.SourceRolePrimary || xhsArticleHasOfficialHost(article, hosts) {
+			return true
+		}
+	}
+	return false
+}
+
+func xhsArticleHasOfficialHost(article model.Article, hosts []string) bool {
+	parsed, err := url.Parse(strings.TrimSpace(article.Link))
+	if err != nil {
+		return false
+	}
+	host := strings.ToLower(parsed.Hostname())
+	for _, candidate := range hosts {
+		candidate = strings.ToLower(strings.TrimSpace(candidate))
+		if candidate != "" && (host == candidate || strings.HasSuffix(host, "."+candidate)) {
+			return true
 		}
 	}
 	return false
@@ -367,5 +479,18 @@ func xhsStoryIdentity(story model.BriefingStory) string {
 
 func cloneBriefingStory(story model.BriefingStory) model.BriefingStory {
 	story.SourceArticleIDs = append([]int(nil), story.SourceArticleIDs...)
+	story.XHSSelection = cloneXHSSelectionTrace(story.XHSSelection)
 	return story
+}
+
+func cloneXHSSelectionTrace(trace *model.XHSSelectionTrace) *model.XHSSelectionTrace {
+	if trace == nil {
+		return nil
+	}
+	cloned := *trace
+	cloned.ScoreComponents = make(map[string]int, len(trace.ScoreComponents))
+	for key, value := range trace.ScoreComponents {
+		cloned.ScoreComponents[key] = value
+	}
+	return &cloned
 }

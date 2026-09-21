@@ -85,14 +85,23 @@ func TestBuildCardManifestUsesXHSStoriesWithoutChangingBriefingStories(t *testin
 	summary := &model.BriefingSummary{
 		OverviewGroups: []model.BriefingOverviewGroup{{Category: "AI/科技", Items: []string{"邮件要点"}}},
 		Stories:        []model.BriefingStory{{Category: "AI/科技", Title: "邮件故事"}},
-		XHSStories:     []model.BriefingStory{{Category: "新闻财经", Title: "安全补位二"}, {Category: "AI/科技", Title: "安全补位一"}},
+		XHSStories: []model.BriefingStory{
+			{Category: "新闻财经", Title: "安全补位二", XHSSelection: &model.XHSSelectionTrace{Origin: "backfill", Score: 56, ScoreComponents: map[string]int{"evidence": 24}}},
+			{Category: "AI/科技", Title: "安全补位一", XHSSelection: &model.XHSSelectionTrace{Origin: "email"}},
+		},
 	}
 	manifest := buildCardManifest(&model.Briefing{StructuredSummary: summary}, nil)
-	if got, want := cardManifestItemTitlesForTest(manifest.Items), []string{"安全补位一", "安全补位二"}; !reflect.DeepEqual(got, want) {
+	if got, want := cardManifestItemTitlesForTest(manifest.Items), []string{"安全补位二", "安全补位一"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("manifest titles = %#v, want %#v", got, want)
 	}
-	if got, want := manifest.Document.Summary, []string{"安全补位一", "安全补位二"}; !reflect.DeepEqual(got, want) {
+	if got, want := manifest.Document.Summary, []string{"安全补位二", "安全补位一"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("manifest summary = %#v, want %#v", got, want)
+	}
+	if manifest.Items[1].Selection == nil || manifest.Items[1].Selection.Origin != "email" {
+		t.Fatalf("email selection trace = %#v", manifest.Items[1].Selection)
+	}
+	if got := manifest.Items[0].Selection; got == nil || got.Origin != "backfill" || got.Score != 56 || got.ScoreComponents["evidence"] != 24 {
+		t.Fatalf("backfill selection trace = %#v", got)
 	}
 	if len(summary.Stories) != 1 || summary.Stories[0].Title != "邮件故事" {
 		t.Fatalf("email stories changed: %#v", summary.Stories)
