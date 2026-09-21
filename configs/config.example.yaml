@@ -684,9 +684,10 @@ output:
     新闻财经: 30
     国际政治: 30
   # Optional XHS-only preselection. Email and Markdown stories remain unchanged.
-  # Eligible final-editor stories are preferred, then safe candidates from the same configured categories backfill the card manifest.
+  # Eligible final-editor stories are preferred. Set email_only to true to disable candidate-pool backfill.
   xhs_preselection:
     enabled: false
+    email_only: false
     categories:
       - AI/科技
       - 新闻财经

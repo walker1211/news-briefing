@@ -105,6 +105,7 @@ schedule: []
 output:
   xhs_preselection:
     enabled: true
+    email_only: true
     categories: [AI/科技, 新闻财经]
     target_items: 10
     minimum_independent_sources: 2
@@ -124,7 +125,7 @@ ai: {}
 		t.Fatalf("Load() error = %v", err)
 	}
 	got := cfg.Output.XHSPreselection
-	if !got.Enabled || !reflect.DeepEqual(got.Categories, []string{"AI/科技", "新闻财经"}) || got.TargetItems != 10 || got.MinimumIndependentSources != 2 || !reflect.DeepEqual(got.OfficialSourceHosts, []string{"sse.com.cn"}) || !reflect.DeepEqual(got.ExcludedKeywords, []string{"回款难", "火灾调查"}) || !reflect.DeepEqual(got.ContextualExclusions, []XHSContextualExclusionCfg{{AnchorKeywords: []string{"中国", "中方"}, ContextKeywords: []string{"执法", "监管"}}}) {
+	if !got.Enabled || !got.EmailOnly || !reflect.DeepEqual(got.Categories, []string{"AI/科技", "新闻财经"}) || got.TargetItems != 10 || got.MinimumIndependentSources != 2 || !reflect.DeepEqual(got.OfficialSourceHosts, []string{"sse.com.cn"}) || !reflect.DeepEqual(got.ExcludedKeywords, []string{"回款难", "火灾调查"}) || !reflect.DeepEqual(got.ContextualExclusions, []XHSContextualExclusionCfg{{AnchorKeywords: []string{"中国", "中方"}, ContextKeywords: []string{"执法", "监管"}}}) {
 		t.Fatalf("Output.XHSPreselection = %#v", got)
 	}
 }

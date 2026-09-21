@@ -287,6 +287,7 @@ type OutputCfg struct {
 
 type XHSPreselectionCfg struct {
 	Enabled                   bool                        `yaml:"enabled"`
+	EmailOnly                 bool                        `yaml:"email_only"`
 	Categories                []string                    `yaml:"categories"`
 	TargetItems               int                         `yaml:"target_items"`
 	MinimumIndependentSources int                         `yaml:"minimum_independent_sources"`

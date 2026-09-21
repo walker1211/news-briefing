@@ -112,6 +112,7 @@ func newApp(cfg *config.Config) *app {
 	)
 	aiRunner.SetXHSPreselectionOptions(
 		cfg.Output.XHSPreselection.Enabled,
+		cfg.Output.XHSPreselection.EmailOnly,
 		cfg.Output.XHSPreselection.Categories,
 		cfg.Output.XHSPreselection.TargetItems,
 		cfg.Output.XHSPreselection.MinimumIndependentSources,

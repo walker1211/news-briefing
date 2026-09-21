@@ -187,6 +187,7 @@ type Runner struct {
 	summaryEditorTargetStories          int
 	summaryEditorMaxStories             int
 	xhsPreselectionEnabled              bool
+	xhsPreselectionEmailOnly            bool
 	xhsPreselectionCategories           []string
 	xhsPreselectionTargetItems          int
 	xhsPreselectionMinSources           int
@@ -415,8 +416,9 @@ func (r *Runner) SetSummaryEditorOptions(enabled bool, model, effort string, min
 
 // SetXHSPreselectionOptions configures deterministic card-manifest-only story
 // selection. It never changes the email/Markdown story list or adds AI calls.
-func (r *Runner) SetXHSPreselectionOptions(enabled bool, categories []string, targetItems, minimumSources int, officialHosts, excludedTerms []string, contextualExclusions []XHSContextualExclusionRule) {
+func (r *Runner) SetXHSPreselectionOptions(enabled, emailOnly bool, categories []string, targetItems, minimumSources int, officialHosts, excludedTerms []string, contextualExclusions []XHSContextualExclusionRule) {
 	r.xhsPreselectionEnabled = enabled
+	r.xhsPreselectionEmailOnly = emailOnly
 	r.xhsPreselectionCategories = append([]string(nil), categories...)
 	r.xhsPreselectionTargetItems = targetItems
 	r.xhsPreselectionMinSources = minimumSources
