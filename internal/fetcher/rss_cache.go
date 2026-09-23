@@ -32,73 +32,92 @@ type rssFeedCacheMetadata struct {
 	LastModified string `json:"last_modified,omitempty"`
 }
 
+type rssFeedResponse struct {
+	Feed                  *gofeed.Feed
+	Headers               http.Header
+	ResponseBytes         int64
+	CacheStatus           string
+	SanitizedControlChars int
+}
+
 func newRSSFeedCache(dir string) *rssFeedCache {
 	return &rssFeedCache{dir: dir, locks: make(map[string]*sync.Mutex)}
 }
 
-func (c *Client) fetchRSSFeedHTTP(ctx context.Context, feedURL, cacheKeyURL string, parser *gofeed.Parser) (*gofeed.Feed, http.Header, int64, string, error) {
+func (c *Client) fetchRSSFeedHTTP(ctx context.Context, feedURL, cacheKeyURL string, parser *gofeed.Parser) (rssFeedResponse, error) {
 	if c.rssCache == nil {
 		return c.fetchRSSFeedNetwork(ctx, feedURL, parser, nil, "network")
 	}
 	return c.rssCache.fetch(ctx, c.httpClient, feedURL, cacheKeyURL, parser)
 }
 
-func (c *Client) fetchRSSFeedNetwork(ctx context.Context, feedURL string, parser *gofeed.Parser, metadata *rssFeedCacheMetadata, status string) (*gofeed.Feed, http.Header, int64, string, error) {
+func (c *Client) fetchRSSFeedNetwork(ctx context.Context, feedURL string, parser *gofeed.Parser, metadata *rssFeedCacheMetadata, status string) (rssFeedResponse, error) {
+	result := rssFeedResponse{CacheStatus: status}
 	req, err := newRSSFeedRequest(ctx, feedURL, metadata)
 	if err != nil {
-		return nil, nil, 0, status, err
+		return result, err
 	}
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
-		return nil, nil, 0, status, err
+		return result, err
 	}
 	defer resp.Body.Close()
+	result.Headers = resp.Header
 	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
-		return nil, resp.Header, 0, status, fmt.Errorf("http error: %d %s", resp.StatusCode, resp.Status)
+		return result, fmt.Errorf("http error: %d %s", resp.StatusCode, resp.Status)
 	}
 	body, err := readRSSFeedBody(resp.Body)
 	if err != nil {
-		return nil, resp.Header, 0, status, err
+		return result, err
 	}
-	feed, err := parser.Parse(bytes.NewReader(body))
-	return feed, resp.Header, int64(len(body)), status, err
+	result.ResponseBytes = int64(len(body))
+	result.Feed, result.SanitizedControlChars, err = parseRSSFeed(parser, body)
+	return result, err
 }
 
-func (cache *rssFeedCache) fetch(ctx context.Context, client *http.Client, feedURL, cacheKeyURL string, parser *gofeed.Parser) (*gofeed.Feed, http.Header, int64, string, error) {
+func (cache *rssFeedCache) fetch(ctx context.Context, client *http.Client, feedURL, cacheKeyURL string, parser *gofeed.Parser) (rssFeedResponse, error) {
 	key := rssCacheKey(cacheKeyURL)
 	keyLock := cache.lockFor(key)
 	keyLock.Lock()
 	defer keyLock.Unlock()
 	metadata, cachedBody, _ := cache.load(key)
+	result := rssFeedResponse{CacheStatus: "network"}
 	req, err := newRSSFeedRequest(ctx, feedURL, metadata)
 	if err != nil {
-		return nil, nil, 0, "network", err
+		return result, err
 	}
 	resp, err := client.Do(req)
 	if err != nil {
-		return nil, nil, 0, "network", err
+		return result, err
 	}
 	defer resp.Body.Close()
+	result.Headers = resp.Header
 	if resp.StatusCode == http.StatusNotModified && len(cachedBody) > 0 {
-		feed, parseErr := parser.Parse(bytes.NewReader(cachedBody))
-		return feed, resp.Header, 0, "not_modified", parseErr
+		result.CacheStatus = "not_modified"
+		result.Feed, result.SanitizedControlChars, err = parseRSSFeed(parser, cachedBody)
+		return result, err
 	}
 	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
-		return nil, resp.Header, 0, "network", fmt.Errorf("http error: %d %s", resp.StatusCode, resp.Status)
+		return result, fmt.Errorf("http error: %d %s", resp.StatusCode, resp.Status)
 	}
 	body, err := readRSSFeedBody(resp.Body)
 	if err != nil {
-		return nil, resp.Header, 0, "network", err
+		return result, err
 	}
-	feed, err := parser.Parse(bytes.NewReader(body))
+	result.ResponseBytes = int64(len(body))
+	result.Feed, result.SanitizedControlChars, err = parseRSSFeed(parser, body)
 	if err != nil {
-		return nil, resp.Header, int64(len(body)), "network", err
+		return result, err
 	}
 	newMetadata := rssFeedCacheMetadata{ETag: resp.Header.Get("ETag"), LastModified: resp.Header.Get("Last-Modified")}
+	// Retain source bytes alongside their validators; clean again on a 304 so
+	// diagnostics describe the feed being consumed, not a rewritten cache entry.
 	if saveErr := cache.save(key, newMetadata, body); saveErr != nil {
-		return feed, resp.Header, int64(len(body)), "cache_write_failed", nil
+		result.CacheStatus = "cache_write_failed"
+		return result, nil
 	}
-	return feed, resp.Header, int64(len(body)), "updated", nil
+	result.CacheStatus = "updated"
+	return result, nil
 }
 
 func (cache *rssFeedCache) lockFor(key string) *sync.Mutex {

@@ -132,13 +132,14 @@ type fetchedCandidate struct {
 }
 
 type sourceFetchResult struct {
-	Source              config.Source
-	Candidates          []fetchedCandidate
-	FetchedCount        int
-	RedditRateLimitWait time.Duration
-	FetchDuration       time.Duration
-	ResponseBytes       int64
-	CacheStatus         string
+	Source                config.Source
+	Candidates            []fetchedCandidate
+	FetchedCount          int
+	RedditRateLimitWait   time.Duration
+	FetchDuration         time.Duration
+	ResponseBytes         int64
+	CacheStatus           string
+	SanitizedControlChars int
 }
 
 type sourceFetchFunc func(context.Context, config.Source, []string, time.Time) (sourceFetchResult, error)
@@ -427,6 +428,7 @@ func (acc *sourceStatsAccumulator) countFetched(result sourceFetchResult) {
 	entry := acc.statForArticle(model.Article{}, result.Source)
 	entry.FetchDurationMS += result.FetchDuration.Milliseconds()
 	entry.ResponseBytes += result.ResponseBytes
+	entry.SanitizedControlChars += result.SanitizedControlChars
 	if result.CacheStatus != "" {
 		entry.CacheStatus = result.CacheStatus
 	}
