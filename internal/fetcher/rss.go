@@ -1,7 +1,6 @@
 package fetcher
 
 import (
-	"bytes"
 	"context"
 	"crypto/md5"
 	"fmt"
@@ -70,7 +69,7 @@ func (c *Client) fetchRSSContextWithOpenGraphOptions(ctx context.Context, source
 	fp.Client = c.httpClient
 
 	fetchStarted := time.Now()
-	feed, headers, responseBytes, cacheStatus, err := c.fetchRSSFeed(ctx, fetchSource, source.URL, fp)
+	fetched, err := c.fetchRSSFeed(ctx, fetchSource, source.URL, fp)
 	if err != nil {
 		if !shouldFallbackToCurl(source, err) {
 			return sourceFetchResult{}, err
@@ -83,19 +82,24 @@ func (c *Client) fetchRSSContextWithOpenGraphOptions(ctx context.Context, source
 		if curlErr != nil {
 			return sourceFetchResult{}, fmt.Errorf("reddit rss curl fallback failed: %w", curlErr)
 		}
-		feed, err = fp.Parse(bytes.NewReader(body))
+		fetched.Feed, fetched.SanitizedControlChars, err = parseRSSFeed(fp, body)
 		if err != nil {
 			return sourceFetchResult{}, err
 		}
-		headers = nil
-		responseBytes = int64(len(body))
-		cacheStatus = "curl"
+		fetched.Headers = nil
+		fetched.ResponseBytes = int64(len(body))
+		fetched.CacheStatus = "curl"
 	}
 
-	result := sourceFetchResult{Source: source, FetchedCount: len(feed.Items), FetchDuration: time.Since(fetchStarted), ResponseBytes: responseBytes, CacheStatus: cacheStatus}
+	feed := fetched.Feed
+	result := sourceFetchResult{
+		Source: source, FetchedCount: len(feed.Items), FetchDuration: time.Since(fetchStarted),
+		ResponseBytes: fetched.ResponseBytes, CacheStatus: fetched.CacheStatus,
+		SanitizedControlChars: fetched.SanitizedControlChars,
+	}
 	isRedditRSS := isRedditURL(source.URL)
 	if isRedditRSS {
-		result.RedditRateLimitWait = redditRateLimitWaitFromHeader(headers)
+		result.RedditRateLimitWait = redditRateLimitWaitFromHeader(fetched.Headers)
 	}
 	redditOpenGraphFallbacks := 0
 	now := time.Now()
@@ -188,31 +192,11 @@ func authenticatedRSSURL(source config.Source) (string, error) {
 	return parsedURL.String(), nil
 }
 
-func (c *Client) fetchRSSFeed(ctx context.Context, source config.Source, cacheKeyURL string, fp *gofeed.Parser) (*gofeed.Feed, http.Header, int64, string, error) {
+func (c *Client) fetchRSSFeed(ctx context.Context, source config.Source, cacheKeyURL string, fp *gofeed.Parser) (rssFeedResponse, error) {
 	if !isRedditURL(source.URL) {
 		return c.fetchRSSFeedHTTP(ctx, source.URL, cacheKeyURL, fp)
 	}
-	feed, headers, err := c.fetchRSSFeedWithHeaders(ctx, source.URL, fp)
-	return feed, headers, 0, "network", err
-}
-
-func (c *Client) fetchRSSFeedWithHeaders(ctx context.Context, feedURL string, fp *gofeed.Parser) (*gofeed.Feed, http.Header, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, feedURL, nil)
-	if err != nil {
-		return nil, nil, err
-	}
-	req.Header.Set("Accept", "application/rss+xml, application/xml;q=0.9, */*;q=0.8")
-	req.Header.Set("User-Agent", userAgent)
-	resp, err := c.httpClient.Do(req)
-	if err != nil {
-		return nil, nil, err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
-		return nil, resp.Header, fmt.Errorf("http error: %d %s", resp.StatusCode, resp.Status)
-	}
-	feed, err := fp.Parse(resp.Body)
-	return feed, resp.Header, err
+	return c.fetchRSSFeedNetwork(ctx, source.URL, fp, nil, "network")
 }
 
 func redditRateLimitWaitFromHeader(header http.Header) time.Duration {

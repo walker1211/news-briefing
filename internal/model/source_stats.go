@@ -20,39 +20,41 @@ type SourceStatsWindow struct {
 }
 
 type SourceStatsTotals struct {
-	Fetched             int   `json:"fetched"`
-	InWindow            int   `json:"in_window"`
-	KeywordMatched      int   `json:"keyword_matched"`
-	Filtered            int   `json:"filtered"`
-	FilteredKeywordMiss int   `json:"filtered_keyword_miss"`
-	FilteredExcluded    int   `json:"filtered_excluded"`
-	FilteredSourceLimit int   `json:"filtered_source_limit"`
-	AcceptedBeforeDedup int   `json:"accepted_before_dedup"`
-	AcceptedAfterDedup  int   `json:"accepted_after_dedup"`
-	EnteredAI           int   `json:"entered_ai"`
-	SelectedFinal       int   `json:"selected_final"`
-	FetchDurationMS     int64 `json:"fetch_duration_ms"`
-	ResponseBytes       int64 `json:"response_bytes"`
+	Fetched               int   `json:"fetched"`
+	InWindow              int   `json:"in_window"`
+	KeywordMatched        int   `json:"keyword_matched"`
+	Filtered              int   `json:"filtered"`
+	FilteredKeywordMiss   int   `json:"filtered_keyword_miss"`
+	FilteredExcluded      int   `json:"filtered_excluded"`
+	FilteredSourceLimit   int   `json:"filtered_source_limit"`
+	AcceptedBeforeDedup   int   `json:"accepted_before_dedup"`
+	AcceptedAfterDedup    int   `json:"accepted_after_dedup"`
+	EnteredAI             int   `json:"entered_ai"`
+	SelectedFinal         int   `json:"selected_final"`
+	FetchDurationMS       int64 `json:"fetch_duration_ms"`
+	ResponseBytes         int64 `json:"response_bytes"`
+	SanitizedControlChars int   `json:"sanitized_control_chars,omitempty"`
 }
 
 type SourceStatsEntry struct {
-	Source              string `json:"source"`
-	Type                string `json:"type,omitempty"`
-	Category            string `json:"category,omitempty"`
-	Fetched             int    `json:"fetched"`
-	InWindow            int    `json:"in_window"`
-	KeywordMatched      int    `json:"keyword_matched"`
-	Filtered            int    `json:"filtered"`
-	FilteredKeywordMiss int    `json:"filtered_keyword_miss"`
-	FilteredExcluded    int    `json:"filtered_excluded"`
-	FilteredSourceLimit int    `json:"filtered_source_limit"`
-	AcceptedBeforeDedup int    `json:"accepted_before_dedup"`
-	AcceptedAfterDedup  int    `json:"accepted_after_dedup"`
-	EnteredAI           int    `json:"entered_ai"`
-	SelectedFinal       int    `json:"selected_final"`
-	FetchDurationMS     int64  `json:"fetch_duration_ms,omitempty"`
-	ResponseBytes       int64  `json:"response_bytes,omitempty"`
-	CacheStatus         string `json:"cache_status,omitempty"`
+	Source                string `json:"source"`
+	Type                  string `json:"type,omitempty"`
+	Category              string `json:"category,omitempty"`
+	Fetched               int    `json:"fetched"`
+	InWindow              int    `json:"in_window"`
+	KeywordMatched        int    `json:"keyword_matched"`
+	Filtered              int    `json:"filtered"`
+	FilteredKeywordMiss   int    `json:"filtered_keyword_miss"`
+	FilteredExcluded      int    `json:"filtered_excluded"`
+	FilteredSourceLimit   int    `json:"filtered_source_limit"`
+	AcceptedBeforeDedup   int    `json:"accepted_before_dedup"`
+	AcceptedAfterDedup    int    `json:"accepted_after_dedup"`
+	EnteredAI             int    `json:"entered_ai"`
+	SelectedFinal         int    `json:"selected_final"`
+	FetchDurationMS       int64  `json:"fetch_duration_ms,omitempty"`
+	ResponseBytes         int64  `json:"response_bytes,omitempty"`
+	CacheStatus           string `json:"cache_status,omitempty"`
+	SanitizedControlChars int    `json:"sanitized_control_chars,omitempty"`
 }
 
 type SourceStatsError struct {
@@ -155,6 +157,7 @@ func (report *SourceStatsReport) RecalculateTotals() {
 		totals.SelectedFinal += source.SelectedFinal
 		totals.FetchDurationMS += source.FetchDurationMS
 		totals.ResponseBytes += source.ResponseBytes
+		totals.SanitizedControlChars += source.SanitizedControlChars
 	}
 	report.Totals = totals
 }
