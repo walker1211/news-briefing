@@ -217,6 +217,8 @@ ai:
 
 runner 会通过 stdin 把每次 prompt 交给 `codex exec`，并自动追加输入标记 `-`。不要把 `-p`、`--model` 或末尾的 `-` 写进 `args`：Codex 的 `-p` 表示配置 profile；分类摘要与深挖使用 `models.default`，跨分类终审使用 `models.summary_editor`，翻译使用 `models.translation`，并分别应用对应的 effort。启用 `summary.parallel_by_category` 后，各分类会在 `max_concurrency` 限制下并行生成候选；启用 `summary.editor` 后，终审模型只按稳定 ID 选择、去重和排序候选，不会重写分类摘要中的事实。`min_stories`、`target_stories`、`max_stories` 是全局动态范围，不是固定的分类配额。今日速览会按分类动态输出 1-6 条要点；缺失或空分组会从已选新闻标题补齐，超过 6 条时保留前 6 条，不会仅因可恢复的数量偏差启动整轮 fallback。启用 `append_system_prompt` 时，runner 会把无人值守批处理指令映射为本次运行的 `developer_instructions`。
 
+这里配置的 GPT-6 Sol 和 Luna 需要 Codex CLI 0.156.1 或更新版本；旧版可能拒绝这两个模型 ID。参见 [Codex CLI 更新记录](https://learn.chatgpt.com/docs/changelog)。
+
 `--ignore-user-config` 与三个 feature disable 会让无人值守批处理与个人 MCP、apps 和 plugins 隔离；它们不会修改用户的 `~/.codex/config.toml`，也不会影响 Codex App 的 Computer Use 等功能。
 
 ### 4. output 输出配置
