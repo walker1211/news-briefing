@@ -250,6 +250,8 @@ ai:
 
 The runner sends each prompt to `codex exec` over stdin and appends the `-` input marker automatically. Do not put `-p`, `--model`, or the trailing `-` into `args`: Codex uses `-p` for config profiles. Category summaries and deep dives use `models.default`, cross-category final editing uses `models.summary_editor`, and translation uses `models.translation`, each with its configured effort. With `summary.parallel_by_category` enabled, category workers generate candidates concurrently up to `max_concurrency`. When `summary.editor` is enabled, the final editor selects, deduplicates, and ranks candidates by stable ID without rewriting their factual text. `min_stories`, `target_stories`, and `max_stories` define a global dynamic range rather than fixed category quotas. Each overview category contains a dynamic 1-6 items; missing or empty groups are rebuilt from selected story titles, while longer groups keep their first six items instead of triggering a full fallback for a recoverable cardinality mismatch. When `append_system_prompt` is enabled, the runner maps the batch-only instructions to a per-run `developer_instructions` override.
 
+The configured GPT-6 Sol and Luna models require Codex CLI 0.156.1 or newer; earlier versions can reject these model IDs. See the [Codex CLI release notes](https://learn.chatgpt.com/docs/changelog).
+
 `--ignore-user-config` and the three feature disables keep this unattended batch job isolated from personal MCP servers, apps, and plugins. They do not modify the user's `~/.codex/config.toml` or affect Codex App features such as Computer Use.
 
 ### 4. output configuration
