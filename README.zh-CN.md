@@ -198,11 +198,11 @@ ai:
     - --disable
     - remote_plugin
   models:
-    default: gpt-5.6-terra
+    default: gpt-6-sol
     default_effort: medium
-    summary_editor: gpt-5.6-terra
+    summary_editor: gpt-6-sol
     summary_editor_effort: high
-    translation: gpt-5.3-codex-spark
+    translation: gpt-6-luna
     translation_effort: high
   summary:
     parallel_by_category: true

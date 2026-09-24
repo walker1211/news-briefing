@@ -79,16 +79,16 @@ const (
 	DefaultSchedulePrefetchWaitTimeout    = 2 * time.Minute
 	DefaultSourceShadowRetention          = 72 * time.Hour
 	DefaultSourceShadowTimeout            = 2 * time.Minute
-	DefaultAIModel                        = "gpt-5.6-terra"
+	DefaultAIModel                        = "gpt-6-sol"
 	DefaultAIEffort                       = "medium"
-	DefaultAISummaryEditorModel           = "gpt-5.6-terra"
+	DefaultAISummaryEditorModel           = "gpt-6-sol"
 	DefaultAISummaryEditorEffort          = "high"
 	DefaultAISummaryEditorMinStories      = 12
 	DefaultAISummaryEditorTargetStories   = 17
 	DefaultAISummaryEditorMaxStories      = 20
 	DefaultXHSPreselectionTargetItems     = 10
 	DefaultXHSPreselectionMinimumSources  = 2
-	DefaultAITranslationModel             = "gpt-5.3-codex-spark"
+	DefaultAITranslationModel             = "gpt-6-luna"
 	DefaultAITranslationEffort            = "high"
 	DefaultAISummaryMaxConcurrency        = 1
 )
