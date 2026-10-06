@@ -225,7 +225,7 @@ const (
 	callKindSummarize         callKind = "summarize"
 	callKindTranslate         callKind = "translate"
 	callKindDeepDive          callKind = "deep"
-	defaultModel                       = "gpt-6-sol"
+	defaultModel                       = "gpt-6.1-sol"
 	defaultTranslationModel            = "gpt-6-luna"
 	oauthCredentialRetryDelay          = 3 * time.Second
 )

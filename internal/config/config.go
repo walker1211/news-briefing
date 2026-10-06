@@ -79,9 +79,9 @@ const (
 	DefaultSchedulePrefetchWaitTimeout    = 2 * time.Minute
 	DefaultSourceShadowRetention          = 72 * time.Hour
 	DefaultSourceShadowTimeout            = 2 * time.Minute
-	DefaultAIModel                        = "gpt-6-sol"
+	DefaultAIModel                        = "gpt-6.1-sol"
 	DefaultAIEffort                       = "medium"
-	DefaultAISummaryEditorModel           = "gpt-6-sol"
+	DefaultAISummaryEditorModel           = "gpt-6.1-sol"
 	DefaultAISummaryEditorEffort          = "high"
 	DefaultAISummaryEditorMinStories      = 12
 	DefaultAISummaryEditorTargetStories   = 17
