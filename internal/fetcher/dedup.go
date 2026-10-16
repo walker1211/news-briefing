@@ -2,6 +2,8 @@ package fetcher
 
 import (
 	"context"
+	"net/url"
+	"strings"
 	"time"
 
 	"github.com/walker1211/news-briefing/internal/model"
@@ -33,7 +35,7 @@ func DedupContext(ctx context.Context, articles []model.Article, save bool, stor
 	}
 	historicalSeenMap := make(map[string]bool)
 	for _, s := range seen {
-		historicalSeenMap[s.URL] = true
+		historicalSeenMap[canonicalArticleURL(s.URL)] = true
 	}
 	batchSeenMap := make(map[string]bool)
 
@@ -100,7 +102,66 @@ func DedupInBatch(articles []model.Article) DedupOutcome {
 
 func dedupKey(a model.Article) string {
 	if a.Link != "" {
-		return a.Link
+		return canonicalArticleURL(a.Link)
 	}
 	return a.Title + "|" + a.Source
+}
+
+// canonicalArticleURL only joins the known official article aliases. Other links
+// retain their original keys, including their query strings and fragments.
+func canonicalArticleURL(link string) string {
+	u, err := url.Parse(link)
+	if err != nil || (u.Scheme != "https" && u.Scheme != "http") || u.User != nil || u.Port() != "" {
+		return link
+	}
+
+	var canonicalPath string
+	switch strings.ToLower(u.Hostname()) {
+	case "deepmind.google":
+		if slug, ok := articleSlug(u.Path, "/blog/"); ok {
+			canonicalPath = "https://deepmind.google/blog/" + url.PathEscape(slug)
+		}
+	case "blog.google":
+		for _, prefix := range []string{
+			"/innovation-and-ai/models-and-research/gemini-models/",
+			"/innovation-and-ai/models-and-research/google-deepmind/",
+			"/technology/ai/",
+		} {
+			if slug, ok := articleSlug(u.Path, prefix); ok {
+				canonicalPath = "https://deepmind.google/blog/" + url.PathEscape(slug)
+				break
+			}
+		}
+	case "developer.nvidia.com":
+		if slug, ok := articleSlug(u.Path, "/blog/"); ok {
+			canonicalPath = "https://developer.nvidia.com/blog/" + url.PathEscape(slug)
+		}
+	}
+	if canonicalPath == "" {
+		return link
+	}
+
+	query, err := url.ParseQuery(u.RawQuery)
+	if err != nil {
+		return link
+	}
+	for key := range query {
+		lower := strings.ToLower(key)
+		if strings.HasPrefix(lower, "utm_") || lower == "gclid" || lower == "fbclid" || lower == "dclid" || lower == "msclkid" {
+			delete(query, key)
+		}
+	}
+	if encoded := query.Encode(); encoded != "" {
+		return canonicalPath + "?" + encoded
+	}
+	return canonicalPath
+}
+
+func articleSlug(path, prefix string) (string, bool) {
+	slug, ok := strings.CutPrefix(path, prefix)
+	if !ok {
+		return "", false
+	}
+	slug = strings.TrimSuffix(slug, "/")
+	return slug, slug != "" && slug != "." && slug != ".." && !strings.Contains(slug, "/")
 }
