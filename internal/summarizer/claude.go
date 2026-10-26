@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
 	"net/url"
 	"os"
 	"os/exec"
@@ -199,6 +200,7 @@ type Runner struct {
 	retrySleep                          sleepFunc
 	retryDelays                         []time.Duration
 	oauthRetryGate                      chan struct{}
+	rateLimitRetryGate                  chan struct{}
 	failureLogPath                      string
 }
 
@@ -367,6 +369,7 @@ func NewRunnerWithRetryDelays(command string, args []string, appendSystemPrompt 
 		retrySleep:          retrySleep,
 		retryDelays:         cloneDurations(retryDelays),
 		oauthRetryGate:      make(chan struct{}, 1),
+		rateLimitRetryGate:  make(chan struct{}, 1),
 		failureLogPath:      defaultFailureLogPath,
 	}
 }
@@ -476,11 +479,72 @@ func ResetCommandForTest() {
 	legacyDefaultConfig = newDefaultRunnerConfig()
 }
 
+var (
+	rateLimitStatusPattern = regexp.MustCompile(`(?i)(?:\b(?:http(?:/\d(?:\.\d)?)?|status(?:\s+code)?)\s*["':=]*\s*429\b|\b429\s+too many requests\b)`)
+	rateLimitCodePattern   = regexp.MustCompile(`(?i)\b(?:rate_limit_exceeded|rate_limit_error|slow_down)\b`)
+	retryAfterPattern      = regexp.MustCompile(`(?im)\bretry-after["']?\s*:\s*["']?([^\r\n"']+)`)
+)
+
+// AICLILimitErrorCode returns only stable limit diagnostics, never CLI output.
+// Explicit quota exhaustion takes precedence over a generic HTTP 429 response.
+func AICLILimitErrorCode(err error) string {
+	if err == nil {
+		return ""
+	}
+	text := strings.ToLower(err.Error())
+	for _, marker := range []string{
+		"insufficient_quota", "usage_limit_reached", "credits_balance_too_low",
+		"you've hit your usage limit", "you have hit your usage limit",
+		"you've reached your usage limit", "you have reached your usage limit",
+		"usage limit reached",
+		"you have reached your codex usage limit", "usage limit has been reached",
+		"you have exceeded your current quota", "exceeded your current quota",
+	} {
+		if strings.Contains(text, marker) {
+			return "quota_exhausted"
+		}
+	}
+	if rateLimitStatusPattern.MatchString(text) || rateLimitCodePattern.MatchString(text) {
+		return "rate_limited"
+	}
+	return ""
+}
+
+func rateLimitRetryDelay(retryIndex int, configuredDelay time.Duration, output string, now time.Time) time.Duration {
+	// CLI retries have already finished. Give the service a meaningful cooldown
+	// instead of immediately retrying another article-count fallback.
+	floor := 30 * time.Second
+	for i := 0; i < retryIndex && floor < 2*time.Minute; i++ {
+		floor *= 2
+	}
+	delay := max(floor, configuredDelay)
+	for _, match := range retryAfterPattern.FindAllStringSubmatch(output, -1) {
+		value := strings.TrimSpace(match[1])
+		if seconds, err := strconv.ParseUint(value, 10, 64); err == nil {
+			const maxDuration = time.Duration(1<<63 - 1)
+			hint := maxDuration
+			if seconds <= uint64(maxDuration/time.Second) {
+				hint = time.Duration(seconds) * time.Second
+			}
+			delay = max(delay, hint)
+		} else if until, err := http.ParseTime(value); err == nil {
+			delay = max(delay, until.Sub(now))
+		}
+	}
+	return delay
+}
+
 func isRetryableAICLIError(err error, stdout string, stderr string) bool {
 	if err == nil {
 		return false
 	}
 	combined := strings.ToLower(strings.Join([]string{err.Error(), stdout, stderr}, "\n"))
+	switch AICLILimitErrorCode(errors.New(combined)) {
+	case "quota_exhausted":
+		return false
+	case "rate_limited":
+		return true
+	}
 	for _, marker := range []string{
 		"server_error",
 		"internal_error",
@@ -550,6 +614,15 @@ func (r *Runner) acquireOAuthRetryGate(ctx context.Context) (func(), error) {
 	}
 }
 
+func (r *Runner) acquireRateLimitRetryGate(ctx context.Context) (func(), error) {
+	select {
+	case r.rateLimitRetryGate <- struct{}{}:
+		return func() { <-r.rateLimitRetryGate }, nil
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+}
+
 func (r *Runner) callClaudeWithKind(kind callKind, prompt string, runtimeArgs ...string) (string, error) {
 	return r.callClaudeWithKindContext(context.Background(), kind, prompt, runtimeArgs...)
 }
@@ -560,33 +633,41 @@ func (r *Runner) callClaudeWithKindContext(ctx context.Context, kind callKind, p
 	genericRetries := 0
 	oauthRetryUsed := false
 	oauthRetryPending := false
+	rateLimitRetryPending := false
 	nextDelay := time.Duration(0)
 	for {
 		if err := ctx.Err(); err != nil {
 			return "", err
 		}
-		var releaseOAuthRetryGate func()
-		if oauthRetryPending {
+		var releaseRetryGate func()
+		if rateLimitRetryPending {
 			var err error
-			releaseOAuthRetryGate, err = r.acquireOAuthRetryGate(ctx)
+			releaseRetryGate, err = r.acquireRateLimitRetryGate(ctx)
+			if err != nil {
+				return "", err
+			}
+		} else if oauthRetryPending {
+			var err error
+			releaseRetryGate, err = r.acquireOAuthRetryGate(ctx)
 			if err != nil {
 				return "", err
 			}
 		}
 		if nextDelay > 0 {
 			if err := r.retrySleep(ctx, nextDelay); err != nil {
-				if releaseOAuthRetryGate != nil {
-					releaseOAuthRetryGate()
+				if releaseRetryGate != nil {
+					releaseRetryGate()
 				}
 				return "", err
 			}
 		}
 		attempts++
 		out, stdoutText, stderrText, err := r.runClaudeCommandContext(ctx, prompt, runtimeArgs...)
-		if releaseOAuthRetryGate != nil {
-			releaseOAuthRetryGate()
+		if releaseRetryGate != nil {
+			releaseRetryGate()
 		}
 		oauthRetryPending = false
+		rateLimitRetryPending = false
 		if err == nil {
 			body := strings.TrimSpace(out)
 			if r.shouldSanitizeCLIOutput() {
@@ -602,7 +683,10 @@ func (r *Runner) callClaudeWithKindContext(ctx context.Context, kind callKind, p
 			stdoutText = strings.TrimSpace(out)
 		}
 		lastErr = buildRetryableCallError(attempts, err, stdoutText, stderrText)
-		if isRetryableOAuthCredentialError(err, stdoutText, stderrText) {
+		limitCode := AICLILimitErrorCode(lastErr)
+		if limitCode == "quota_exhausted" {
+			// Quota and billing limits require account action, not another request.
+		} else if isRetryableOAuthCredentialError(err, stdoutText, stderrText) {
 			if !oauthRetryUsed {
 				oauthRetryUsed = true
 				oauthRetryPending = true
@@ -611,6 +695,11 @@ func (r *Runner) callClaudeWithKindContext(ctx context.Context, kind callKind, p
 			}
 		} else if isRetryableAICLIError(err, stdoutText, stderrText) && genericRetries < len(r.retryDelays) {
 			nextDelay = r.retryDelays[genericRetries]
+			if limitCode == "rate_limited" {
+				rateLimitRetryPending = true
+				nextDelay = rateLimitRetryDelay(genericRetries, nextDelay, strings.Join([]string{stdoutText, stderrText}, "\n"), time.Now())
+				logutil.Warnf("AI CLI rate limited; retry %d/%d after at least %s", genericRetries+1, len(r.retryDelays), nextDelay)
+			}
 			genericRetries++
 			continue
 		}

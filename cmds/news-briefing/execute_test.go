@@ -1204,6 +1204,8 @@ func TestClassifyAIFailureRefinesAllowlistedAICLIErrors(t *testing.T) {
 		{raw: "invalidated oauth token for user", want: "oauth_revoked"},
 		{raw: "upstream_error status: 503", want: "upstream_error"},
 		{raw: "stream error: EOF", want: "transport_error"},
+		{raw: "ERROR: exceeded retry limit; last status: 429 Too Many Requests", want: "rate_limited"},
+		{raw: "HTTP 429 insufficient_quota", want: "quota_exhausted"},
 	} {
 		err := &summarizer.BriefingDiagnosticError{Stage: "category_summary", Code: "ai_cli_failed", Err: errors.New(test.raw)}
 		if got := classifyAIFailure(err); got.Stage != "category_summary" || got.Code != test.want {
@@ -1247,6 +1249,59 @@ func TestSummarizeBriefingSkipsArticleFallbackForInvalidPrompt(t *testing.T) {
 	}
 	if want := []string{"[news-briefing] AI summary failed"}; !reflect.DeepEqual(alertSubjects, want) {
 		t.Fatalf("alert subjects = %#v, want %#v", alertSubjects, want)
+	}
+}
+
+func TestSummarizeBriefingSkipsArticleFallbackForLimitErrors(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		raw  string
+		code string
+	}{
+		{name: "rate limit", raw: "ERROR: exceeded retry limit; last status: 429 Too Many Requests", code: "rate_limited"},
+		{name: "quota", raw: "HTTP 429 insufficient_quota", code: "quota_exhausted"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			cfg := executeTestConfigWithEmail(t, model.OutputModeTranslatedOnly)
+			cfg.Output.Fallback = config.OutputFallbackCfg{
+				Enabled: true, AlertOnStart: true,
+				Levels: []config.ArticleLimitLevel{{Name: "reduced", MaxArticlesByCategory: map[string]int{"AI/科技": 1}}},
+			}
+			calls := 0
+			var subjects, bodies []string
+			runErr := &summarizer.BriefingCategoryError{
+				Categories: []string{"国际政治"},
+				Err: &summarizer.BriefingDiagnosticError{Stage: "category_summary", Code: "ai_cli_failed",
+					Err: errors.New(test.raw + " token=example-token")},
+			}
+			app := &app{
+				cfg: cfg,
+				ai: aiDeps{summarizeBriefingContext: func(context.Context, []model.Article, []string, *time.Location) (model.BriefingSummary, string, error) {
+					calls++
+					return model.BriefingSummary{}, "", runErr
+				}},
+				email: emailDeps{sendAlertEmail: func(subject, body string, _ *config.Config) error {
+					subjects = append(subjects, subject)
+					bodies = append(bodies, body)
+					return nil
+				}},
+			}
+			_, err := app.summarizeBriefingWithFallback(context.Background(), sampleExecuteArticles(), []string{"AI/科技"}, time.Local, true, nil)
+			if !errors.Is(err, runErr) || calls != 1 {
+				t.Fatalf("summary calls=%d, error=%v; want one attempt preserving the original error", calls, err)
+			}
+			if !reflect.DeepEqual(subjects, []string{"[news-briefing] AI summary failed"}) {
+				t.Fatalf("alert subjects=%v; article-count fallback must not start", subjects)
+			}
+			for _, want := range []string{"Failure scope: categories: 国际政治", "Failure stage: category_summary", "Error class: " + test.code} {
+				if !strings.Contains(bodies[0], want) {
+					t.Fatalf("alert missing %q: %q", want, bodies[0])
+				}
+			}
+			if strings.Contains(bodies[0], "example-token") || strings.Contains(bodies[0], "Too Many Requests") {
+				t.Fatalf("alert contains raw CLI diagnostics: %q", bodies[0])
+			}
+		})
 	}
 }
 

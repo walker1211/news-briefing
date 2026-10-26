@@ -824,6 +824,8 @@ ai:
     # Stop the whole AI summary stage after this total duration across retries and fallbacks.
     total_budget: 75m
   retry:
+    # HTTP 429 uses at least 30s, 60s, then 120s per retry; longer delays and Retry-After win.
+    # Explicit quota exhaustion is not retried, and limit errors do not reduce article counts.
     delays:
       - 1s
       - 2s

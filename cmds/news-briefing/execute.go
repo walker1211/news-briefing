@@ -1351,6 +1351,10 @@ func (app *app) summarizeBriefingWithFallback(ctx context.Context, articles []mo
 			logutil.Warnf("AI summary attempt %q has an invalid UTF-8 prompt; article-count fallback skipped: %v", attempt.name, err)
 			break
 		}
+		if limitCode := summarizer.AICLILimitErrorCode(err); limitCode != "" {
+			logutil.Warnf("AI summary attempt %q stopped with %s; article-count fallback skipped", attempt.name, limitCode)
+			break
+		}
 		if index == len(attempts)-1 {
 			break
 		}
@@ -1574,6 +1578,9 @@ func classifyAIFailure(err error) aiFailureDiagnostic {
 func refineAICLIFailureCode(code string, err error) string {
 	if code != "ai_cli_failed" || err == nil {
 		return code
+	}
+	if limitCode := summarizer.AICLILimitErrorCode(err); limitCode != "" {
+		return limitCode
 	}
 	lower := strings.ToLower(err.Error())
 	for _, marker := range []string{"token_revoked", "invalidated oauth token", "refresh token has already been used"} {
