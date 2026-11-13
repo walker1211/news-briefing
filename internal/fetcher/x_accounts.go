@@ -5,6 +5,7 @@ import (
 	"compress/gzip"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/url"
@@ -24,8 +25,9 @@ const xVisibleSourceName = "X Visible"
 var xVisibleHistoryPeriodPattern = regexp.MustCompile(`^[0-9]{8}T[0-9]{6}Z$`)
 
 type xVisibleReadOptions struct {
-	useHistory bool
-	historyDir string
+	completedBy time.Time
+	useHistory  bool
+	historyDir  string
 }
 
 type xVisibleHistoryArchive struct {
@@ -77,6 +79,7 @@ type xVisibleRefreshStatus struct {
 	HeartbeatAt   string                         `json:"heartbeatAt"`
 	FinishedAt    string                         `json:"finishedAt"`
 	Error         string                         `json:"error"`
+	ErrorCode     string                         `json:"errorCode"`
 	Outputs       map[string]string              `json:"outputs"`
 	TargetSummary *xVisibleRefreshTargetSummary  `json:"targetSummary"`
 	Targets       []xVisibleRefreshTargetDetails `json:"targets"`
@@ -95,6 +98,13 @@ type XVisibleRefreshWindowState struct {
 	Running      bool
 	Stale        bool
 	LastActivity time.Time
+	FinishedAt   time.Time
+	ErrorCode    string
+}
+
+// CompletedBy reports whether the exact window succeeded before its cutoff.
+func (s XVisibleRefreshWindowState) CompletedBy(deadline time.Time) bool {
+	return s.Matches && s.Status == "succeeded" && !s.FinishedAt.IsZero() && !s.FinishedAt.After(deadline)
 }
 
 type xVisibleRefreshTargetSummary struct {
@@ -133,13 +143,21 @@ func fetchXVisibleNDJSONWithOptions(ctx context.Context, cfg config.XAccountsCon
 		return fetchXVisibleHistoryNDJSON(ctx, cfg, keywords, from, to, options.historyDir)
 	}
 	var failed []FailedSource
-	refreshFailure, err := waitForXVisibleRefresh(ctx, cfg, from, to)
-	if err != nil {
-		return nil, nil, err
-	}
-	if refreshFailure != nil {
-		failed = append(failed, *refreshFailure)
+	if !options.completedBy.IsZero() {
+		state, err := ReadXVisibleRefreshWindowState(cfg, from, to, time.Now())
+		if err != nil || !state.CompletedBy(options.completedBy) {
+			return nil, []FailedSource{{Name: "X refresh status", Err: errors.New("refresh_unavailable")}}, nil
+		}
 	} else {
+		refreshFailure, err := waitForXVisibleRefresh(ctx, cfg, from, to)
+		if err != nil {
+			return nil, nil, err
+		}
+		if refreshFailure != nil {
+			failed = append(failed, *refreshFailure)
+		}
+	}
+	if len(failed) == 0 {
 		statusWarnings, err := xVisibleRefreshStatusWarnings(cfg.RefreshStatusPath, from, to)
 		if err != nil {
 			failed = append(failed, FailedSource{Name: "X refresh status", Err: err})
@@ -148,6 +166,7 @@ func fetchXVisibleNDJSONWithOptions(ctx context.Context, cfg config.XAccountsCon
 		}
 		failed = append(failed, xVisibleExpectedHistoryArchiveFailures(cfg.HistoryDir, cfg.RefreshStatusPath, from, to)...)
 	}
+
 	inputs := []xVisibleNDJSONInput{
 		{name: "X accounts", path: cfg.AccountsPath},
 		{name: "X searches", path: cfg.SearchesPath},
@@ -571,7 +590,12 @@ func ReadXVisibleRefreshWindowState(cfg config.XAccountsConfig, from, to, now ti
 		Status:  strings.ToLower(strings.TrimSpace(status.Status)),
 		Matches: xVisibleRefreshWindowMatches(status.Window, from, to),
 	}
-	if !state.Matches || state.Status != "running" {
+	if !state.Matches {
+		return state, nil
+	}
+	state.FinishedAt, _ = time.Parse(time.RFC3339Nano, strings.TrimSpace(status.FinishedAt))
+	state.ErrorCode = status.ErrorCode
+	if state.Status != "running" {
 		return state, nil
 	}
 	state.Running = true

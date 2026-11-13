@@ -723,6 +723,7 @@ x_accounts:
   accounts_path: /tmp/rsshub-stack/accounts.ndjson
   searches_path: /tmp/rsshub-stack/searches.ndjson
   refresh_status_path: /tmp/rsshub-stack/status.json
+  refresh_timeout: 5m
   refresh_wait_timeout: 2m
   refresh_wait_interval: 500ms
   refresh_reconcile_interval: 1m
@@ -743,6 +744,9 @@ x_accounts:
 	if cfg.XAccounts.RefreshStatusPath != "/tmp/rsshub-stack/status.json" {
 		t.Fatalf("XAccounts.RefreshStatusPath = %q", cfg.XAccounts.RefreshStatusPath)
 	}
+	if cfg.XAccounts.RefreshTimeout != 5*time.Minute {
+		t.Fatalf("XAccounts.RefreshTimeout = %v, want 5m", cfg.XAccounts.RefreshTimeout)
+	}
 	if cfg.XAccounts.RefreshWaitTimeout != 2*time.Minute {
 		t.Fatalf("XAccounts.RefreshWaitTimeout = %v, want 2m", cfg.XAccounts.RefreshWaitTimeout)
 	}
@@ -754,6 +758,21 @@ x_accounts:
 	}
 	if cfg.XAccounts.HeartbeatStaleAfter != 3*time.Minute {
 		t.Fatalf("XAccounts.HeartbeatStaleAfter = %v, want 3m", cfg.XAccounts.HeartbeatStaleAfter)
+	}
+}
+
+func TestXAccountsRefreshTimeoutOptionalAndNonNegative(t *testing.T) {
+	for _, raw := range []string{"", "0s", "-1s", "invalid"} {
+		t.Run(raw, func(t *testing.T) {
+			cfg := XAccountsConfig{RefreshTimeoutRaw: raw}
+			err := applyXAccountsDefaults(&cfg)
+			if wantError := raw == "-1s" || raw == "invalid"; (err != nil) != wantError {
+				t.Fatalf("applyXAccountsDefaults() = %v, want error %t", err, wantError)
+			}
+			if cfg.RefreshTimeout != 0 {
+				t.Fatalf("RefreshTimeout = %s, want disabled", cfg.RefreshTimeout)
+			}
+		})
 	}
 }
 

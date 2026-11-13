@@ -829,16 +829,16 @@ func (app *app) runScheduledBriefing(window scheduler.Window, sendEmail bool) er
 }
 
 func (app *app) runScheduledBriefingContext(ctx context.Context, window scheduler.Window, sendEmail bool) error {
-	return app.runScheduledBriefingContextWithReporter(ctx, window, sendEmail, nil)
+	return app.runScheduledBriefingContextWithReporter(ctx, window, sendEmail, nil, "")
 }
 
-func (app *app) runScheduledBriefingContextWithReporter(ctx context.Context, window scheduler.Window, sendEmail bool, reporter *scheduledRunReporter) error {
+func (app *app) runScheduledBriefingContextWithReporter(ctx context.Context, window scheduler.Window, sendEmail bool, reporter *scheduledRunReporter, xFailureCode string) error {
 	logutil.Println("Fetching news...")
 	app.startScheduledSourceShadow(window)
 	loc := app.displayLocation()
 	date := window.To.In(loc).Format("06.01.02")
 	fetchStarted := time.Now()
-	result, err := app.fetchScheduledBriefingArticles(ctx, window, date)
+	result, err := app.fetchScheduledBriefingArticles(ctx, window, date, xFailureCode)
 	if err != nil {
 		return err
 	}

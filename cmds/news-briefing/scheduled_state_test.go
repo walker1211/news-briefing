@@ -50,7 +50,7 @@ func TestScheduledRunIDMatchesAutomationWindowNormalization(t *testing.T) {
 func TestScheduledReporterPersistsAIFailureAndRecoveryMetadata(t *testing.T) {
 	app := newScheduledOnceTestApp(t, nil)
 	window := scheduledStateTestWindow()
-	leaseID, acquired, _, err := app.acquireScheduledRunWindow(window, "test")
+	leaseID, acquired, _, err := app.acquireScheduledRunWindow(window, "test", make(map[string]string))
 	if err != nil || !acquired {
 		t.Fatalf("acquireScheduledRunWindow() = %q, %v, %v", leaseID, acquired, err)
 	}
@@ -183,6 +183,115 @@ func TestScheduledBriefingCronTakesOverStaleXHeartbeat(t *testing.T) {
 	}
 }
 
+func TestScheduledXDeadlineOverridesFreshHeartbeatAndPersistedDueTime(t *testing.T) {
+	app := newScheduledOnceTestApp(t, errors.New("complete fetch could consume X"))
+	window := scheduledStateTestWindow()
+	statusPath := filepath.Join(t.TempDir(), "status.json")
+	writeTestXStatus(t, statusPath, `{"status":"running","heartbeatAt":"2026-07-27T10:04:59Z","window":{"from":"2026-07-27T00:00:00Z","to":"2026-07-27T10:00:00Z"}}`)
+	now := window.To
+	app.now = func() time.Time { return now }
+	if err := app.registerScheduledWindow(window, window.To.Add(10*time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	app.cfg.XAccounts = config.XAccountsConfig{Enabled: true, RefreshStatusPath: statusPath, RefreshTimeout: 5 * time.Minute}
+	ordinaryCalls := 0
+	app.fetch.fetchWindowOrdinaryDetailedContext = func(context.Context, *config.Config, time.Time, time.Time, bool, bool) (fetcher.FetchResult, error) {
+		ordinaryCalls++
+		return fetcher.FetchResult{Articles: sampleExecuteArticles()}, nil
+	}
+	app.fetch.fetchWindowXDetailedContext = func(context.Context, *config.Config, time.Time, time.Time, bool, bool) (fetcher.FetchResult, error) {
+		return fetcher.FetchResult{}, errors.New("X fetch should be skipped")
+	}
+	now = window.To.Add(5*time.Minute - time.Second)
+	if !app.reconcileScheduledWindow(context.Background(), window) || ordinaryCalls != 0 {
+		t.Fatal("window should stay pending before deadline")
+	}
+	now = window.To.Add(5 * time.Minute)
+	if app.reconcileScheduledWindow(context.Background(), window) {
+		t.Fatal("window should finish through ordinary sources at the X deadline")
+	}
+	writeTestXStatus(t, statusPath, `{"status":"succeeded","finishedAt":"2026-07-27T10:05:01Z","window":{"from":"2026-07-27T00:00:00Z","to":"2026-07-27T10:00:00Z"}}`)
+	if err := app.runScheduledBriefingOnceContext(context.Background(), window, "x-ready-callback", true); err != nil {
+		t.Fatal(err)
+	}
+	record := mustScheduledWindowState(t, app, window)
+	if record.Status != scheduledStatusDone || record.Attempts != 1 || ordinaryCalls != 1 || record.Fields["x_refresh_status"] != "failed" || record.Fields["x_refresh_error_code"] != "refresh_timeout" {
+		t.Fatalf("record = %#v, ordinary calls = %d, want one degraded completion", record, ordinaryCalls)
+	}
+}
+
+func TestScheduledXDeadlineWatcherWakesBeforeReconcileTick(t *testing.T) {
+	app := newScheduledOnceTestApp(t, errors.New("complete fetch could consume X"))
+	window := scheduledStateTestWindow()
+	window.To = time.Now()
+	window.From = window.To.Add(-10 * time.Hour)
+	app.cfg.XAccounts = config.XAccountsConfig{Enabled: true, RefreshTimeout: 100 * time.Millisecond, RefreshReconcile: time.Hour}
+	fetched := make(chan struct{}, 1)
+	app.fetch.fetchWindowOrdinaryDetailedContext = func(context.Context, *config.Config, time.Time, time.Time, bool, bool) (fetcher.FetchResult, error) {
+		fetched <- struct{}{}
+		return fetcher.FetchResult{Articles: sampleExecuteArticles()}, nil
+	}
+	if err := app.registerScheduledWindow(window, window.To.Add(10*time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer func() {
+		cancel()
+		waitForScheduledWindowWatcherCount(t, app, 0)
+	}()
+	app.startScheduledWindowWatcher(ctx, window)
+	select {
+	case <-fetched:
+	case <-time.After(3 * time.Second):
+		t.Fatal("watcher did not start ordinary fetch at the X deadline")
+	}
+	waitForScheduledWindowWatcherCount(t, app, 0)
+	record := mustScheduledWindowState(t, app, window)
+	if record.Status != scheduledStatusDone || record.Fields["x_refresh_error_code"] != "refresh_timeout" {
+		t.Fatalf("record = %#v, want completed with X timeout", record)
+	}
+}
+
+func TestScheduledXDeadlineChecksWhenResultFinished(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		finishedAt string
+		wantX      bool
+	}{
+		{"in time", "2026-07-27T10:04:59Z", true},
+		{"at deadline", "2026-07-27T10:05:00Z", true},
+		{"late", "2026-07-27T10:05:01Z", false},
+		{"unverified", "", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			app := newScheduledOnceTestApp(t, errors.New("complete fetch could consume X"))
+			window := scheduledStateTestWindow()
+			app.now = func() time.Time { return window.To.Add(6 * time.Minute) }
+			path := filepath.Join(t.TempDir(), "status.json")
+			writeTestXStatus(t, path, `{"status":"succeeded","finishedAt":"`+tc.finishedAt+`","window":{"from":"2026-07-27T00:00:00Z","to":"2026-07-27T10:00:00Z"}}`)
+			app.cfg.XAccounts = config.XAccountsConfig{Enabled: true, RefreshStatusPath: path, RefreshTimeout: 5 * time.Minute}
+			app.fetch.fetchWindowOrdinaryDetailedContext = func(context.Context, *config.Config, time.Time, time.Time, bool, bool) (fetcher.FetchResult, error) {
+				return fetcher.FetchResult{Articles: sampleExecuteArticles()}, nil
+			}
+			xCalled := false
+			app.fetch.fetchWindowXDetailedContext = func(context.Context, *config.Config, time.Time, time.Time, bool, bool) (fetcher.FetchResult, error) {
+				xCalled = true
+				return fetcher.FetchResult{}, nil
+			}
+			if err := app.runScheduledBriefingOnceContext(context.Background(), window, "x-ready-callback", false); err != nil {
+				t.Fatal(err)
+			}
+			if xCalled != tc.wantX {
+				t.Fatalf("X fetched = %t, want %t", xCalled, tc.wantX)
+			}
+			record := mustScheduledWindowState(t, app, window)
+			if record.Status != scheduledStatusDone || (record.Fields["x_refresh_error_code"] == "refresh_timeout") == tc.wantX {
+				t.Fatalf("record = %#v, want completed and X timeout = %t", record, !tc.wantX)
+			}
+		})
+	}
+}
+
 func TestScheduledWindowReconcilerRecoversWaitingWindowAfterRestart(t *testing.T) {
 	window := scheduledStateTestWindow()
 	statusPath := filepath.Join(t.TempDir(), "status.json")
@@ -283,6 +392,73 @@ func TestConcurrentScheduledTriggersAcquireOneLease(t *testing.T) {
 	}
 }
 
+func TestConcurrentXTimeoutAndLateCallbackUseOneLease(t *testing.T) {
+	app := newScheduledOnceTestApp(t, errors.New("complete fetch could consume X"))
+	window := scheduledStateTestWindow()
+	app.now = func() time.Time { return window.To.Add(5 * time.Minute) }
+	path := filepath.Join(t.TempDir(), "status.json")
+	writeTestXStatus(t, path, `{"status":"running","heartbeatAt":"2026-07-27T10:04:59Z","window":{"from":"2026-07-27T00:00:00Z","to":"2026-07-27T10:00:00Z"}}`)
+	app.cfg.XAccounts = config.XAccountsConfig{Enabled: true, RefreshStatusPath: path, RefreshTimeout: 5 * time.Minute}
+	started := make(chan struct{})
+	release := make(chan struct{})
+	var fetchCalls atomic.Int32
+	var emailCalls atomic.Int32
+	app.fetch.fetchWindowOrdinaryDetailedContext = func(context.Context, *config.Config, time.Time, time.Time, bool, bool) (fetcher.FetchResult, error) {
+		if fetchCalls.Add(1) == 1 {
+			close(started)
+		}
+		<-release
+		return fetcher.FetchResult{Articles: sampleExecuteArticles()}, nil
+	}
+	app.fetch.fetchWindowXDetailedContext = func(context.Context, *config.Config, time.Time, time.Time, bool, bool) (fetcher.FetchResult, error) {
+		return fetcher.FetchResult{}, errors.New("late X must be skipped")
+	}
+	app.email.sendEmail = func(*model.Briefing, *config.Config, []fetcher.FailedSource) error {
+		emailCalls.Add(1)
+		return nil
+	}
+	cronDone := make(chan error, 1)
+	go func() { cronDone <- app.runScheduledBriefingOnceContext(context.Background(), window, "cron", true) }()
+	released := false
+	defer func() {
+		if !released {
+			close(release)
+			<-cronDone
+		}
+	}()
+	select {
+	case <-started:
+	case <-time.After(5 * time.Second):
+		t.Fatal("ordinary fetch did not start")
+	}
+	writeTestXStatus(t, path, `{"status":"succeeded","finishedAt":"2026-07-27T10:05:01Z","window":{"from":"2026-07-27T00:00:00Z","to":"2026-07-27T10:00:00Z"}}`)
+	callbackDone := make(chan error, 1)
+	go func() {
+		callbackDone <- app.runScheduledBriefingOnceContext(context.Background(), window, "x-ready-callback", true)
+	}()
+	select {
+	case err := <-callbackDone:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(5 * time.Second):
+		close(release)
+		released = true
+		<-cronDone
+		<-callbackDone
+		t.Fatal("late callback did not return while the degraded run held the lease")
+	}
+	close(release)
+	released = true
+	if err := <-cronDone; err != nil {
+		t.Fatal(err)
+	}
+	record := mustScheduledWindowState(t, app, window)
+	if fetchCalls.Load() != 1 || emailCalls.Load() != 1 || record.Status != scheduledStatusDone || record.Attempts != 1 {
+		t.Fatalf("ordinary fetch calls = %d, email calls = %d, record = %#v, want one completed delivery", fetchCalls.Load(), emailCalls.Load(), record)
+	}
+}
+
 func TestStaleRunTakeoverRejectsOldLeaseUpdates(t *testing.T) {
 	app := newScheduledOnceTestApp(t, nil)
 	window := scheduledStateTestWindow()
@@ -290,7 +466,7 @@ func TestStaleRunTakeoverRejectsOldLeaseUpdates(t *testing.T) {
 	if err := app.registerScheduledWindow(window, window.To); err != nil {
 		t.Fatalf("registerScheduledWindow() error = %v", err)
 	}
-	oldLease, acquired, _, err := app.acquireScheduledRunWindow(window, "cron")
+	oldLease, acquired, _, err := app.acquireScheduledRunWindow(window, "cron", make(map[string]string))
 	if err != nil || !acquired {
 		t.Fatalf("first acquire = %q, %v, %v", oldLease, acquired, err)
 	}
@@ -302,7 +478,7 @@ func TestStaleRunTakeoverRejectsOldLeaseUpdates(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("make stale error = %v", err)
 	}
-	newLease, acquired, _, err := app.acquireScheduledRunWindow(window, "stale-recovery")
+	newLease, acquired, _, err := app.acquireScheduledRunWindow(window, "stale-recovery", make(map[string]string))
 	if err != nil || !acquired || newLease == oldLease {
 		t.Fatalf("takeover lease = %q acquired=%v err=%v", newLease, acquired, err)
 	}
@@ -323,7 +499,7 @@ func TestStaleRunRecoveryDoesNotResendConfirmedEmail(t *testing.T) {
 	if err := app.registerScheduledWindow(window, window.To); err != nil {
 		t.Fatalf("registerScheduledWindow() error = %v", err)
 	}
-	_, acquired, _, err := app.acquireScheduledRunWindow(window, "cron")
+	_, acquired, _, err := app.acquireScheduledRunWindow(window, "cron", make(map[string]string))
 	if err != nil || !acquired {
 		t.Fatalf("first acquire acquired=%v err=%v", acquired, err)
 	}

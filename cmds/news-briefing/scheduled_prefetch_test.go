@@ -51,7 +51,7 @@ func TestScheduledPrefetchPersistsOrdinaryAndWatchThenMergesX(t *testing.T) {
 		t.Fatalf("runScheduledPrefetchContext() error = %v", err)
 	}
 
-	result, err := app.fetchScheduledBriefingArticles(context.Background(), window, "26.08.13")
+	result, err := app.fetchScheduledBriefingArticles(context.Background(), window, "26.08.13", "")
 	if err != nil {
 		t.Fatalf("fetchScheduledBriefingArticles() error = %v", err)
 	}
@@ -66,6 +66,21 @@ func TestScheduledPrefetchPersistsOrdinaryAndWatchThenMergesX(t *testing.T) {
 	}
 	if result.sourceStats.Totals.AcceptedAfterDedup != 2 {
 		t.Fatalf("AcceptedAfterDedup = %d, want 2 non-Watch articles", result.sourceStats.Totals.AcceptedAfterDedup)
+	}
+
+	result, err = app.fetchScheduledBriefingArticles(context.Background(), window, "26.08.13", scheduledXRefreshTimeoutCode)
+	if err != nil {
+		t.Fatalf("fetchScheduledBriefingArticles() with X timeout error = %v", err)
+	}
+	if !reflect.DeepEqual(result.articles, []model.Article{ordinary, watchArticle}) ||
+		!reflect.DeepEqual(result.seenArticles, []model.Article{ordinary}) {
+		t.Fatalf("articles = %#v, seen = %#v, want ordinary and Watch without X", result.articles, result.seenArticles)
+	}
+	if fullFetchCalled || len(result.failed) != 1 || result.failed[0].SafeErrorMessage() != scheduledXRefreshTimeoutCode {
+		t.Fatalf("full fetch = %t, failures = %#v, want only X timeout", fullFetchCalled, result.failed)
+	}
+	if len(result.sourceStats.Failed) != 1 || result.sourceStats.Failed[0].Error != scheduledXRefreshTimeoutCode {
+		t.Fatalf("source stats failures = %#v, want X timeout", result.sourceStats.Failed)
 	}
 }
 
@@ -113,7 +128,7 @@ func TestScheduledPrefetchConfigChangeFallsBackToFullFetch(t *testing.T) {
 	}
 	app.cfg.Keywords = []string{"after"}
 
-	result, err := app.fetchScheduledBriefingArticles(context.Background(), window, "26.08.13")
+	result, err := app.fetchScheduledBriefingArticles(context.Background(), window, "26.08.13", "")
 	if err != nil {
 		t.Fatalf("fetchScheduledBriefingArticles() error = %v", err)
 	}

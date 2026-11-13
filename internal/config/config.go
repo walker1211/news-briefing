@@ -239,6 +239,7 @@ type XAccountsConfig struct {
 	HistoryDir             string           `yaml:"history_dir"`
 	RefreshStatusPath      string           `yaml:"refresh_status_path"`
 	LookbackRaw            string           `yaml:"lookback"`
+	RefreshTimeoutRaw      string           `yaml:"refresh_timeout"`
 	RefreshWaitTimeoutRaw  string           `yaml:"refresh_wait_timeout"`
 	RefreshWaitIntervalRaw string           `yaml:"refresh_wait_interval"`
 	RefreshReconcileRaw    string           `yaml:"refresh_reconcile_interval"`
@@ -248,6 +249,7 @@ type XAccountsConfig struct {
 	Category               string           `yaml:"category"`
 	Accounts               []XAccountConfig `yaml:"accounts"`
 	Lookback               time.Duration    `yaml:"-"`
+	RefreshTimeout         time.Duration    `yaml:"-"`
 	RefreshWaitTimeout     time.Duration    `yaml:"-"`
 	RefreshWaitInterval    time.Duration    `yaml:"-"`
 	RefreshReconcile       time.Duration    `yaml:"-"`
@@ -701,6 +703,16 @@ func applyXAccountsDefaults(cfg *XAccountsConfig) error {
 		return fmt.Errorf("validate x_accounts.lookback: must be greater than 0")
 	}
 	cfg.Lookback = lookback
+	if raw := strings.TrimSpace(cfg.RefreshTimeoutRaw); raw != "" {
+		timeout, err := time.ParseDuration(raw)
+		if err != nil {
+			return fmt.Errorf("parse x_accounts.refresh_timeout: %w", err)
+		}
+		if timeout < 0 {
+			return fmt.Errorf("validate x_accounts.refresh_timeout: must be zero or greater")
+		}
+		cfg.RefreshTimeout = timeout
+	}
 	if strings.TrimSpace(cfg.RefreshWaitTimeoutRaw) == "" {
 		cfg.RefreshWaitTimeoutRaw = DefaultXRefreshWaitTimeout.String()
 	}

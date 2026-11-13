@@ -80,6 +80,34 @@ func TestFetchWindowXDetailedReadsOnlyXVisibleOutput(t *testing.T) {
 	if len(result.Articles) != 1 || result.Articles[0].Link != "https://x.com/OpenAI/status/x-only" {
 		t.Fatalf("Articles = %#v, want one X-only article", result.Articles)
 	}
+
+	cfg.XAccounts.RefreshTimeout = 5 * time.Minute
+	cfg.XAccounts.RefreshStatusPath = filepath.Join(dir, "status.json")
+	for _, tc := range []struct {
+		name       string
+		status     string
+		finishedAt time.Time
+		want       int
+	}{
+		{"completed before cutoff", "succeeded", to.Add(4 * time.Minute), 1},
+		{"completed after cutoff", "succeeded", to.Add(6 * time.Minute), 0},
+		{"still running", "running", time.Time{}, 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			status := fmt.Sprintf(`{"status":%q,"finishedAt":%q,"window":{"from":%q,"to":%q}}`,
+				tc.status, tc.finishedAt.Format(time.RFC3339), from.Format(time.RFC3339), to.Format(time.RFC3339))
+			if err := os.WriteFile(cfg.XAccounts.RefreshStatusPath, []byte(status), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			result, err := fetchWindowXDetailedContext(context.Background(), cfg, from, to, false, true)
+			if err != nil || len(result.Articles) != tc.want {
+				t.Fatalf("articles = %d, error = %v, want %d articles", len(result.Articles), err, tc.want)
+			}
+			if tc.want == 0 && (len(result.Failed) != 1 || result.Failed[0].SafeErrorMessage() != "refresh_unavailable") {
+				t.Fatalf("failures = %#v, want unavailable X refresh", result.Failed)
+			}
+		})
+	}
 }
 
 func TestFetchXVisibleNDJSONWaitsForRunningRefresh(t *testing.T) {

@@ -29,6 +29,9 @@ const (
 	scheduledStatusDone     = "done"
 	scheduledStatusFailed   = "failed"
 
+	scheduledXRefreshTimeoutCode = "refresh_timeout"
+	scheduledXRefreshFailedCode  = "refresh_failed"
+
 	scheduledRunHeartbeatInterval = time.Minute
 	scheduledRunHeartbeatStale    = 3 * time.Minute
 	scheduledStateLockStale       = 30 * time.Second
@@ -327,6 +330,13 @@ func scheduledStatusActive(status string) bool {
 	return status == scheduledStatusPending || status == scheduledStatusWaitingX || status == scheduledStatusRunning
 }
 
+func (app *app) scheduledXDeadline(window scheduler.Window) time.Time {
+	if app.cfg == nil || !app.cfg.XAccounts.Enabled || app.cfg.XAccounts.RefreshTimeout <= 0 {
+		return time.Time{}
+	}
+	return window.To.Add(app.cfg.XAccounts.RefreshTimeout)
+}
+
 func (app *app) registerScheduledWindow(window scheduler.Window, dueAt time.Time) error {
 	if status, terminal, err := app.legacyScheduledTerminal(window); err != nil {
 		return err
@@ -339,6 +349,9 @@ func (app *app) registerScheduledWindow(window scheduler.Window, dueAt time.Time
 		if app != nil && app.cfg != nil {
 			dueAt = dueAt.Add(app.cfg.ScheduleDelay)
 		}
+	}
+	if deadline := app.scheduledXDeadline(window); !deadline.IsZero() && deadline.Before(dueAt) {
+		dueAt = deadline
 	}
 	return app.mutateScheduledState(context.Background(), func(state *scheduledStateFile, now time.Time) (bool, error) {
 		key := scheduledRunWindowKey(window)
@@ -400,7 +413,7 @@ func (app *app) markScheduledRunWaitingX(window scheduler.Window, trigger string
 	return active, err
 }
 
-func (app *app) acquireScheduledRunWindow(window scheduler.Window, trigger string) (string, bool, bool, error) {
+func (app *app) acquireScheduledRunWindow(window scheduler.Window, trigger string, fields map[string]string) (string, bool, bool, error) {
 	if status, terminal, err := app.legacyScheduledTerminal(window); err != nil {
 		return "", false, false, err
 	} else if terminal {
@@ -440,6 +453,12 @@ func (app *app) acquireScheduledRunWindow(window scheduler.Window, trigger strin
 		record.Attempts++
 		record.LeaseID = leaseID
 		record.Error = ""
+		switch code := record.Fields["x_refresh_error_code"]; code {
+		case scheduledXRefreshTimeoutCode, scheduledXRefreshFailedCode:
+			fields["x_refresh_status"] = "failed"
+			fields["x_refresh_error_code"] = code
+		}
+		record.Fields = cloneStringMap(fields)
 		state.Windows[key] = record
 		acquired = true
 		return true, nil
@@ -593,14 +612,22 @@ func (app *app) startScheduledWindowWatcher(parent context.Context, window sched
 		}
 		ticker := time.NewTicker(interval)
 		defer ticker.Stop()
+		var deadlineCh <-chan time.Time
+		if deadline := app.scheduledXDeadline(window); !deadline.IsZero() {
+			timer := time.NewTimer(deadline.Sub(app.currentTime()))
+			defer timer.Stop()
+			deadlineCh = timer.C
+		}
 		for {
 			select {
 			case <-ctx.Done():
 				return
 			case <-ticker.C:
-				if !app.reconcileScheduledWindow(ctx, window) {
-					return
-				}
+			case <-deadlineCh:
+				deadlineCh = nil
+			}
+			if !app.reconcileScheduledWindow(ctx, window) {
+				return
 			}
 		}
 	}()
@@ -632,7 +659,8 @@ func (app *app) reconcileScheduledWindow(ctx context.Context, window scheduler.W
 	now := app.currentTime()
 	switch record.Status {
 	case scheduledStatusPending:
-		if !record.DueAt.IsZero() && now.Before(record.DueAt) {
+		deadline := app.scheduledXDeadline(window)
+		if !record.DueAt.IsZero() && now.Before(record.DueAt) && (deadline.IsZero() || now.Before(deadline)) {
 			return true
 		}
 		if err := app.runScheduledBriefingOnceContext(ctx, window, "cron", true); err != nil {
@@ -640,10 +668,13 @@ func (app *app) reconcileScheduledWindow(ctx context.Context, window scheduler.W
 		}
 	case scheduledStatusWaitingX:
 		xState, stateErr := fetcher.ReadXVisibleRefreshWindowState(app.cfg.XAccounts, window.From, window.To, now)
-		if stateErr == nil && xState.Running && !xState.Stale {
+		deadline := app.scheduledXDeadline(window)
+		if stateErr == nil && xState.Running && !xState.Stale && (deadline.IsZero() || now.Before(deadline)) {
 			return true
 		}
-		if stateErr != nil {
+		if !deadline.IsZero() && !now.Before(deadline) {
+			logutil.Printf("[scheduler] 窗口 %s 到达 X 等待截止时间", window.Period)
+		} else if stateErr != nil {
 			logutil.Warnf("[scheduler] 窗口 %s 的 X 状态不可读，watcher 接管: %v", window.Period, stateErr)
 		} else if xState.Running && xState.Stale {
 			logutil.Warnf("[scheduler] 窗口 %s 的 X heartbeat 已过期，watcher 接管", window.Period)
@@ -725,7 +756,29 @@ func parseXReadyTime(value string, loc *time.Location) (time.Time, error) {
 }
 
 func (app *app) runScheduledBriefingOnceContext(ctx context.Context, window scheduler.Window, trigger string, sendEmail bool) error {
-	if strings.EqualFold(strings.TrimSpace(trigger), "cron") && app != nil && app.cfg != nil {
+	xFailureCode := ""
+	if deadline := app.scheduledXDeadline(window); !deadline.IsZero() {
+		now := app.currentTime()
+		xState, statusErr := fetcher.ReadXVisibleRefreshWindowState(app.cfg.XAccounts, window.From, window.To, now)
+		switch {
+		case statusErr == nil && xState.CompletedBy(deadline):
+		case xState.Matches && xState.Status == "failed" && xState.ErrorCode == scheduledXRefreshTimeoutCode:
+			xFailureCode = scheduledXRefreshTimeoutCode
+		case xState.Matches && xState.Status == "failed" && !xState.FinishedAt.After(deadline):
+			xFailureCode = scheduledXRefreshFailedCode
+		case !now.Before(deadline):
+			xFailureCode = scheduledXRefreshTimeoutCode
+		default:
+			active, err := app.markScheduledRunWaitingX(window, trigger)
+			if err != nil {
+				return fmt.Errorf("mark scheduled run waiting for X: %w", err)
+			}
+			if active {
+				app.startScheduledWindowWatcher(ctx, window)
+			}
+			return nil
+		}
+	} else if strings.EqualFold(strings.TrimSpace(trigger), "cron") && app != nil && app.cfg != nil {
 		xState, statusErr := fetcher.ReadXVisibleRefreshWindowState(app.cfg.XAccounts, window.From, window.To, app.currentTime())
 		if statusErr != nil {
 			logutil.Warnf("[scheduler] 检查窗口 %s 的 X refresh 状态失败，继续执行 cron 兜底: %v", window.Period, statusErr)
@@ -744,20 +797,29 @@ func (app *app) runScheduledBriefingOnceContext(ctx context.Context, window sche
 		}
 	}
 
-	leaseID, acquired, emailAlreadySent, err := app.acquireScheduledRunWindow(window, trigger)
+	fields := make(map[string]string)
+	if xFailureCode != "" {
+		fields["x_refresh_status"] = "failed"
+		fields["x_refresh_error_code"] = xFailureCode
+	}
+	leaseID, acquired, emailAlreadySent, err := app.acquireScheduledRunWindow(window, trigger, fields)
 	if err != nil {
 		return err
 	}
 	if !acquired {
 		return nil
 	}
-	reporter := &scheduledRunReporter{app: app, leaseID: leaseID, window: window}
+	reporter := &scheduledRunReporter{app: app, leaseID: leaseID, window: window, fields: fields}
+	xFailureCode = fields["x_refresh_error_code"]
+	if xFailureCode != "" {
+		logutil.Warnf("[scheduler] 窗口 %s 跳过 X 抓取结果（%s）", window.Period, xFailureCode)
+	}
 	if emailAlreadySent && sendEmail {
 		logutil.Printf("[scheduler] 窗口 %s 已记录邮件发送成功，接管执行时跳过重复发送", window.Period)
 		sendEmail = false
 	}
 	stopHeartbeat := app.startScheduledRunHeartbeat(ctx, window, leaseID)
-	err = app.runScheduledBriefingContextWithReporter(ctx, window, sendEmail, reporter)
+	err = app.runScheduledBriefingContextWithReporter(ctx, window, sendEmail, reporter, xFailureCode)
 	stopHeartbeat()
 	if err != nil {
 		if errors.Is(err, context.Canceled) {

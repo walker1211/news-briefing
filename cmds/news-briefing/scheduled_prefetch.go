@@ -291,24 +291,42 @@ func (app *app) waitForScheduledPrefetch(ctx context.Context, window scheduler.W
 	}
 }
 
-func (app *app) fetchScheduledBriefingArticles(ctx context.Context, window scheduler.Window, date string) (briefingFetchResult, error) {
+func (app *app) fetchScheduledBriefingArticles(ctx context.Context, window scheduler.Window, date, xFailureCode string) (briefingFetchResult, error) {
 	prefetched, ok, reason := app.waitForScheduledPrefetch(ctx, window)
 	if !ok {
 		logutil.Printf("[prefetch] 窗口 %s 未复用预取（%s），执行完整抓取", window.Period, reason)
-		return app.fetchBriefingArticlesWithWatch(ctx, window.To, window.From, window.To, date, window.Period, func(ctx context.Context) (fetcher.FetchResult, error) {
-			return app.fetchWindowArticlesDetailed(ctx, window.From, window.To, false, false)
+		if xFailureCode == "" && app.scheduledXDeadline(window).IsZero() {
+			return app.fetchBriefingArticlesWithWatch(ctx, window.To, window.From, window.To, date, window.Period, func(ctx context.Context) (fetcher.FetchResult, error) {
+				return app.fetchWindowArticlesDetailed(ctx, window.From, window.To, false, false)
+			})
+		}
+		var err error
+		prefetched, err = app.fetchBriefingArticlesWithWatch(ctx, window.To, window.From, window.To, date, window.Period, func(ctx context.Context) (fetcher.FetchResult, error) {
+			return app.fetch.fetchWindowOrdinaryDetailedContext(ctx, app.cfg, window.From, window.To, false, false)
 		})
+		if err != nil {
+			return briefingFetchResult{}, err
+		}
 	}
 
-	xResult, err := app.fetch.fetchWindowXDetailedContext(ctx, app.cfg, window.From, window.To, false, false)
-	if err != nil {
-		return briefingFetchResult{}, err
+	var xResult fetcher.FetchResult
+	if xFailureCode != "" {
+		xResult.Failed = []fetcher.FailedSource{{Name: "X refresh status", Err: errors.New(xFailureCode)}}
+		xResult.SourceStats.Failed = []model.SourceStatsError{{Source: "X refresh status", Error: xFailureCode}}
+	} else {
+		var err error
+		xResult, err = app.fetch.fetchWindowXDetailedContext(ctx, app.cfg, window.From, window.To, false, false)
+		if err != nil {
+			return briefingFetchResult{}, err
+		}
 	}
 	combined, err := mergeScheduledPrefetchWithX(ctx, app.cfg.Output.Dir, prefetched, xResult)
 	if err != nil {
 		return briefingFetchResult{}, err
 	}
-	logutil.Printf("[prefetch] 窗口 %s 已复用普通 RSS + Watch 结果，仅合并 X %d 篇", window.Period, len(xResult.Articles))
+	if ok {
+		logutil.Printf("[prefetch] 窗口 %s 已复用普通 RSS + Watch 结果，合并 X %d 篇", window.Period, len(xResult.Articles))
+	}
 	return combined, nil
 }
 
