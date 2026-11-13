@@ -208,6 +208,8 @@ x_accounts:
   history_dir: <x-visible-data-dir>/history
   refresh_status_path: <x-visible-data-dir>/status.json
   lookback: 24h
+  # Scheduled X deadline measured from the end of the news window. 0s disables it.
+  refresh_timeout: 0s
   refresh_wait_timeout: 10m
   refresh_wait_interval: 5s
   # Active scheduled windows only; no polling occurs when no window is pending/waiting/running.

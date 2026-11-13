@@ -696,8 +696,12 @@ func fetchWindowXDetailedContext(ctx context.Context, cfg *config.Config, from, 
 	if err := ctx.Err(); err != nil {
 		return FetchResult{}, err
 	}
+	options := xVisibleReadOptions{}
+	if cfg.XAccounts.RefreshTimeout > 0 {
+		options.completedBy = to.Add(cfg.XAccounts.RefreshTimeout)
+	}
 	filters := newFilterContext(cfg)
-	results, failed, err := fetchXVisibleNDJSONWithOptions(ctx, cfg.XAccounts, filters.includeKeywords(model.Article{Category: cfg.XAccounts.Category}, config.Source{Name: xVisibleSourceName, Category: cfg.XAccounts.Category}), from, to, xVisibleReadOptions{})
+	results, failed, err := fetchXVisibleNDJSONWithOptions(ctx, cfg.XAccounts, filters.includeKeywords(model.Article{Category: cfg.XAccounts.Category}, config.Source{Name: xVisibleSourceName, Category: cfg.XAccounts.Category}), from, to, options)
 	if err != nil {
 		return FetchResult{}, err
 	}
